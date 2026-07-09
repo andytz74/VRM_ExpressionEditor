@@ -1,0 +1,23 @@
+{
+  "name": "vrm-expression-editor",
+  "version": "1.0.0",
+  "description": "Windows desktop app for editing VRM expression bindings.",
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "set electron_config_cache=%cd%\\work\\electron-cache&& vite build && electron .",
+    "build": "vite build",
+    "dev": "vite --host 127.0.0.1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@pixiv/three-vrm": "^3.5.4",
+    "@pixiv/three-vrm-animation": "^3.5.4",
+    "electron": "^31.7.7",
+    "lucide": "^1.21.0",
+    "three": "^0.185.0",
+    "vite": "^8.1.0"
+  }
+}

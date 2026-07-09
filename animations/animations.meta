@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "type": "vrm-animation-catalog",
+  "animations": {
+    "a0.vrma": {
+      "fileName": "a0.vrma",
+      "description": "idle",
+      "mustWatchFull": true
+    },
+    "a1.vrma": {
+      "fileName": "a1.vrma",
+      "description": "집중 긴장",
+      "mustWatchFull": false
+    },
+    "a2.vrma": {
+      "fileName": "a2.vrma",
+      "description": "기대 떨림",
+      "mustWatchFull": false
+    },
+    "a3.vrma": {
+      "fileName": "a3.vrma",
+      "description": "조아쓰",
+      "mustWatchFull": false
+    },
+    "a4.vrma": {
+      "fileName": "a4.vrma",
+      "description": "작은박수",
+      "mustWatchFull": true
+    },
+    "a5.vrma": {
+      "fileName": "a5.vrma",
+      "description": "휴우,,,",
+      "mustWatchFull": false
+    },
+    "a6.vrma": {
+      "fileName": "a6.vrma",
+      "description": "어머나!",
+      "mustWatchFull": true
+    }
+  }
+}

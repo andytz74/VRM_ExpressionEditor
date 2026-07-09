@@ -1,0 +1,15 @@
+node_modules/
+dist/
+work/
+outputs/
+
+.agents/
+.codex/
+.repo/
+
+*.log
+*.tmp
+*.bak
+*.broken-*
+
+animations/*.broken-*
