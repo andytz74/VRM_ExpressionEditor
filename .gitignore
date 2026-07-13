@@ -11,5 +11,6 @@ outputs/
 *.tmp
 *.bak
 *.broken-*
+*.bundle
 
 animations/*.broken-*

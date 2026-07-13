@@ -9,10 +9,13 @@ import {
   Download,
   FolderOpen,
   GitCompare,
+  Lock,
   RotateCcw,
   RotateCw,
   Save,
   SlidersHorizontal,
+  Unlock,
+  X,
 } from "lucide";
 
 const app = document.querySelector("#app");
@@ -89,6 +92,8 @@ const MIRROR_AXIS_SIGNS = {
   scaleMultiplier: [1, 1, 1],
 };
 
+const DEFAULT_EMOTION_PRESET_NAMES = ["Neutral", "Focus", "Tension", "Surprise", "Joy", "Relief", "Disappointed", "Warm Smile", "Joy"];
+
 const state = {
   mode: "transfer",
   filePath: null,
@@ -98,6 +103,11 @@ const state = {
   document: null,
   expressions: [],
   expressionValues: new Map(),
+  expressionPresets: createDefaultEmotionPresets(),
+  selectedExpressionPresetId: "emotion-0",
+  rorrParameters: [],
+  expressionDirty: false,
+  draggingEmotionPresetId: null,
   editing: null,
   editDraft: null,
   dirtyEdit: false,
@@ -161,6 +171,16 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 const clock = new THREE.Clock();
 
+function createDefaultEmotionPresets() {
+  return DEFAULT_EMOTION_PRESET_NAMES.map((name, index) => ({
+    id: `emotion-${index}`,
+    name,
+    value: 0,
+    locked: false,
+    parameters: {},
+  }));
+}
+
 initialize();
 
 async function initialize() {
@@ -188,7 +208,7 @@ function render() {
     app.innerHTML = "";
   }
   app.innerHTML = `
-    <main class="app">
+    <main class="app ${state.mode === "expression" && !state.editing ? "expression-layout" : ""}">
       <aside class="sidebar">
         ${
           state.mode === "transfer"
@@ -197,7 +217,7 @@ function render() {
             ? renderMotionCorrectionPanel()
             : state.editing
               ? renderEditor()
-              : renderExpressionPanel()
+              : renderEmotionExpressionPanel()
         }
       </aside>
       <section class="viewer">
@@ -205,6 +225,7 @@ function render() {
         ${state.filePath ? "" : renderDropHint()}
         ${renderStatusPill()}
       </section>
+      ${state.mode === "expression" && !state.editing ? renderEmotionParameterTray() : ""}
     </main>
   `;
 
@@ -222,13 +243,101 @@ function renderStatusPill() {
   return `<div class="status-pill">${escapeHtml(parts.join(" · "))}</div>`;
 }
 
+function renderExpressionParameterTray() {
+  return `
+    <aside class="expression-parameter-tray">
+      <div class="parameter-tray-header">
+        <h2>Parameters</h2>
+        <p>VRM에서 읽어낸 조절 항목이 여기에 들어갑니다</p>
+      </div>
+      <div class="parameter-tray-empty">
+        <p>아직 표시할 파라미터가 없습니다.</p>
+      </div>
+    </aside>
+  `;
+}
+
+function renderEmotionParameterTray() {
+  const selected = getSelectedEmotionPreset();
+  const rows = state.rorrParameters.map((parameter) => {
+    const value = selected?.parameters?.[parameter.id] ?? 0;
+    return `
+      <div class="rorr-parameter-row">
+        <label title="${escapeHtml(parameter.label)}">${escapeHtml(parameter.label)}</label>
+        <div class="rorr-parameter-controls">
+          <input class="rorr-parameter-slider" type="range" min="0" max="1" step="0.01" value="${formatEmotionValue(value)}" data-rorr-param="${parameter.id}" />
+          <input class="rorr-parameter-value" type="number" min="0" max="1" step="0.01" value="${formatEmotionValue(value)}" data-rorr-param-value="${parameter.id}" />
+        </div>
+      </div>
+    `;
+  }).join("");
+  return `
+    <aside class="expression-parameter-tray">
+      <div class="parameter-tray-header">
+        <h2>Parameters</h2>
+        <p>${selected ? escapeHtml(selected.name) : "No emotion selected"}</p>
+      </div>
+      <div class="parameter-tray-empty">
+        ${
+          rows ||
+          `<p>${state.filePath ? "RORR_ 로 시작하는 shape key가 없습니다." : "VRM을 열면 RORR_ shape key가 여기에 표시됩니다."}</p>`
+        }
+      </div>
+    </aside>
+  `;
+}
+
 function renderModeBar(active) {
   return `
     <div class="mode-bar">
       <button class="mode-button ${active === "transfer" ? "active" : ""}" data-mode="transfer">${iconSvg(GitCompare, 14)}Shape Transfer</button>
       <button class="mode-button ${active === "correction" ? "active" : ""}" data-mode="correction">${iconSvg(SlidersHorizontal, 14)}Motion Correction</button>
+      <button class="mode-button expression-mode-button ${active === "expression" ? "active" : ""}" data-mode="expression">${iconSvg(SlidersHorizontal, 14)}Expression Editor</button>
     </div>
     ${renderVrmVersionSelector()}
+  `;
+}
+
+function renderEmotionExpressionPanel() {
+  return `
+    <div class="panel-header">
+      <div class="title-block">
+        <h1>Expression Editor</h1>
+        <p>${state.fileName ? escapeHtml(state.fileName) : "VRM을 열고 표정 프리셋을 조정합니다"}</p>
+      </div>
+      <button class="icon-button" id="openFile" title="VRM 열기">${iconSvg(FolderOpen)}</button>
+    </div>
+    ${renderModeBar("expression")}
+    <div class="expression-editor-panel">
+      <div class="emotion-preset-list">
+        ${state.expressionPresets.map((preset) => renderEmotionPresetCard(preset)).join("")}
+        <button class="add-emotion-button" id="addEmotionPreset">Add New Emotion</button>
+      </div>
+    </div>
+    <div class="expression-editor-footer">
+      <button class="primary-button" id="saveExpressionMeta" ${state.correctionPath && state.expressionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
+    </div>
+  `;
+}
+
+function renderEmotionPresetCard(preset) {
+  const selected = preset.id === state.selectedExpressionPresetId;
+  return `
+    <div class="emotion-card ${preset.locked ? "locked" : "unlocked"} ${selected ? "selected" : ""}" draggable="true" data-emotion-select="${preset.id}" data-emotion-drag="${preset.id}">
+      <div class="emotion-card-top">
+        <button class="lock-button ${preset.locked ? "locked" : ""}" data-emotion-lock="${preset.id}" title="${preset.locked ? "Unlock" : "Lock"}">${iconSvg(preset.locked ? Lock : Unlock, 18)}</button>
+        ${
+          preset.locked
+            ? `<div class="emotion-name-readonly">${escapeHtml(preset.name)}</div>`
+            : `<input class="emotion-name-input" type="text" value="${escapeHtml(preset.name)}" data-emotion-name="${preset.id}" />`
+        }
+        ${preset.locked ? `<span class="delete-emotion-placeholder"></span>` : `<button class="delete-emotion-button" data-emotion-delete="${preset.id}" title="Delete">${iconSvg(X, 18)}</button>`}
+      </div>
+      <div class="emotion-card-controls">
+        <input class="emotion-slider" type="range" min="0" max="1" step="0.01" value="${formatEmotionValue(preset.value)}" data-emotion-slider="${preset.id}" />
+        <input class="emotion-value-input" type="number" min="0" max="1" step="0.01" value="${formatEmotionValue(preset.value)}" data-emotion-value="${preset.id}" />
+      </div>
+    </div>
   `;
 }
 
@@ -249,7 +358,7 @@ function renderVrmVersionSelector() {
   `;
 }
 
-function renderExpressionPanel() {
+function renderLegacyExpressionPanel() {
   const rows = state.expressions
     .map((expression) => {
       const value = state.expressionValues.get(expression.id) ?? 0;
@@ -288,6 +397,37 @@ function renderExpressionPanel() {
       <button class="secondary-button" id="undo" title="Ctrl+Z" ${state.undoStack.length ? "" : "disabled"}>${iconSvg(RotateCcw, 16)}Undo</button>
       <button class="secondary-button" id="redo" title="Ctrl+Shift+Z" ${state.redoStack.length ? "" : "disabled"}>${iconSvg(RotateCw, 16)}Redo</button>
       <button class="primary-button" id="commitAll" ${state.hasWorkspaceChanges ? "" : "disabled"}>${iconSvg(Download, 16)}변경사항 모두 저장</button>
+    </div>
+  `;
+}
+
+function renderExpressionPanel() {
+  return `
+    <div class="panel-header">
+      <div class="title-block">
+        <h1>Expression Editor</h1>
+        <p>${state.fileName ? escapeHtml(state.fileName) : "VRM을 열고 표정 프리셋을 조정합니다"}</p>
+      </div>
+      <button class="icon-button" id="openFile" title="VRM 열기">${iconSvg(FolderOpen)}</button>
+    </div>
+    ${renderModeBar("expression")}
+    <div class="expression-editor-panel">
+      <div class="expression-name-card">
+        <label>
+          Emotion Name
+          <input type="text" placeholder="joy, sad, angry..." />
+        </label>
+      </div>
+      <div class="expression-template-list">
+        ${EXPRESSION_EDITOR_CONTROLS.map(
+          (name, index) => `
+            <div class="expression-template-card">
+              <label for="expressionTemplate${index}">${escapeHtml(name)}</label>
+              <input id="expressionTemplate${index}" type="range" min="0" max="1" step="0.01" value="0" data-expression-template-slider />
+            </div>
+          `,
+        ).join("")}
+      </div>
     </div>
   `;
 }
@@ -577,6 +717,7 @@ function bindUi() {
     render();
   });
   document.querySelector("#saveCorrection")?.addEventListener("click", saveCorrection);
+  document.querySelector("#saveExpressionMeta")?.addEventListener("click", saveCorrection);
   document.querySelector("#addAnimation")?.addEventListener("click", addAnimation);
   document.querySelector("#prevAnimation")?.addEventListener("click", () => stepSelectedAnimation(-1));
   document.querySelector("#nextAnimation")?.addEventListener("click", () => stepSelectedAnimation(1));
@@ -589,6 +730,7 @@ function bindUi() {
   document.querySelector("#openTransferTarget")?.addEventListener("click", () => openTransferFile("target"));
   document.querySelector("#checkTransfer")?.addEventListener("click", checkTransferCompatibility);
   document.querySelector("#applyTransfer")?.addEventListener("click", applyTransfer);
+  document.querySelector("#addEmotionPreset")?.addEventListener("click", addEmotionPreset);
   document.querySelector("#sourceFaceMesh")?.addEventListener("change", (event) => {
     state.transfer.sourceMesh = Number(event.target.value);
     state.transfer.report = null;
@@ -655,6 +797,85 @@ function bindUi() {
     });
   }
 
+  for (const card of document.querySelectorAll("[data-emotion-select]")) {
+    card.addEventListener("click", () => selectEmotionPreset(card.dataset.emotionSelect));
+  }
+
+  for (const card of document.querySelectorAll("[data-emotion-drag]")) {
+    card.addEventListener("dragstart", (event) => {
+      if (event.target.closest("input, button")) {
+        event.preventDefault();
+        return;
+      }
+      state.draggingEmotionPresetId = card.dataset.emotionDrag;
+      event.dataTransfer?.setData("text/plain", state.draggingEmotionPresetId);
+      event.dataTransfer?.setDragImage(card, 12, 12);
+    });
+    card.addEventListener("dragover", (event) => event.preventDefault());
+    card.addEventListener("drop", (event) => {
+      event.preventDefault();
+      reorderEmotionPreset(state.draggingEmotionPresetId, card.dataset.emotionDrag);
+    });
+    card.addEventListener("dragend", () => {
+      state.draggingEmotionPresetId = null;
+    });
+  }
+
+  for (const button of document.querySelectorAll("[data-emotion-lock]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleEmotionPresetLock(button.dataset.emotionLock);
+    });
+  }
+
+  for (const button of document.querySelectorAll("[data-emotion-delete]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteEmotionPreset(button.dataset.emotionDelete);
+    });
+  }
+
+  for (const input of document.querySelectorAll("[data-emotion-name]")) {
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("blur", () => updateEmotionPresetName(input.dataset.emotionName, input.value));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        updateEmotionPresetName(input.dataset.emotionName, input.value);
+        input.blur();
+      }
+    });
+  }
+
+  for (const slider of document.querySelectorAll("[data-emotion-slider]")) {
+    slider.addEventListener("click", (event) => event.stopPropagation());
+    slider.addEventListener("input", () => updateEmotionPresetValue(slider.dataset.emotionSlider, Number(slider.value), slider));
+  }
+
+  for (const input of document.querySelectorAll("[data-emotion-value]")) {
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("blur", () => updateEmotionPresetValue(input.dataset.emotionValue, Number(input.value), input, true));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        updateEmotionPresetValue(input.dataset.emotionValue, Number(input.value), input, true);
+        input.blur();
+      }
+    });
+  }
+
+  for (const slider of document.querySelectorAll("[data-rorr-param]")) {
+    slider.addEventListener("input", () => updateSelectedRorrParameter(slider.dataset.rorrParam, Number(slider.value), slider));
+  }
+
+  for (const input of document.querySelectorAll("[data-rorr-param-value]")) {
+    input.addEventListener("blur", () => updateSelectedRorrParameter(input.dataset.rorrParamValue, Number(input.value), input, true));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        updateSelectedRorrParameter(input.dataset.rorrParamValue, Number(input.value), input, true);
+        input.blur();
+      }
+    });
+  }
+
   for (const slider of document.querySelectorAll("[data-expression-slider]")) {
     slider.addEventListener("input", () => {
       const value = Number(slider.value);
@@ -680,7 +901,7 @@ function bindUi() {
     });
   }
 
-  for (const scroller of document.querySelectorAll(".expression-list, .parameter-list, .transfer-panel, .correction-panel")) {
+  for (const scroller of document.querySelectorAll(".expression-list, .parameter-list, .transfer-panel, .correction-panel, .expression-editor-panel")) {
     bindPanelWheel(scroller, scroller);
   }
 
@@ -692,9 +913,148 @@ function bindUi() {
         ? ".correction-panel"
         : state.editing
           ? ".parameter-list"
-          : ".expression-list",
+          : ".expression-editor-panel",
   );
   if (sidebar && activeScroller) bindPanelWheel(sidebar, activeScroller);
+}
+
+function getSelectedEmotionPreset() {
+  return state.expressionPresets.find((preset) => preset.id === state.selectedExpressionPresetId) ?? state.expressionPresets[0] ?? null;
+}
+
+function selectEmotionPreset(id) {
+  if (state.selectedExpressionPresetId === id) return;
+  state.selectedExpressionPresetId = id;
+  applySelectedEmotionPreset();
+  renderPreservingExpressionScroll();
+}
+
+function addEmotionPreset() {
+  const id = `emotion-${Date.now()}-${state.expressionPresets.length}`;
+  state.expressionPresets.push({
+    id,
+    name: "new emotion",
+    value: 0,
+    locked: false,
+  });
+  state.selectedExpressionPresetId = id;
+  markExpressionMetaDirty();
+  applySelectedEmotionPreset();
+  renderPreservingExpressionScroll({ scrollToBottom: true });
+}
+
+function toggleEmotionPresetLock(id) {
+  const preset = state.expressionPresets.find((item) => item.id === id);
+  if (!preset) return;
+  preset.locked = !preset.locked;
+  state.selectedExpressionPresetId = id;
+  markExpressionMetaDirty();
+  applySelectedEmotionPreset();
+  renderPreservingExpressionScroll();
+}
+
+function deleteEmotionPreset(id) {
+  const preset = state.expressionPresets.find((item) => item.id === id);
+  if (!preset || preset.locked) return;
+  if (!window.confirm("삭제할까요?")) return;
+  state.expressionPresets = state.expressionPresets.filter((item) => item.id !== id);
+  if (state.selectedExpressionPresetId === id) {
+    state.selectedExpressionPresetId = state.expressionPresets[0]?.id ?? null;
+  }
+  markExpressionMetaDirty();
+  applySelectedEmotionPreset();
+  renderPreservingExpressionScroll();
+}
+
+function updateEmotionPresetName(id, name) {
+  const preset = state.expressionPresets.find((item) => item.id === id);
+  if (!preset || preset.locked) return;
+  const nextName = name.trim() || "new emotion";
+  if (preset.name === nextName) return;
+  preset.name = nextName;
+  state.selectedExpressionPresetId = id;
+  markExpressionMetaDirty();
+  applySelectedEmotionPreset();
+  renderPreservingExpressionScroll();
+}
+
+function updateEmotionPresetValue(id, value, source, shouldRender = false) {
+  const preset = state.expressionPresets.find((item) => item.id === id);
+  if (!preset) return;
+  const nextValue = clampEmotionValue(value);
+  preset.value = nextValue;
+  state.selectedExpressionPresetId = id;
+  syncEmotionValueControls(id, nextValue, source);
+  applySelectedEmotionPreset();
+  if (shouldRender) renderPreservingExpressionScroll();
+}
+
+function reorderEmotionPreset(draggedId, targetId) {
+  if (!draggedId || !targetId || draggedId === targetId) return;
+  const fromIndex = state.expressionPresets.findIndex((item) => item.id === draggedId);
+  const toIndex = state.expressionPresets.findIndex((item) => item.id === targetId);
+  if (fromIndex < 0 || toIndex < 0) return;
+  const [moved] = state.expressionPresets.splice(fromIndex, 1);
+  state.expressionPresets.splice(toIndex, 0, moved);
+  state.selectedExpressionPresetId = draggedId;
+  markExpressionMetaDirty();
+  renderPreservingExpressionScroll();
+}
+
+function updateSelectedRorrParameter(parameterId, value, source, shouldRender = false) {
+  const preset = getSelectedEmotionPreset();
+  if (!preset || !state.rorrParameters.some((parameter) => parameter.id === parameterId)) return;
+  preset.parameters ??= {};
+  preset.parameters[parameterId] = clampEmotionValue(value);
+  syncRorrParameterControls(parameterId, preset.parameters[parameterId], source);
+  markExpressionMetaDirty();
+  applySelectedEmotionPreset();
+  if (shouldRender) renderPreservingExpressionScroll();
+}
+
+function markExpressionMetaDirty() {
+  state.expressionDirty = true;
+  syncSaveMetaButton();
+}
+
+function renderPreservingExpressionScroll(options = {}) {
+  const scroller = document.querySelector(".expression-editor-panel");
+  const scrollTop = scroller?.scrollTop ?? 0;
+  render();
+  const nextScroller = document.querySelector(".expression-editor-panel");
+  if (!nextScroller) return;
+  nextScroller.scrollTop = options.scrollToBottom ? nextScroller.scrollHeight : scrollTop;
+}
+
+function syncEmotionValueControls(id, value, source) {
+  const formatted = formatEmotionValue(value);
+  for (const input of document.querySelectorAll(`[data-emotion-slider="${id}"], [data-emotion-value="${id}"]`)) {
+    if (input === source && input.type === "range") continue;
+    input.value = formatted;
+  }
+}
+
+function syncRorrParameterControls(id, value, source) {
+  const formatted = formatEmotionValue(value);
+  for (const input of document.querySelectorAll(`[data-rorr-param="${id}"], [data-rorr-param-value="${id}"]`)) {
+    if (input === source && input.type === "range") continue;
+    input.value = formatted;
+  }
+}
+
+function applySelectedEmotionPreset() {
+  const selected = getSelectedEmotionPreset();
+  const values = selected?.parameters ?? {};
+  applyRorrParameterValues(values);
+}
+
+function clampEmotionValue(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, Math.round(value * 100) / 100));
+}
+
+function formatEmotionValue(value) {
+  return clampEmotionValue(value).toFixed(2);
 }
 
 function updateSliderValueLabel(slider, value) {
@@ -746,6 +1106,7 @@ async function openFile() {
     state.redoStack = [];
     await loadVrm(bytes);
     await loadOrCreateVrmMeta(result.filePath, result.name);
+    applySelectedEmotionPreset();
     await loadSelectedAnimation();
     render();
   } catch (error) {
@@ -1063,8 +1424,10 @@ async function loadVrm(bytes) {
   VRMUtils.rotateVRM0(currentVrm);
   scene.add(currentVrm.scene);
   frameModel(currentVrm.scene);
+  state.rorrParameters = collectRorrShapeKeyParameters();
   captureBoneRestTransforms();
   applyAllExpressionPreviews();
+  applySelectedEmotionPreset();
   applyMotionCorrectionPreview();
 }
 
@@ -1079,6 +1442,33 @@ function frameModel(root) {
   camera.far = Math.max(height * 20, 100);
   camera.updateProjectionMatrix();
   controls.update();
+}
+
+function collectRorrShapeKeyParameters() {
+  const names = new Set();
+  currentVrm?.scene?.traverse((object) => {
+    if (!object.isMesh || !object.morphTargetDictionary) return;
+    for (const name of Object.keys(object.morphTargetDictionary)) {
+      if (name.startsWith("RORR_")) names.add(name);
+    }
+  });
+  return [...names].sort((a, b) => a.localeCompare(b)).map((name) => ({
+    id: name,
+    label: name,
+  }));
+}
+
+function applyRorrParameterValues(values) {
+  if (!currentVrm) return;
+  const rorrNames = new Set(state.rorrParameters.map((parameter) => parameter.id));
+  currentVrm.scene.traverse((object) => {
+    if (!object.isMesh || !object.morphTargetDictionary || !Array.isArray(object.morphTargetInfluences)) return;
+    for (const name of rorrNames) {
+      const index = object.morphTargetDictionary[name];
+      if (index == null) continue;
+      object.morphTargetInfluences[index] = clampEmotionValue(values[name] ?? 0);
+    }
+  });
 }
 
 function startEdit(expressionId) {
@@ -1261,6 +1651,7 @@ function createEmptyCorrection() {
       rotationOrder: "XYZ",
     },
     animations: {},
+    expressionPresets: createDefaultEmotionPresets().map(({ id, name, locked }) => ({ id, name, locked })),
   };
 }
 
@@ -1388,9 +1779,10 @@ function syncCorrectionStepButtons(key) {
 }
 
 function syncSaveMetaButton() {
-  const button = document.querySelector("#saveCorrection");
-  if (!button) return;
-  button.disabled = !(state.correctionPath && state.correctionDirty);
+  const correctionButton = document.querySelector("#saveCorrection");
+  if (correctionButton) correctionButton.disabled = !(state.correctionPath && state.correctionDirty);
+  const expressionButton = document.querySelector("#saveExpressionMeta");
+  if (expressionButton) expressionButton.disabled = !(state.correctionPath && state.expressionDirty);
 }
 
 function clampValueForCorrection(key, value) {
@@ -1460,6 +1852,7 @@ async function saveCorrection() {
   if (!result) return;
   state.correctionPath = result.filePath;
   state.correctionDirty = false;
+  state.expressionDirty = false;
   syncSaveMetaButton();
   render();
 }
@@ -1486,8 +1879,11 @@ async function loadOrCreateVrmMeta(vrmPath, vrmName) {
   state.correction.vrm.displayName ||= vrmName.replace(/\.vrm$/i, "");
   state.correction.vrm.characterId ||= slugify(state.correction.vrm.displayName);
   state.correction.vrm.version ||= detectVrmVersion(state.document?.json);
+  state.expressionPresets = normalizeExpressionPresets(state.correction.expressionPresets);
+  state.selectedExpressionPresetId = state.expressionPresets[0]?.id ?? null;
   state.correctionPath = result.filePath;
   state.correctionDirty = false;
+  state.expressionDirty = false;
   const names = getAnimationNames();
   state.selectedAnimationName = names.includes(state.selectedAnimationName) ? state.selectedAnimationName : (names[0] ?? null);
 }
@@ -1542,6 +1938,27 @@ function normalizeCorrectionJson(json) {
     const legacyName = "legacy.vrma";
     next.animations[legacyName] = normalizeAnimationCorrectionEntry({ corrections: json.corrections });
   }
+  next.expressionPresets = normalizeExpressionPresets(json.expressionPresets);
+  return next;
+}
+
+function normalizeExpressionPresets(presets) {
+  const source = Array.isArray(presets) && presets.length ? presets : createDefaultEmotionPresets();
+  return source.map((preset, index) => ({
+    id: String(preset.id ?? `emotion-${index}`),
+    name: String(preset.name ?? "new emotion"),
+    value: 0,
+    locked: Boolean(preset.locked),
+    parameters: normalizeExpressionParameterValues(preset.parameters),
+  }));
+}
+
+function normalizeExpressionParameterValues(parameters) {
+  const next = {};
+  for (const [key, value] of Object.entries(parameters ?? {})) {
+    if (!String(key).startsWith("RORR_")) continue;
+    next[String(key)] = clampEmotionValue(Number(value));
+  }
   return next;
 }
 
@@ -1577,6 +1994,12 @@ function serializeCorrection() {
       pruneCorrectionObject(animation.corrections, boneName);
     }
   }
+  next.expressionPresets = normalizeExpressionPresets(state.expressionPresets).map(({ id, name, locked, parameters }) => ({
+    id,
+    name,
+    locked,
+    parameters,
+  }));
   return next;
 }
 
