@@ -3,6 +3,8 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 
 let mainWindow;
+let editorConfigCache = null;
+let configSavedForQuit = false;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -41,6 +43,92 @@ function animationsDir() {
 
 function animationCatalogPath() {
   return path.join(animationsDir(), "animations.meta");
+}
+
+function configPath() {
+  return path.join(__dirname, "..", "ExpressionEditorConfig.ini");
+}
+
+function createDefaultConfig() {
+  return {
+    expressionEditor: {
+      knownShapeKeys: null,
+      visibleShapeKeys: null,
+    },
+  };
+}
+
+function parseIniConfig(text) {
+  const config = createDefaultConfig();
+  let section = "";
+  for (const rawLine of String(text ?? "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith(";") || line.startsWith("#")) continue;
+    const sectionMatch = line.match(/^\[(.+)]$/);
+    if (sectionMatch) {
+      section = sectionMatch[1].trim();
+      continue;
+    }
+    const equalsIndex = line.indexOf("=");
+    if (equalsIndex < 0) continue;
+    const key = line.slice(0, equalsIndex).trim();
+    const value = line.slice(equalsIndex + 1).trim();
+    if (section === "ExpressionEditor.Filter" && key === "VisibleShapeKeysJson") {
+      try {
+        const names = JSON.parse(value);
+        config.expressionEditor.visibleShapeKeys = Array.isArray(names) ? names.map(String) : null;
+      } catch {
+        config.expressionEditor.visibleShapeKeys = null;
+      }
+    }
+    if (section === "ExpressionEditor.Filter" && key === "KnownShapeKeysJson") {
+      try {
+        const names = JSON.parse(value);
+        config.expressionEditor.knownShapeKeys = Array.isArray(names) ? names.map(String) : null;
+      } catch {
+        config.expressionEditor.knownShapeKeys = null;
+      }
+    }
+  }
+  if (!Array.isArray(config.expressionEditor.knownShapeKeys) && Array.isArray(config.expressionEditor.visibleShapeKeys)) {
+    config.expressionEditor.knownShapeKeys = [...config.expressionEditor.visibleShapeKeys];
+  }
+  return config;
+}
+
+function serializeIniConfig(config) {
+  const known = Array.isArray(config?.expressionEditor?.knownShapeKeys)
+    ? config.expressionEditor.knownShapeKeys.map(String)
+    : null;
+  const visible = Array.isArray(config?.expressionEditor?.visibleShapeKeys)
+    ? config.expressionEditor.visibleShapeKeys.map(String)
+    : null;
+  return [
+    "; VRM Expression Editor workspace settings",
+    "[ExpressionEditor.Filter]",
+    `KnownShapeKeysJson=${JSON.stringify(known)}`,
+    `VisibleShapeKeysJson=${JSON.stringify(visible)}`,
+    "",
+  ].join("\n");
+}
+
+async function readEditorConfig() {
+  try {
+    const text = await fs.readFile(configPath(), "utf8");
+    editorConfigCache = parseIniConfig(text);
+    return editorConfigCache;
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    const config = createDefaultConfig();
+    await writeEditorConfig(config);
+    return config;
+  }
+}
+
+async function writeEditorConfig(config) {
+  editorConfigCache = config;
+  await fs.writeFile(configPath(), serializeIniConfig(config), "utf8");
+  return config;
 }
 
 async function readAnimationCatalog() {
@@ -103,6 +191,15 @@ app.on("window-all-closed", () => {
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+app.on("before-quit", async (event) => {
+  if (!editorConfigCache || configSavedForQuit) return;
+  event.preventDefault();
+  const config = editorConfigCache;
+  configSavedForQuit = true;
+  await writeEditorConfig(config);
+  app.quit();
 });
 
 ipcMain.handle("vrm:open", async () => {
@@ -199,6 +296,15 @@ ipcMain.handle("animation:deleteStored", async (_event, fileName) => {
   await writeAnimationCatalog(catalog);
   return { filePath, name: path.basename(filePath) };
 });
+
+ipcMain.handle("config:load", async () => readEditorConfig());
+
+ipcMain.handle("config:updateMemory", async (_event, config) => {
+  editorConfigCache = config;
+  return editorConfigCache;
+});
+
+ipcMain.handle("config:save", async (_event, config) => writeEditorConfig(config));
 
 ipcMain.handle("meta:loadOrCreate", async (_event, vrmPath, data) => {
   const filePath = `${vrmPath}.meta`;

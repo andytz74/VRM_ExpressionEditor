@@ -106,6 +106,18 @@ const state = {
   expressionPresets: createDefaultEmotionPresets(),
   selectedExpressionPresetId: "emotion-0",
   rorrParameters: [],
+  currentParameterIds: new Set(),
+  newParameterIds: new Set(),
+  parameterFilterOpen: false,
+  visibleParameterIds: null,
+  config: {
+    expressionEditor: {
+      knownShapeKeys: null,
+      visibleShapeKeys: null,
+    },
+  },
+  expressionParameterDraft: {},
+  expressionParameterDirty: false,
   expressionDirty: false,
   draggingEmotionPresetId: null,
   editing: null,
@@ -181,9 +193,61 @@ function createDefaultEmotionPresets() {
   }));
 }
 
+async function loadEditorConfig() {
+  try {
+    const config = await window.vrmFiles.loadConfig();
+    state.config = normalizeEditorConfig(config);
+  } catch {
+    state.config = normalizeEditorConfig(null);
+  }
+}
+
+function normalizeEditorConfig(config) {
+  const known = config?.expressionEditor?.knownShapeKeys;
+  const visible = config?.expressionEditor?.visibleShapeKeys;
+  const normalizedVisible = Array.isArray(visible) ? visible.map(String) : null;
+  return {
+    expressionEditor: {
+      knownShapeKeys: Array.isArray(known) ? known.map(String) : normalizedVisible,
+      visibleShapeKeys: normalizedVisible,
+    },
+  };
+}
+
+async function saveEditorConfig() {
+  state.config = buildCurrentEditorConfig();
+  await window.vrmFiles.saveConfig(state.config);
+}
+
+function updateEditorConfigMemory() {
+  state.config = buildCurrentEditorConfig();
+  window.vrmFiles.updateConfigMemory?.(state.config).catch((error) => {
+    console.error("Failed to update ExpressionEditorConfig.ini memory", error);
+  });
+}
+
+function buildCurrentEditorConfig() {
+  if (!state.rorrParameters.length) return normalizeEditorConfig(state.config);
+  const visibleIds = state.visibleParameterIds instanceof Set ? state.visibleParameterIds : null;
+  return normalizeEditorConfig({
+    ...state.config,
+    expressionEditor: {
+      ...(state.config?.expressionEditor ?? {}),
+      knownShapeKeys: state.rorrParameters.map((parameter) => parameter.id),
+      visibleShapeKeys: state.rorrParameters
+        .map((parameter) => parameter.id)
+        .filter((id) => !visibleIds || visibleIds.has(id)),
+    },
+  });
+}
+
 initialize();
+window.addEventListener("beforeunload", () => {
+  saveEditorConfig().catch(() => {});
+});
 
 async function initialize() {
+  await loadEditorConfig();
   await refreshAnimationCatalog();
   const names = getAnimationNames();
   state.selectedAnimationName = names[0] ?? null;
@@ -225,7 +289,7 @@ function render() {
         ${state.filePath ? "" : renderDropHint()}
         ${renderStatusPill()}
       </section>
-      ${state.mode === "expression" && !state.editing ? renderEmotionParameterTray() : ""}
+      ${state.mode === "expression" && !state.editing ? renderEmotionParameterTrayWithSave() : ""}
     </main>
   `;
 
@@ -260,7 +324,7 @@ function renderExpressionParameterTray() {
 function renderEmotionParameterTray() {
   const selected = getSelectedEmotionPreset();
   const rows = state.rorrParameters.map((parameter) => {
-    const value = selected?.parameters?.[parameter.id] ?? 0;
+    const value = state.expressionParameterDraft?.[parameter.id] ?? 0;
     return `
       <div class="rorr-parameter-row">
         <label title="${escapeHtml(parameter.label)}">${escapeHtml(parameter.label)}</label>
@@ -280,11 +344,120 @@ function renderEmotionParameterTray() {
       <div class="parameter-tray-empty">
         ${
           rows ||
-          `<p>${state.filePath ? "RORR_ 로 시작하는 shape key가 없습니다." : "VRM을 열면 RORR_ shape key가 여기에 표시됩니다."}</p>`
+          `<p>${state.filePath ? "표시할 shape key가 없습니다." : "VRM을 열면 shape key가 여기에 표시됩니다."}</p>`
         }
       </div>
     </aside>
   `;
+}
+
+function renderEmotionParameterTrayWithSave() {
+  const selected = getSelectedEmotionPreset();
+  const visibleIds = getVisibleParameterIdSet();
+  const rows = state.rorrParameters.map((parameter) => {
+    const isAvailable = state.currentParameterIds.has(parameter.id);
+    const isNew = state.newParameterIds.has(parameter.id);
+    const isVisible = visibleIds.has(parameter.id);
+    const value = state.expressionParameterDraft?.[parameter.id] ?? 0;
+    return `
+      <div class="rorr-parameter-row ${isAvailable ? "" : "disabled"}" data-parameter-row="${escapeHtml(parameter.id)}" ${isVisible ? "" : "hidden"}>
+        <div class="rorr-parameter-title">
+          <label title="${escapeHtml(parameter.label)}">${escapeHtml(parameter.label)}</label>
+          ${isNew ? `<span class="new-badge">new</span>` : ""}
+        </div>
+        <div class="rorr-parameter-controls">
+          <input class="rorr-parameter-slider" type="range" min="0" max="1" step="0.01" value="${formatEmotionValue(value)}" data-rorr-param="${parameter.id}" ${isAvailable ? "" : "disabled"} />
+          <input class="rorr-parameter-value" type="number" min="0" max="1" step="0.01" value="${formatEmotionValue(value)}" data-rorr-param-value="${parameter.id}" ${isAvailable ? "" : "disabled"} />
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <aside class="expression-parameter-tray">
+      <div class="parameter-tray-header">
+        <div class="parameter-tray-title-row">
+          <div>
+            <h2>Parameters</h2>
+            <p>${selected ? escapeHtml(selected.name) : "No emotion selected"}</p>
+          </div>
+          <button class="filter-button ${state.parameterFilterOpen ? "active" : ""}" id="toggleParameterFilter" title="Filter">${iconSvg(SlidersHorizontal, 16)}</button>
+        </div>
+        ${state.parameterFilterOpen ? renderParameterFilterPopup() : ""}
+      </div>
+      <div class="parameter-tray-empty">
+        ${rows || `<p>${state.filePath ? "표시할 shape key가 없습니다." : "VRM을 열면 shape key가 여기에 표시됩니다."}</p>`}
+      </div>
+      <div class="parameter-tray-footer">
+        <div class="parameter-tray-emotion-name">${selected ? escapeHtml(selected.name) : "No emotion selected"}</div>
+        <button class="primary-button" id="saveSelectedParameters" ${selected && state.expressionParameterDirty ? "" : "disabled"}>Save parameter</button>
+      </div>
+    </aside>
+  `;
+}
+
+function renderParameterFilterPopup() {
+  const visibleIds = getVisibleParameterIdSet();
+  const knownIds = getKnownParameterIdSet();
+  const rows = state.rorrParameters.map((parameter) => {
+    const isAvailable = state.currentParameterIds.has(parameter.id);
+    const isKnown = knownIds.has(parameter.id);
+    const isNew = state.newParameterIds.has(parameter.id);
+    const isMissing = isKnown && !isAvailable;
+    return `
+      <label class="parameter-filter-row ${isMissing ? "missing" : ""}">
+        <input type="checkbox" value="${escapeHtml(parameter.id)}" data-parameter-filter="${escapeHtml(parameter.id)}" ${visibleIds.has(parameter.id) ? "checked" : ""} />
+        <span title="${escapeHtml(parameter.label)}">${escapeHtml(parameter.label)}</span>
+        ${isNew ? `<em class="new-badge">new</em>` : ""}
+        ${isMissing ? `<button type="button" class="filter-remove-button" data-parameter-remove="${escapeHtml(parameter.id)}">x</button>` : ""}
+      </label>
+    `;
+  }).join("");
+  return `
+    <div class="parameter-filter-popup">
+      ${rows || `<p>표시할 shape key가 없습니다.</p>`}
+    </div>
+  `;
+}
+
+function getVisibleParameterIdSet() {
+  if (!state.visibleParameterIds) {
+    state.visibleParameterIds = new Set(state.rorrParameters.map((parameter) => parameter.id));
+  }
+  return state.visibleParameterIds;
+}
+
+function getKnownParameterIdSet() {
+  const known = state.config?.expressionEditor?.knownShapeKeys;
+  return new Set(Array.isArray(known) ? known.map(String) : []);
+}
+
+function applyParameterFilterFromConfig() {
+  const currentParameters = state.rorrParameters;
+  state.currentParameterIds = new Set(currentParameters.map((parameter) => parameter.id));
+  const knownIds = getKnownParameterIdSet();
+  state.newParameterIds = new Set([...state.currentParameterIds].filter((id) => !knownIds.has(id)));
+  const parameterMap = new Map(currentParameters.map((parameter) => [parameter.id, parameter]));
+  for (const id of knownIds) {
+    if (!parameterMap.has(id)) parameterMap.set(id, { id, label: id });
+  }
+  state.rorrParameters = [...parameterMap.values()].sort((a, b) => a.label.localeCompare(b.label));
+
+  const configuredVisible = state.config?.expressionEditor?.visibleShapeKeys;
+  if (!Array.isArray(configuredVisible)) {
+    state.visibleParameterIds = new Set(state.rorrParameters.map((parameter) => parameter.id));
+    return;
+  }
+  const visible = new Set(configuredVisible.map(String));
+  for (const id of state.currentParameterIds) {
+    if (!knownIds.has(id)) visible.add(id);
+  }
+  state.visibleParameterIds = visible;
+}
+
+function syncParameterFilterConfigMemory() {
+  state.config = buildCurrentEditorConfig();
+  updateEditorConfigMemory();
 }
 
 function renderModeBar(active) {
@@ -323,9 +496,9 @@ function renderEmotionExpressionPanel() {
 function renderEmotionPresetCard(preset) {
   const selected = preset.id === state.selectedExpressionPresetId;
   return `
-    <div class="emotion-card ${preset.locked ? "locked" : "unlocked"} ${selected ? "selected" : ""}" draggable="true" data-emotion-select="${preset.id}" data-emotion-drag="${preset.id}">
+    <div class="emotion-card ${preset.locked ? "locked" : "unlocked"} ${selected ? "selected" : ""}" data-emotion-select="${preset.id}" data-emotion-drop="${preset.id}">
       <div class="emotion-card-top">
-        <button class="lock-button ${preset.locked ? "locked" : ""}" data-emotion-lock="${preset.id}" title="${preset.locked ? "Unlock" : "Lock"}">${iconSvg(preset.locked ? Lock : Unlock, 18)}</button>
+        <button class="lock-button ${preset.locked ? "locked" : ""}" draggable="true" data-emotion-lock="${preset.id}" data-emotion-drag="${preset.id}" title="${preset.locked ? "Unlock" : "Lock"}">${iconSvg(preset.locked ? Lock : Unlock, 18)}</button>
         ${
           preset.locked
             ? `<div class="emotion-name-readonly">${escapeHtml(preset.name)}</div>`
@@ -557,9 +730,6 @@ function renderMotionCorrectionPanel() {
         </div>
         <input class="animation-scrub" type="range" min="0" max="${Math.max(state.animation.duration, 0.001)}" step="0.01" value="${state.animation.time}" data-animation-time ${animationAction ? "" : "disabled"} />
       </div>
-      <div class="correction-actions single">
-        <button class="primary-button" id="saveCorrection" ${state.correctionPath && state.correctionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
-      </div>
       ${
         selectedAnimation && currentVrm
           ? `
@@ -577,6 +747,9 @@ function renderMotionCorrectionPanel() {
           `
           : `<div class="correction-card"><p class="parameter-meta">${selectedAnimation ? "VRM을 열면 이 애니메이션의 관절 보정을 편집할 수 있습니다." : "New Ani로 검수할 애니메이션을 먼저 등록하세요."}</p></div>`
       }
+    </div>
+    <div class="correction-footer">
+      <button class="primary-button" id="saveCorrection" ${state.correctionPath && state.correctionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
     </div>
   `;
 }
@@ -718,6 +891,11 @@ function bindUi() {
   });
   document.querySelector("#saveCorrection")?.addEventListener("click", saveCorrection);
   document.querySelector("#saveExpressionMeta")?.addEventListener("click", saveCorrection);
+  document.querySelector("#saveSelectedParameters")?.addEventListener("click", saveSelectedExpressionParameters);
+  document.querySelector("#toggleParameterFilter")?.addEventListener("click", () => {
+    state.parameterFilterOpen = !state.parameterFilterOpen;
+    render();
+  });
   document.querySelector("#addAnimation")?.addEventListener("click", addAnimation);
   document.querySelector("#prevAnimation")?.addEventListener("click", () => stepSelectedAnimation(-1));
   document.querySelector("#nextAnimation")?.addEventListener("click", () => stepSelectedAnimation(1));
@@ -801,23 +979,35 @@ function bindUi() {
     card.addEventListener("click", () => selectEmotionPreset(card.dataset.emotionSelect));
   }
 
-  for (const card of document.querySelectorAll("[data-emotion-drag]")) {
-    card.addEventListener("dragstart", (event) => {
-      if (event.target.closest("input, button")) {
-        event.preventDefault();
-        return;
-      }
-      state.draggingEmotionPresetId = card.dataset.emotionDrag;
-      event.dataTransfer?.setData("text/plain", state.draggingEmotionPresetId);
-      event.dataTransfer?.setDragImage(card, 12, 12);
-    });
+  for (const card of document.querySelectorAll("[data-emotion-drop]")) {
     card.addEventListener("dragover", (event) => event.preventDefault());
     card.addEventListener("drop", (event) => {
       event.preventDefault();
-      reorderEmotionPreset(state.draggingEmotionPresetId, card.dataset.emotionDrag);
+      reorderEmotionPreset(state.draggingEmotionPresetId, card.dataset.emotionDrop);
     });
-    card.addEventListener("dragend", () => {
+  }
+
+  for (const handle of document.querySelectorAll("[data-emotion-drag]")) {
+    handle.addEventListener("dragstart", (event) => {
+      event.stopPropagation();
+      state.draggingEmotionPresetId = handle.dataset.emotionDrag;
+      event.dataTransfer?.setData("text/plain", state.draggingEmotionPresetId);
+      const card = handle.closest(".emotion-card");
+      if (card) event.dataTransfer?.setDragImage(card, 12, 12);
+    });
+    handle.addEventListener("dragend", () => {
       state.draggingEmotionPresetId = null;
+    });
+  }
+
+  for (const control of document.querySelectorAll(".emotion-card input, .emotion-card button:not([data-emotion-drag])")) {
+    control.setAttribute("draggable", "false");
+    control.addEventListener("pointerdown", (event) => event.stopPropagation());
+    control.addEventListener("mousedown", (event) => event.stopPropagation());
+    control.addEventListener("touchstart", (event) => event.stopPropagation(), { passive: true });
+    control.addEventListener("dragstart", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
     });
   }
 
@@ -876,6 +1066,18 @@ function bindUi() {
     });
   }
 
+  for (const input of document.querySelectorAll("[data-parameter-filter]")) {
+    input.addEventListener("change", () => updateParameterFilter(input.dataset.parameterFilter, input.checked));
+  }
+
+  for (const button of document.querySelectorAll("[data-parameter-remove]")) {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      removeMissingParameterFromConfig(button.dataset.parameterRemove);
+    });
+  }
+
   for (const slider of document.querySelectorAll("[data-expression-slider]")) {
     slider.addEventListener("input", () => {
       const value = Number(slider.value);
@@ -923,21 +1125,38 @@ function getSelectedEmotionPreset() {
 }
 
 function selectEmotionPreset(id) {
-  if (state.selectedExpressionPresetId === id) return;
+  if (state.selectedExpressionPresetId === id) {
+    const current = getSelectedEmotionPreset();
+    if (current) current.value = 1;
+    applySelectedEmotionPreset();
+    renderPreservingExpressionScroll();
+    return;
+  }
+  if (!confirmPendingExpressionParameterChanges()) return;
+  for (const preset of state.expressionPresets) {
+    preset.value = preset.id === id ? 1 : 0;
+  }
   state.selectedExpressionPresetId = id;
+  loadSelectedExpressionParameterDraft();
   applySelectedEmotionPreset();
   renderPreservingExpressionScroll();
 }
 
 function addEmotionPreset() {
+  if (!confirmPendingExpressionParameterChanges()) return;
   const id = `emotion-${Date.now()}-${state.expressionPresets.length}`;
   state.expressionPresets.push({
     id,
     name: "new emotion",
     value: 0,
     locked: false,
+    parameters: {},
   });
+  for (const preset of state.expressionPresets) {
+    preset.value = preset.id === id ? 1 : 0;
+  }
   state.selectedExpressionPresetId = id;
+  loadSelectedExpressionParameterDraft();
   markExpressionMetaDirty();
   applySelectedEmotionPreset();
   renderPreservingExpressionScroll({ scrollToBottom: true });
@@ -946,8 +1165,11 @@ function addEmotionPreset() {
 function toggleEmotionPresetLock(id) {
   const preset = state.expressionPresets.find((item) => item.id === id);
   if (!preset) return;
+  const selectionChanged = state.selectedExpressionPresetId !== id;
+  if (selectionChanged && !confirmPendingExpressionParameterChanges()) return;
   preset.locked = !preset.locked;
   state.selectedExpressionPresetId = id;
+  if (selectionChanged) loadSelectedExpressionParameterDraft();
   markExpressionMetaDirty();
   applySelectedEmotionPreset();
   renderPreservingExpressionScroll();
@@ -961,6 +1183,7 @@ function deleteEmotionPreset(id) {
   if (state.selectedExpressionPresetId === id) {
     state.selectedExpressionPresetId = state.expressionPresets[0]?.id ?? null;
   }
+  loadSelectedExpressionParameterDraft();
   markExpressionMetaDirty();
   applySelectedEmotionPreset();
   renderPreservingExpressionScroll();
@@ -969,10 +1192,13 @@ function deleteEmotionPreset(id) {
 function updateEmotionPresetName(id, name) {
   const preset = state.expressionPresets.find((item) => item.id === id);
   if (!preset || preset.locked) return;
+  const selectionChanged = state.selectedExpressionPresetId !== id;
+  if (selectionChanged && !confirmPendingExpressionParameterChanges()) return;
   const nextName = name.trim() || "new emotion";
   if (preset.name === nextName) return;
   preset.name = nextName;
   state.selectedExpressionPresetId = id;
+  if (selectionChanged) loadSelectedExpressionParameterDraft();
   markExpressionMetaDirty();
   applySelectedEmotionPreset();
   renderPreservingExpressionScroll();
@@ -981,6 +1207,14 @@ function updateEmotionPresetName(id, name) {
 function updateEmotionPresetValue(id, value, source, shouldRender = false) {
   const preset = state.expressionPresets.find((item) => item.id === id);
   if (!preset) return;
+  if (state.selectedExpressionPresetId !== id) {
+    if (!confirmPendingExpressionParameterChanges()) return;
+    for (const item of state.expressionPresets) {
+      item.value = item.id === id ? item.value : 0;
+    }
+    state.selectedExpressionPresetId = id;
+    loadSelectedExpressionParameterDraft();
+  }
   const nextValue = clampEmotionValue(value);
   preset.value = nextValue;
   state.selectedExpressionPresetId = id;
@@ -991,30 +1225,112 @@ function updateEmotionPresetValue(id, value, source, shouldRender = false) {
 
 function reorderEmotionPreset(draggedId, targetId) {
   if (!draggedId || !targetId || draggedId === targetId) return;
+  const selectionChanged = state.selectedExpressionPresetId !== draggedId;
+  if (selectionChanged && !confirmPendingExpressionParameterChanges()) return;
   const fromIndex = state.expressionPresets.findIndex((item) => item.id === draggedId);
   const toIndex = state.expressionPresets.findIndex((item) => item.id === targetId);
   if (fromIndex < 0 || toIndex < 0) return;
   const [moved] = state.expressionPresets.splice(fromIndex, 1);
   state.expressionPresets.splice(toIndex, 0, moved);
   state.selectedExpressionPresetId = draggedId;
+  if (selectionChanged) loadSelectedExpressionParameterDraft();
   markExpressionMetaDirty();
   renderPreservingExpressionScroll();
 }
 
 function updateSelectedRorrParameter(parameterId, value, source, shouldRender = false) {
-  const preset = getSelectedEmotionPreset();
-  if (!preset || !state.rorrParameters.some((parameter) => parameter.id === parameterId)) return;
-  preset.parameters ??= {};
-  preset.parameters[parameterId] = clampEmotionValue(value);
-  syncRorrParameterControls(parameterId, preset.parameters[parameterId], source);
-  markExpressionMetaDirty();
+  if (!getSelectedEmotionPreset() || !state.currentParameterIds.has(parameterId)) return;
+  state.expressionParameterDraft ??= {};
+  state.expressionParameterDraft[parameterId] = clampEmotionValue(value);
+  state.expressionParameterDirty = true;
+  syncRorrParameterControls(parameterId, state.expressionParameterDraft[parameterId], source);
   applySelectedEmotionPreset();
-  if (shouldRender) renderPreservingExpressionScroll();
+  syncSaveParameterButton();
 }
 
 function markExpressionMetaDirty() {
   state.expressionDirty = true;
   syncSaveMetaButton();
+}
+
+function loadSelectedExpressionParameterDraft() {
+  const selected = getSelectedEmotionPreset();
+  state.expressionParameterDraft = { ...(selected?.parameters ?? {}) };
+  state.expressionParameterDirty = false;
+}
+
+function commitSelectedExpressionParameters() {
+  const selected = getSelectedEmotionPreset();
+  if (!selected) return false;
+  selected.parameters = normalizeExpressionParameterValues(state.expressionParameterDraft);
+  state.expressionParameterDirty = false;
+  markExpressionMetaDirty();
+  applySelectedEmotionPreset();
+  return true;
+}
+
+function saveSelectedExpressionParameters() {
+  if (!commitSelectedExpressionParameters()) return;
+  render();
+}
+
+function confirmPendingExpressionParameterChanges() {
+  if (!state.expressionParameterDirty) return true;
+  if (window.confirm("편집한 파라미터를 저장할까요?")) {
+    commitSelectedExpressionParameters();
+  } else {
+    state.expressionParameterDirty = false;
+  }
+  return true;
+}
+
+function syncSaveParameterButton() {
+  const button = document.querySelector("#saveSelectedParameters");
+  if (button) button.disabled = !(getSelectedEmotionPreset() && state.expressionParameterDirty);
+}
+
+function updateParameterFilter(parameterId, checked) {
+  const visibleIds = getVisibleParameterIdSet();
+  if (checked) {
+    visibleIds.add(parameterId);
+  } else {
+    visibleIds.delete(parameterId);
+  }
+  for (const row of document.querySelectorAll(`[data-parameter-row="${cssEscape(parameterId)}"]`)) {
+    row.hidden = !checked;
+  }
+  syncParameterFilterConfigMemory();
+}
+
+function removeMissingParameterFromConfig(parameterId) {
+  if (state.currentParameterIds.has(parameterId)) return;
+  const known = getKnownParameterIdSet();
+  known.delete(parameterId);
+  const visible = getVisibleParameterIdSet();
+  visible.delete(parameterId);
+  state.config = normalizeEditorConfig({
+    ...state.config,
+    expressionEditor: {
+      ...(state.config?.expressionEditor ?? {}),
+      knownShapeKeys: [...known],
+      visibleShapeKeys: [...visible],
+    },
+  });
+  state.rorrParameters = state.rorrParameters.filter((parameter) => parameter.id !== parameterId);
+  updateEditorConfigMemory();
+  renderPreservingParameterFilterScroll();
+}
+
+function renderPreservingParameterFilterScroll() {
+  const popup = document.querySelector(".parameter-filter-popup");
+  const scrollTop = popup?.scrollTop ?? 0;
+  render();
+  const nextPopup = document.querySelector(".parameter-filter-popup");
+  if (nextPopup) nextPopup.scrollTop = scrollTop;
+}
+
+function cssEscape(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 function renderPreservingExpressionScroll(options = {}) {
@@ -1044,8 +1360,8 @@ function syncRorrParameterControls(id, value, source) {
 
 function applySelectedEmotionPreset() {
   const selected = getSelectedEmotionPreset();
-  const values = selected?.parameters ?? {};
-  applyRorrParameterValues(values);
+  const weight = selected?.value ?? 0;
+  applyRorrParameterValues(state.expressionParameterDraft ?? {}, weight);
 }
 
 function clampEmotionValue(value) {
@@ -1424,7 +1740,9 @@ async function loadVrm(bytes) {
   VRMUtils.rotateVRM0(currentVrm);
   scene.add(currentVrm.scene);
   frameModel(currentVrm.scene);
-  state.rorrParameters = collectRorrShapeKeyParameters();
+  state.rorrParameters = collectShapeKeyParameters();
+  applyParameterFilterFromConfig();
+  state.parameterFilterOpen = false;
   captureBoneRestTransforms();
   applyAllExpressionPreviews();
   applySelectedEmotionPreset();
@@ -1444,12 +1762,12 @@ function frameModel(root) {
   controls.update();
 }
 
-function collectRorrShapeKeyParameters() {
+function collectShapeKeyParameters() {
   const names = new Set();
   currentVrm?.scene?.traverse((object) => {
     if (!object.isMesh || !object.morphTargetDictionary) return;
     for (const name of Object.keys(object.morphTargetDictionary)) {
-      if (name.startsWith("RORR_")) names.add(name);
+      names.add(name);
     }
   });
   return [...names].sort((a, b) => a.localeCompare(b)).map((name) => ({
@@ -1458,7 +1776,7 @@ function collectRorrShapeKeyParameters() {
   }));
 }
 
-function applyRorrParameterValues(values) {
+function applyRorrParameterValues(values, weight = 1) {
   if (!currentVrm) return;
   const rorrNames = new Set(state.rorrParameters.map((parameter) => parameter.id));
   currentVrm.scene.traverse((object) => {
@@ -1466,7 +1784,7 @@ function applyRorrParameterValues(values) {
     for (const name of rorrNames) {
       const index = object.morphTargetDictionary[name];
       if (index == null) continue;
-      object.morphTargetInfluences[index] = clampEmotionValue(values[name] ?? 0);
+      object.morphTargetInfluences[index] = clampEmotionValue(values[name] ?? 0) * clampEmotionValue(weight);
     }
   });
 }
@@ -1785,6 +2103,10 @@ function syncSaveMetaButton() {
   if (expressionButton) expressionButton.disabled = !(state.correctionPath && state.expressionDirty);
 }
 
+function isEmotionControlElement(target) {
+  return Boolean(target?.closest?.("input, button, select, textarea, .emotion-card-controls"));
+}
+
 function clampValueForCorrection(key, value) {
   if (key === "rotationOffset") return Math.min(45, Math.max(-45, value));
   if (key === "scaleMultiplier") return Math.min(1.5, Math.max(0.5, value));
@@ -1850,6 +2172,7 @@ async function saveCorrection() {
   const payload = JSON.stringify(serializeCorrection(), null, 2);
   const result = await window.vrmFiles.saveMeta(state.correctionPath, payload);
   if (!result) return;
+  await saveEditorConfig();
   state.correctionPath = result.filePath;
   state.correctionDirty = false;
   state.expressionDirty = false;
@@ -1881,6 +2204,7 @@ async function loadOrCreateVrmMeta(vrmPath, vrmName) {
   state.correction.vrm.version ||= detectVrmVersion(state.document?.json);
   state.expressionPresets = normalizeExpressionPresets(state.correction.expressionPresets);
   state.selectedExpressionPresetId = state.expressionPresets[0]?.id ?? null;
+  loadSelectedExpressionParameterDraft();
   state.correctionPath = result.filePath;
   state.correctionDirty = false;
   state.expressionDirty = false;
@@ -1956,7 +2280,6 @@ function normalizeExpressionPresets(presets) {
 function normalizeExpressionParameterValues(parameters) {
   const next = {};
   for (const [key, value] of Object.entries(parameters ?? {})) {
-    if (!String(key).startsWith("RORR_")) continue;
     next[String(key)] = clampEmotionValue(Number(value));
   }
   return next;
@@ -2256,9 +2579,6 @@ function transferShapeKeysByPosition(sourceJson, sourceBinary, sourceMeshIndex, 
         const appended = appendFloatAccessor(targetJson, targetBinary, new Float32Array(targetPositions.length * 3), "VEC3");
         targetBinary = appended.binary;
         targetEntry.POSITION = appended.accessorIndex;
-      }
-      if (targetEntry.POSITION != null && positionDeltaAbsSum <= 0.000001 && oldTargetIndex == null) {
-        throw new Error(`Shape key "${shapeName}" was added but its POSITION delta is zero. Vertex matching likely failed.`);
       }
       rebuiltTargets[newShapeIndex] = targetEntry;
     }
