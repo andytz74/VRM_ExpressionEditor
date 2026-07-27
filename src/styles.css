@@ -558,7 +558,8 @@ input[type="range"] {
 
 .transfer-panel,
 .correction-panel,
-.expression-editor-panel {
+.expression-editor-panel,
+.emotion-linker-panel {
   flex: 1;
   min-height: 0;
   overflow-x: hidden;
@@ -567,7 +568,8 @@ input[type="range"] {
   padding: 14px;
 }
 
-.correction-panel {
+.correction-panel,
+.emotion-linker-panel {
   padding-bottom: 24px;
 }
 
@@ -649,6 +651,73 @@ input[type="range"] {
   gap: 12px;
 }
 
+.emotion-linker-panel {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.emotion-link-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid #2c333d;
+  border-radius: 8px;
+  background: #20252c;
+}
+
+.emotion-link-readonly {
+  min-height: 36px;
+  overflow: hidden;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: #f1f4f7;
+  background: #171b21;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.emotion-link-select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #47505c;
+  border-radius: 7px;
+  padding: 0 8px;
+  color: #f1f4f7;
+  background: #171b21;
+  font-size: 16px;
+}
+
+.emotion-link-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px;
+  align-items: center;
+  gap: 10px;
+}
+
+.emotion-link-loop {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #f1f4f7;
+  font-size: 17px;
+}
+
+.emotion-link-loop input {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  accent-color: #37a77c;
+}
+
+.emotion-link-play {
+  width: 64px;
+  height: 42px;
+  justify-self: end;
+}
+
 .emotion-card {
   min-height: 92px;
   padding: 9px;
@@ -667,12 +736,14 @@ input[type="range"] {
 
 .emotion-card-top {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) 36px;
+  grid-template-columns: 22px minmax(0, 1fr) 34px 34px 36px;
   align-items: center;
   gap: 7px;
 }
 
 .lock-button,
+.blink-emotion-button,
+.duplicate-emotion-button,
 .delete-emotion-button {
   display: inline-flex;
   align-items: center;
@@ -681,6 +752,24 @@ input[type="range"] {
   border-radius: 6px;
   background: transparent;
   cursor: pointer;
+}
+
+.blink-emotion-button,
+.duplicate-emotion-button {
+  width: 34px;
+  height: 32px;
+  color: #d8e1ea;
+  background: #303741;
+}
+
+.blink-emotion-button:hover,
+.duplicate-emotion-button:hover {
+  background: #3b4652;
+}
+
+.blink-emotion-button.active {
+  color: #eaf6ff;
+  background: #236ea8;
 }
 
 .lock-button {

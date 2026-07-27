@@ -7,9 +7,12 @@ import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from "@pixiv/three-v
 import {
   ArrowLeft,
   Download,
+  EyeClosed,
   FolderOpen,
   GitCompare,
   Lock,
+  Copy,
+  Play,
   RotateCcw,
   RotateCw,
   Save,
@@ -118,6 +121,7 @@ const state = {
   },
   expressionParameterDraft: {},
   expressionParameterDirty: false,
+  expressionTransition: null,
   expressionDirty: false,
   draggingEmotionPresetId: null,
   editing: null,
@@ -146,6 +150,7 @@ const state = {
     duration: 0,
     time: 0,
     playing: false,
+    loop: true,
     message: "기준 애니메이션을 불러오세요.",
   },
   selectedBone: "hips",
@@ -189,6 +194,7 @@ function createDefaultEmotionPresets() {
     name,
     value: 0,
     locked: false,
+    isDisableBlink: false,
     parameters: {},
   }));
 }
@@ -271,14 +277,17 @@ function render() {
   if (!app.innerHTML) {
     app.innerHTML = "";
   }
+  const isExpressionLayout = state.mode === "expression" && !state.editing;
   app.innerHTML = `
-    <main class="app ${state.mode === "expression" && !state.editing ? "expression-layout" : ""}">
+    <main class="app ${isExpressionLayout ? "expression-layout" : ""}">
       <aside class="sidebar">
         ${
           state.mode === "transfer"
             ? renderTransferPanel()
             : state.mode === "correction"
             ? renderMotionCorrectionPanel()
+            : state.mode === "linker"
+            ? renderEmotionLinkerPanel()
             : state.editing
               ? renderEditor()
               : renderEmotionExpressionPanel()
@@ -390,7 +399,7 @@ function renderEmotionParameterTrayWithSave() {
       </div>
       <div class="parameter-tray-footer">
         <div class="parameter-tray-emotion-name">${selected ? escapeHtml(selected.name) : "No emotion selected"}</div>
-        <button class="primary-button" id="saveSelectedParameters" ${selected && state.expressionParameterDirty ? "" : "disabled"}>Save parameter</button>
+        <button class="primary-button" id="saveSelectedParameters" ${selected && !selected.locked && state.expressionParameterDirty ? "" : "disabled"}>Save parameter</button>
       </div>
     </aside>
   `;
@@ -466,6 +475,7 @@ function renderModeBar(active) {
       <button class="mode-button ${active === "transfer" ? "active" : ""}" data-mode="transfer">${iconSvg(GitCompare, 14)}Shape Transfer</button>
       <button class="mode-button ${active === "correction" ? "active" : ""}" data-mode="correction">${iconSvg(SlidersHorizontal, 14)}Motion Correction</button>
       <button class="mode-button expression-mode-button ${active === "expression" ? "active" : ""}" data-mode="expression">${iconSvg(SlidersHorizontal, 14)}Expression Editor</button>
+      <button class="mode-button expression-mode-button ${active === "linker" ? "active" : ""}" data-mode="linker">${iconSvg(GitCompare, 14)}Emotion Linker</button>
     </div>
     ${renderVrmVersionSelector()}
   `;
@@ -504,6 +514,8 @@ function renderEmotionPresetCard(preset) {
             ? `<div class="emotion-name-readonly">${escapeHtml(preset.name)}</div>`
             : `<input class="emotion-name-input" type="text" value="${escapeHtml(preset.name)}" data-emotion-name="${preset.id}" />`
         }
+        <button class="blink-emotion-button ${preset.isDisableBlink ? "active" : ""}" data-emotion-blink="${preset.id}" title="Disable blink">${iconSvg(EyeClosed, 16)}</button>
+        <button class="duplicate-emotion-button" data-emotion-duplicate="${preset.id}" title="Duplicate">${iconSvg(Copy, 16)}</button>
         ${preset.locked ? `<span class="delete-emotion-placeholder"></span>` : `<button class="delete-emotion-button" data-emotion-delete="${preset.id}" title="Delete">${iconSvg(X, 18)}</button>`}
       </div>
       <div class="emotion-card-controls">
@@ -754,6 +766,58 @@ function renderMotionCorrectionPanel() {
   `;
 }
 
+function renderEmotionLinkerPanel() {
+  const animationNames = getAnimationNames();
+  return `
+    <div class="panel-header">
+      <div class="title-block">
+        <h1>Emotion Linker</h1>
+        <p>${state.correctionPath ? escapeHtml(fileNameFromPath(state.correctionPath)) : "VRM을 열면 연결 정보를 meta에 저장합니다"}</p>
+      </div>
+      <button class="icon-button" id="openFile" title="VRM 열기">${iconSvg(FolderOpen)}</button>
+    </div>
+    ${renderModeBar("linker")}
+    <div class="emotion-linker-panel">
+      ${
+        animationNames.length
+          ? animationNames.map((name) => renderEmotionLinkerCard(name)).join("")
+          : `<div class="correction-card"><p class="parameter-meta">Motion Correction에서 New Ani로 애니메이션을 먼저 등록하세요.</p></div>`
+      }
+    </div>
+    <div class="correction-footer">
+      <button class="primary-button" id="saveCorrection" ${state.correctionPath && state.correctionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
+    </div>
+  `;
+}
+
+function renderEmotionLinkerCard(animationName) {
+  const catalogEntry = state.animationCatalog?.[animationName] ?? {};
+  const metaEntry = getAnimationMetaEntry(animationName);
+  const presetId = metaEntry.expressionPresetId ?? "";
+  return `
+    <div class="emotion-link-card">
+      <div class="emotion-link-readonly">${escapeHtml(animationName)}</div>
+      <div class="emotion-link-readonly">${escapeHtml(catalogEntry.description ?? "")}</div>
+      <select class="emotion-link-select" data-link-expression="${escapeHtml(animationName)}">
+        <option value="">표정 프리셋 이름</option>
+        ${state.expressionPresets
+          .map(
+            (preset) =>
+              `<option value="${escapeHtml(preset.id)}" ${preset.id === presetId ? "selected" : ""}>${escapeHtml(preset.name)}</option>`,
+          )
+          .join("")}
+      </select>
+      <div class="emotion-link-actions">
+        <label class="emotion-link-loop">
+          <input type="checkbox" data-link-loop="${escapeHtml(animationName)}" ${metaEntry.loop ? "checked" : ""} />
+          Loop
+        </label>
+        <button class="icon-button emotion-link-play" data-link-play="${escapeHtml(animationName)}" ${currentVrm ? "" : "disabled"} title="Play">${iconSvg(Play, 24)}</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderBoneOptions() {
   return BONE_GROUPS.map(
     (group) => `
@@ -909,6 +973,17 @@ function bindUi() {
   document.querySelector("#checkTransfer")?.addEventListener("click", checkTransferCompatibility);
   document.querySelector("#applyTransfer")?.addEventListener("click", applyTransfer);
   document.querySelector("#addEmotionPreset")?.addEventListener("click", addEmotionPreset);
+  for (const select of document.querySelectorAll("[data-link-expression]")) {
+    select.addEventListener("change", () => updateAnimationExpressionLink(select.dataset.linkExpression, select.value));
+  }
+
+  for (const input of document.querySelectorAll("[data-link-loop]")) {
+    input.addEventListener("change", () => updateAnimationLoop(input.dataset.linkLoop, input.checked));
+  }
+
+  for (const button of document.querySelectorAll("[data-link-play]")) {
+    button.addEventListener("click", () => playLinkedAnimation(button.dataset.linkPlay));
+  }
   document.querySelector("#sourceFaceMesh")?.addEventListener("change", (event) => {
     state.transfer.sourceMesh = Number(event.target.value);
     state.transfer.report = null;
@@ -1025,6 +1100,20 @@ function bindUi() {
     });
   }
 
+  for (const button of document.querySelectorAll("[data-emotion-duplicate]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      duplicateEmotionPreset(button.dataset.emotionDuplicate);
+    });
+  }
+
+  for (const button of document.querySelectorAll("[data-emotion-blink]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleEmotionPresetBlink(button.dataset.emotionBlink);
+    });
+  }
+
   for (const input of document.querySelectorAll("[data-emotion-name]")) {
     input.addEventListener("click", (event) => event.stopPropagation());
     input.addEventListener("blur", () => updateEmotionPresetName(input.dataset.emotionName, input.value));
@@ -1103,7 +1192,7 @@ function bindUi() {
     });
   }
 
-  for (const scroller of document.querySelectorAll(".expression-list, .parameter-list, .transfer-panel, .correction-panel, .expression-editor-panel")) {
+  for (const scroller of document.querySelectorAll(".expression-list, .parameter-list, .transfer-panel, .correction-panel, .expression-editor-panel, .emotion-linker-panel")) {
     bindPanelWheel(scroller, scroller);
   }
 
@@ -1113,6 +1202,8 @@ function bindUi() {
       ? ".transfer-panel"
       : state.mode === "correction"
         ? ".correction-panel"
+        : state.mode === "linker"
+          ? ".emotion-linker-panel"
         : state.editing
           ? ".parameter-list"
           : ".expression-editor-panel",
@@ -1128,7 +1219,7 @@ function selectEmotionPreset(id) {
   if (state.selectedExpressionPresetId === id) {
     const current = getSelectedEmotionPreset();
     if (current) current.value = 1;
-    applySelectedEmotionPreset();
+    transitionToSelectedEmotionPreset(0.2);
     renderPreservingExpressionScroll();
     return;
   }
@@ -1138,7 +1229,7 @@ function selectEmotionPreset(id) {
   }
   state.selectedExpressionPresetId = id;
   loadSelectedExpressionParameterDraft();
-  applySelectedEmotionPreset();
+  transitionToSelectedEmotionPreset(0.2);
   renderPreservingExpressionScroll();
 }
 
@@ -1150,6 +1241,7 @@ function addEmotionPreset() {
     name: "new emotion",
     value: 0,
     locked: false,
+    isDisableBlink: false,
     parameters: {},
   });
   for (const preset of state.expressionPresets) {
@@ -1162,6 +1254,23 @@ function addEmotionPreset() {
   renderPreservingExpressionScroll({ scrollToBottom: true });
 }
 
+function duplicateEmotionPreset(id) {
+  const sourceIndex = state.expressionPresets.findIndex((item) => item.id === id);
+  if (sourceIndex < 0) return;
+  const source = state.expressionPresets[sourceIndex];
+  const copy = {
+    id: `emotion-${Date.now()}-${state.expressionPresets.length}`,
+    name: source.name,
+    value: 0,
+    locked: false,
+    isDisableBlink: Boolean(source.isDisableBlink),
+    parameters: normalizeExpressionParameterValues(source.parameters),
+  };
+  state.expressionPresets.splice(sourceIndex + 1, 0, copy);
+  markExpressionMetaDirty();
+  renderPreservingExpressionScroll();
+}
+
 function toggleEmotionPresetLock(id) {
   const preset = state.expressionPresets.find((item) => item.id === id);
   if (!preset) return;
@@ -1170,8 +1279,17 @@ function toggleEmotionPresetLock(id) {
   preset.locked = !preset.locked;
   state.selectedExpressionPresetId = id;
   if (selectionChanged) loadSelectedExpressionParameterDraft();
+  if (preset.locked) state.expressionParameterDirty = false;
   markExpressionMetaDirty();
   applySelectedEmotionPreset();
+  renderPreservingExpressionScroll();
+}
+
+function toggleEmotionPresetBlink(id) {
+  const preset = state.expressionPresets.find((item) => item.id === id);
+  if (!preset) return;
+  preset.isDisableBlink = !preset.isDisableBlink;
+  markExpressionMetaDirty();
   renderPreservingExpressionScroll();
 }
 
@@ -1239,10 +1357,11 @@ function reorderEmotionPreset(draggedId, targetId) {
 }
 
 function updateSelectedRorrParameter(parameterId, value, source, shouldRender = false) {
-  if (!getSelectedEmotionPreset() || !state.currentParameterIds.has(parameterId)) return;
+  const selected = getSelectedEmotionPreset();
+  if (!selected || !state.currentParameterIds.has(parameterId)) return;
   state.expressionParameterDraft ??= {};
   state.expressionParameterDraft[parameterId] = clampEmotionValue(value);
-  state.expressionParameterDirty = true;
+  if (!selected.locked) state.expressionParameterDirty = true;
   syncRorrParameterControls(parameterId, state.expressionParameterDraft[parameterId], source);
   applySelectedEmotionPreset();
   syncSaveParameterButton();
@@ -1261,7 +1380,7 @@ function loadSelectedExpressionParameterDraft() {
 
 function commitSelectedExpressionParameters() {
   const selected = getSelectedEmotionPreset();
-  if (!selected) return false;
+  if (!selected || selected.locked) return false;
   selected.parameters = normalizeExpressionParameterValues(state.expressionParameterDraft);
   state.expressionParameterDirty = false;
   markExpressionMetaDirty();
@@ -1286,7 +1405,8 @@ function confirmPendingExpressionParameterChanges() {
 
 function syncSaveParameterButton() {
   const button = document.querySelector("#saveSelectedParameters");
-  if (button) button.disabled = !(getSelectedEmotionPreset() && state.expressionParameterDirty);
+  const selected = getSelectedEmotionPreset();
+  if (button) button.disabled = !(selected && !selected.locked && state.expressionParameterDirty);
 }
 
 function updateParameterFilter(parameterId, checked) {
@@ -1362,6 +1482,11 @@ function applySelectedEmotionPreset() {
   const selected = getSelectedEmotionPreset();
   const weight = selected?.value ?? 0;
   applyRorrParameterValues(state.expressionParameterDraft ?? {}, weight);
+}
+
+function transitionToSelectedEmotionPreset(duration = 0.2) {
+  const selected = getSelectedEmotionPreset();
+  startExpressionTransition(state.expressionParameterDraft ?? selected?.parameters ?? {}, selected?.value ?? 0, duration);
 }
 
 function clampEmotionValue(value) {
@@ -1474,7 +1599,7 @@ async function addAnimation() {
   }
 }
 
-async function loadSelectedAnimation() {
+async function loadSelectedAnimation(options = {}) {
   const entry = getSelectedAnimationEntry();
   if (!entry) {
     resetAnimationState(getAnimationNames().length ? "애니메이션을 선택하세요." : "New Ani로 애니메이션을 등록하세요.");
@@ -1486,16 +1611,18 @@ async function loadSelectedAnimation() {
   }
   try {
     const result = await window.vrmFiles.openStoredAnimation(entry.fileName);
-    await loadAnimationResult(result);
+    return await loadAnimationResult(result, options);
   } catch (error) {
     resetAnimationState(`${entry.fileName} 파일을 animations 폴더에서 찾지 못했습니다.`);
   }
 }
 
-async function loadAnimationResult(result) {
-  if (!result) return;
+async function loadAnimationResult(result, options = {}) {
+  if (!result) return null;
+  const previousAction = options.preserveCurrentAction ? animationAction : null;
+  const previousUrl = options.preserveCurrentAction ? animationUrl : null;
   try {
-    clearReferenceAnimation();
+    if (!options.preserveCurrentAction) clearReferenceAnimation();
     const bytes = new Uint8Array(result.data);
     animationUrl = URL.createObjectURL(new Blob([bytes], { type: "model/gltf-binary" }));
     const loader = new GLTFLoader();
@@ -1505,11 +1632,18 @@ async function loadAnimationResult(result) {
     const clip = vrmAnimation ? createVRMAnimationClip(vrmAnimation, currentVrm) : gltf.animations?.[0];
     if (!clip) throw new Error("애니메이션 클립을 찾지 못했습니다.");
 
-    animationMixer = new THREE.AnimationMixer(currentVrm.scene);
+    animationMixer ??= new THREE.AnimationMixer(currentVrm.scene);
     animationAction = animationMixer.clipAction(clip);
+    const metaEntry = getAnimationMetaEntry(result.name);
+    configureAnimationLoop(metaEntry.loop, animationAction);
     animationAction.reset();
     animationAction.play();
     animationAction.paused = true;
+    if (!options.preserveCurrentAction) {
+      animationMixer.setTime(0);
+      currentVrm?.update?.(0);
+    }
+    if (previousUrl && previousUrl !== animationUrl) URL.revokeObjectURL(previousUrl);
 
     state.animation = {
       fileName: result.name,
@@ -1517,11 +1651,14 @@ async function loadAnimationResult(result) {
       duration: clip.duration,
       time: 0,
       playing: false,
+      loop: Boolean(metaEntry.loop),
       message: "",
     };
+    return { previousAction };
   } catch (error) {
     clearReferenceAnimation();
     state.animation.message = error.message || String(error);
+    return null;
   }
 }
 
@@ -1568,6 +1705,64 @@ function updateSelectedAnimationDescription(value) {
   window.vrmFiles.updateAnimationInfo(entry.fileName, { description: value });
 }
 
+function updateAnimationExpressionLink(animationName, presetId) {
+  const entry = ensureAnimationMetaEntry(animationName);
+  if (!entry) return;
+  const preset = state.expressionPresets.find((item) => item.id === presetId);
+  if (preset) {
+    entry.expressionPresetId = preset.id;
+    entry.expressionPresetName = preset.name;
+  } else {
+    delete entry.expressionPresetId;
+    delete entry.expressionPresetName;
+  }
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+}
+
+function updateAnimationLoop(animationName, checked) {
+  const entry = ensureAnimationMetaEntry(animationName);
+  if (!entry) return;
+  entry.loop = Boolean(checked);
+  state.correctionDirty = true;
+  if (state.selectedAnimationName === animationName && animationAction) {
+    configureAnimationLoop(entry.loop);
+  }
+  syncSaveMetaButton();
+}
+
+async function playLinkedAnimation(animationName) {
+  if (!animationName) return;
+  const scroller = document.querySelector(".emotion-linker-panel");
+  const scrollTop = scroller?.scrollTop ?? 0;
+  const entry = ensureAnimationMetaEntry(animationName);
+  if (!entry) return;
+  state.selectedAnimationName = animationName;
+  const transition = await loadSelectedAnimation({ preserveCurrentAction: true });
+  applyLinkedExpressionPreset(entry.expressionPresetId);
+  playAnimationFromStart(Boolean(entry.loop), {
+    previousAction: transition?.previousAction,
+    transitionSeconds: transition?.previousAction ? 0.2 : 0,
+  });
+  render();
+  const nextScroller = document.querySelector(".emotion-linker-panel");
+  if (nextScroller) nextScroller.scrollTop = scrollTop;
+}
+
+function applyLinkedExpressionPreset(presetId) {
+  const preset = state.expressionPresets.find((item) => item.id === presetId);
+  if (!preset) {
+    startExpressionTransition({}, 0, 0.2);
+    return;
+  }
+  for (const item of state.expressionPresets) {
+    item.value = item.id === preset.id ? 1 : 0;
+  }
+  state.selectedExpressionPresetId = preset.id;
+  loadSelectedExpressionParameterDraft();
+  transitionToSelectedEmotionPreset(0.2);
+}
+
 function clearReferenceAnimation() {
   clearMotionCorrectionPreview();
   animationMixer?.stopAllAction();
@@ -1588,6 +1783,7 @@ function resetAnimationState(message) {
     duration: 0,
     time: 0,
     playing: false,
+    loop: true,
     message,
   };
 }
@@ -1601,10 +1797,42 @@ function toggleAnimationPlayback() {
 
 function restartAnimation() {
   if (!animationAction) return;
-  setAnimationTime(0);
+  const entry = getAnimationMetaEntry(state.selectedAnimationName);
+  playAnimationFromStart(Boolean(entry.loop));
+}
+
+function playAnimationFromStart(loop, options = {}) {
+  if (!animationAction) return;
+  clearMotionCorrectionPreview();
+  configureAnimationLoop(loop, animationAction);
+  state.animation.loop = Boolean(loop);
   state.animation.playing = true;
+  state.animation.time = 0;
+  animationAction.enabled = true;
   animationAction.paused = false;
+  animationAction.reset();
+  animationAction.setEffectiveWeight(1);
+  animationAction.play();
+  if (options.previousAction && options.previousAction !== animationAction && options.transitionSeconds > 0) {
+    options.previousAction.enabled = true;
+    options.previousAction.paused = false;
+    options.previousAction.crossFadeTo(animationAction, options.transitionSeconds, false);
+    window.setTimeout(() => {
+      options.previousAction.stop();
+    }, Math.ceil(options.transitionSeconds * 1000) + 80);
+  }
   updateAnimationControls();
+}
+
+function configureAnimationLoop(loop, action = animationAction) {
+  if (!action) return;
+  if (loop) {
+    action.setLoop(THREE.LoopRepeat, Infinity);
+    action.clampWhenFinished = false;
+  } else {
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
+  }
 }
 
 function setAnimationTime(time) {
@@ -1778,15 +2006,83 @@ function collectShapeKeyParameters() {
 
 function applyRorrParameterValues(values, weight = 1) {
   if (!currentVrm) return;
+  state.expressionTransition = null;
+  applyRorrInfluenceValues(getWeightedRorrParameterValues(values, weight));
+}
+
+function startExpressionTransition(values, weight = 1, duration = 0.2) {
+  if (!currentVrm) {
+    applyRorrParameterValues(values, weight);
+    return;
+  }
+  const to = getWeightedRorrParameterValues(values, weight);
+  if (duration <= 0) {
+    state.expressionTransition = null;
+    applyRorrInfluenceValues(to);
+    return;
+  }
+  state.expressionTransition = {
+    elapsed: 0,
+    duration,
+    from: readCurrentRorrInfluenceValues(),
+    to,
+  };
+}
+
+function getWeightedRorrParameterValues(values, weight = 1) {
+  const next = {};
+  const clampedWeight = clampEmotionValue(weight);
+  for (const parameter of state.rorrParameters) {
+    next[parameter.id] = clampEmotionValue(values?.[parameter.id] ?? 0) * clampedWeight;
+  }
+  return next;
+}
+
+function readCurrentRorrInfluenceValues() {
+  const next = {};
+  const rorrNames = new Set(state.rorrParameters.map((parameter) => parameter.id));
+  currentVrm?.scene?.traverse((object) => {
+    if (!object.isMesh || !object.morphTargetDictionary || !Array.isArray(object.morphTargetInfluences)) return;
+    for (const name of rorrNames) {
+      const index = object.morphTargetDictionary[name];
+      if (index == null || next[name] != null) continue;
+      next[name] = clampEmotionValue(object.morphTargetInfluences[index] ?? 0);
+    }
+  });
+  for (const name of rorrNames) {
+    next[name] ??= 0;
+  }
+  return next;
+}
+
+function applyRorrInfluenceValues(values) {
+  if (!currentVrm) return;
   const rorrNames = new Set(state.rorrParameters.map((parameter) => parameter.id));
   currentVrm.scene.traverse((object) => {
     if (!object.isMesh || !object.morphTargetDictionary || !Array.isArray(object.morphTargetInfluences)) return;
     for (const name of rorrNames) {
       const index = object.morphTargetDictionary[name];
       if (index == null) continue;
-      object.morphTargetInfluences[index] = clampEmotionValue(values[name] ?? 0) * clampEmotionValue(weight);
+      object.morphTargetInfluences[index] = clampEmotionValue(values?.[name] ?? 0);
     }
   });
+}
+
+function updateExpressionTransition(delta) {
+  const transition = state.expressionTransition;
+  if (!transition) return;
+  transition.elapsed += delta;
+  const t = Math.min(1, transition.elapsed / Math.max(transition.duration, 0.001));
+  const eased = t * t * (3 - 2 * t);
+  const values = {};
+  const names = new Set([...Object.keys(transition.from), ...Object.keys(transition.to)]);
+  for (const name of names) {
+    const from = transition.from[name] ?? 0;
+    const to = transition.to[name] ?? 0;
+    values[name] = from + (to - from) * eased;
+  }
+  applyRorrInfluenceValues(values);
+  if (t >= 1) state.expressionTransition = null;
 }
 
 function startEdit(expressionId) {
@@ -1969,7 +2265,7 @@ function createEmptyCorrection() {
       rotationOrder: "XYZ",
     },
     animations: {},
-    expressionPresets: createDefaultEmotionPresets().map(({ id, name, locked }) => ({ id, name, locked })),
+    expressionPresets: createDefaultEmotionPresets().map(({ id, name, locked, isDisableBlink }) => ({ id, name, locked, isDisableBlink })),
   };
 }
 
@@ -1994,6 +2290,18 @@ function getSelectedAnimationEntry() {
   return state.animationCatalog?.[state.selectedAnimationName] ?? null;
 }
 
+function getAnimationMetaEntry(animationName) {
+  if (!animationName) return {};
+  const entry = state.correction.animations?.[animationName];
+  return normalizeAnimationCorrectionEntry(entry ?? {});
+}
+
+function ensureAnimationMetaEntry(animationName) {
+  if (!animationName || !state.animationCatalog?.[animationName]) return null;
+  state.correction.animations[animationName] = normalizeAnimationCorrectionEntry(state.correction.animations[animationName] ?? {});
+  return state.correction.animations[animationName];
+}
+
 function getSelectedAnimationCorrections() {
   if (!state.selectedAnimationName) return {};
   return state.correction.animations?.[state.selectedAnimationName]?.corrections ?? {};
@@ -2001,9 +2309,10 @@ function getSelectedAnimationCorrections() {
 
 function ensureSelectedAnimationCorrections() {
   if (!state.selectedAnimationName || !getSelectedAnimationEntry()) return null;
-  state.correction.animations[state.selectedAnimationName] ??= { corrections: {} };
-  state.correction.animations[state.selectedAnimationName].corrections ??= {};
-  return state.correction.animations[state.selectedAnimationName].corrections;
+  const entry = ensureAnimationMetaEntry(state.selectedAnimationName);
+  if (!entry) return null;
+  entry.corrections ??= {};
+  return entry.corrections;
 }
 
 function getBoneCorrection(boneName) {
@@ -2273,6 +2582,7 @@ function normalizeExpressionPresets(presets) {
     name: String(preset.name ?? "new emotion"),
     value: 0,
     locked: Boolean(preset.locked),
+    isDisableBlink: Boolean(preset.isDisableBlink),
     parameters: normalizeExpressionParameterValues(preset.parameters),
   }));
 }
@@ -2300,6 +2610,9 @@ function normalizeVrmVersion(value) {
 
 function normalizeAnimationCorrectionEntry(animation) {
   const next = {
+    loop: Boolean(animation?.loop),
+    expressionPresetId: String(animation?.expressionPresetId ?? ""),
+    expressionPresetName: String(animation?.expressionPresetName ?? ""),
     corrections: {},
   };
   for (const [boneName, correction] of Object.entries(animation.corrections ?? {})) {
@@ -2307,20 +2620,28 @@ function normalizeAnimationCorrectionEntry(animation) {
     next.corrections[boneName] = normalizeBoneCorrection(correction);
     pruneCorrectionObject(next.corrections, boneName);
   }
+  if (!next.expressionPresetId) delete next.expressionPresetId;
+  if (!next.expressionPresetName) delete next.expressionPresetName;
   return next;
 }
 
 function serializeCorrection() {
   const next = normalizeCorrectionJson(state.correction);
   for (const animation of Object.values(next.animations)) {
+    if (!animation.expressionPresetId) continue;
+    const preset = state.expressionPresets.find((item) => item.id === animation.expressionPresetId);
+    if (preset) animation.expressionPresetName = preset.name;
+  }
+  for (const animation of Object.values(next.animations)) {
     for (const boneName of Object.keys(animation.corrections)) {
       pruneCorrectionObject(animation.corrections, boneName);
     }
   }
-  next.expressionPresets = normalizeExpressionPresets(state.expressionPresets).map(({ id, name, locked, parameters }) => ({
+  next.expressionPresets = normalizeExpressionPresets(state.expressionPresets).map(({ id, name, locked, isDisableBlink, parameters }) => ({
     id,
     name,
     locked,
+    isDisableBlink,
     parameters,
   }));
   return next;
@@ -3217,10 +3538,17 @@ function tick() {
     animationMixer.update(delta);
     state.animation.time = animationAction?.time ?? state.animation.time;
     if (state.animation.duration && state.animation.time >= state.animation.duration) {
-      state.animation.time %= state.animation.duration;
+      if (state.animation.loop) {
+        state.animation.time %= state.animation.duration;
+      } else {
+        state.animation.time = state.animation.duration;
+        state.animation.playing = false;
+        if (animationAction) animationAction.paused = true;
+      }
     }
     updateAnimationControls();
   }
+  updateExpressionTransition(delta);
   currentVrm?.update?.(delta);
   applyMotionCorrectionPreview();
   applyEditDraftMorphPreview();
