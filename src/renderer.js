@@ -6,6 +6,7 @@ import { VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from "@pixiv/three-vrm-animation";
 import {
   ArrowLeft,
+  Camera,
   Download,
   EyeClosed,
   FolderOpen,
@@ -108,6 +109,8 @@ const state = {
   expressionValues: new Map(),
   expressionPresets: createDefaultEmotionPresets(),
   selectedExpressionPresetId: "emotion-0",
+  selectedExpressionRangeId: null,
+  decayPreviewSeconds: {},
   rorrParameters: [],
   currentParameterIds: new Set(),
   newParameterIds: new Set(),
@@ -118,10 +121,17 @@ const state = {
       knownShapeKeys: null,
       visibleShapeKeys: null,
     },
+    cameraPresets: {},
+    viewer: {
+      lightIntensity: 0.75,
+    },
   },
+  cameraSettingsOpen: null,
+  cameraTransition: null,
   expressionParameterDraft: {},
   expressionParameterDirty: false,
   expressionTransition: null,
+  expressionDecay: null,
   expressionDirty: false,
   draggingEmotionPresetId: null,
   editing: null,
@@ -171,10 +181,11 @@ camera.position.set(0, 1.35, 3.2);
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-const light = new THREE.DirectionalLight(0xffffff, 2.4);
-light.position.set(1.4, 2.2, 2.6);
-scene.add(light);
-scene.add(new THREE.AmbientLight(0xffffff, 1.8));
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
+keyLight.position.set(1.4, 2.2, 2.6);
+scene.add(keyLight);
+const ambientLight = new THREE.AmbientLight(0xffffff, 1.8);
+scene.add(ambientLight);
 
 let controls;
 let currentVrm = null;
@@ -196,6 +207,7 @@ function createDefaultEmotionPresets() {
     locked: false,
     isDisableBlink: false,
     parameters: {},
+    rangeSlots: [],
   }));
 }
 
@@ -217,7 +229,77 @@ function normalizeEditorConfig(config) {
       knownShapeKeys: Array.isArray(known) ? known.map(String) : normalizedVisible,
       visibleShapeKeys: normalizedVisible,
     },
+    cameraPresets: normalizeCameraPresets(config?.cameraPresets),
+    viewer: {
+      lightIntensity: clampLightIntensity(config?.viewer?.lightIntensity),
+    },
   };
+}
+
+function normalizeCameraPresets(presets) {
+  const next = {};
+  for (const mode of ["transfer", "correction", "expression", "linker"]) {
+    const preset = presets?.[mode];
+    if (!preset || typeof preset !== "object") continue;
+    next[mode] = normalizeCameraPreset(preset);
+  }
+  return next;
+}
+
+function normalizeCameraPreset(preset) {
+  const target = Array.isArray(preset?.target) ? preset.target.map(Number) : [0, 1, 0];
+  return {
+    yaw: normalizeFiniteNumber(preset?.yaw, 0),
+    pitch: normalizeFiniteNumber(preset?.pitch, 0),
+    distance: normalizeFiniteNumber(preset?.distance, 3),
+    fov: normalizeFiniteNumber(preset?.fov, 28),
+    target: [normalizeFiniteNumber(target[0], 0), normalizeFiniteNumber(target[1], 1), normalizeFiniteNumber(target[2], 0)],
+  };
+}
+
+function normalizeFiniteNumber(value, fallback) {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : fallback;
+}
+
+function clampLightIntensity(value) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return 0.75;
+  return Math.min(1.5, Math.max(0.2, Math.round(next * 100) / 100));
+}
+
+function applyViewerLightIntensity(value) {
+  const intensity = clampLightIntensity(value);
+  keyLight.intensity = 2.4 * intensity;
+  ambientLight.intensity = 1.8 * intensity;
+}
+
+function updateLightIntensity(value) {
+  const intensity = clampLightIntensity(value);
+  state.config = normalizeEditorConfig({
+    ...state.config,
+    viewer: {
+      ...(state.config?.viewer ?? {}),
+      lightIntensity: intensity,
+    },
+  });
+  applyViewerLightIntensity(intensity);
+  const label = document.querySelector(".viewer-light-control strong");
+  if (label) label.textContent = `${Math.round(intensity * 100)}%`;
+  updateEditorConfigMemory();
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function lerpAngleDegrees(a, b, t) {
+  let delta = ((b - a + 540) % 360) - 180;
+  return a + delta * t;
 }
 
 async function saveEditorConfig() {
@@ -244,6 +326,8 @@ function buildCurrentEditorConfig() {
         .map((parameter) => parameter.id)
         .filter((id) => !visibleIds || visibleIds.has(id)),
     },
+    cameraPresets: state.config?.cameraPresets ?? {},
+    viewer: state.config?.viewer ?? {},
   });
 }
 
@@ -254,6 +338,7 @@ window.addEventListener("beforeunload", () => {
 
 async function initialize() {
   await loadEditorConfig();
+  applyViewerLightIntensity(state.config.viewer.lightIntensity);
   await refreshAnimationCatalog();
   const names = getAnimationNames();
   state.selectedAnimationName = names[0] ?? null;
@@ -271,6 +356,29 @@ function iconSvg(icon, size = 18) {
     })
     .join("");
   return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${children}</svg>`;
+}
+
+function dottedArrowSvg(size = 22) {
+  return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 28 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 12h3" />
+    <path d="M10 12h3" />
+    <path d="M17 12h8" />
+    <path d="M20 6l6 6-6 6" />
+  </svg>`;
+}
+
+function lightIconSvg(size = 16) {
+  return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="4" />
+    <path d="M12 2v2" />
+    <path d="M12 20v2" />
+    <path d="m4.93 4.93 1.41 1.41" />
+    <path d="m17.66 17.66 1.41 1.41" />
+    <path d="M2 12h2" />
+    <path d="M20 12h2" />
+    <path d="m6.34 17.66-1.41 1.41" />
+    <path d="m19.07 4.93-1.41 1.41" />
+  </svg>`;
 }
 
 function render() {
@@ -295,8 +403,10 @@ function render() {
       </aside>
       <section class="viewer">
         <div id="canvasHost"></div>
+        ${renderCameraSettingsPanel()}
         ${state.filePath ? "" : renderDropHint()}
         ${renderStatusPill()}
+        ${renderViewerLightControl()}
       </section>
       ${state.mode === "expression" && !state.editing ? renderEmotionParameterTrayWithSave() : ""}
     </main>
@@ -327,6 +437,17 @@ function renderExpressionParameterTray() {
         <p>아직 표시할 파라미터가 없습니다.</p>
       </div>
     </aside>
+  `;
+}
+
+function renderViewerLightControl() {
+  const value = clampLightIntensity(state.config?.viewer?.lightIntensity);
+  return `
+    <div class="viewer-light-control">
+      <span class="viewer-light-icon" title="Light">${lightIconSvg()}</span>
+      <input type="range" min="0.2" max="1.5" step="0.01" value="${roundForInput(value)}" data-light-intensity />
+      <strong>${Math.round(value * 100)}%</strong>
+    </div>
   `;
 }
 
@@ -388,7 +509,7 @@ function renderEmotionParameterTrayWithSave() {
         <div class="parameter-tray-title-row">
           <div>
             <h2>Parameters</h2>
-            <p>${selected ? escapeHtml(selected.name) : "No emotion selected"}</p>
+            <p>${escapeHtml(getSelectedExpressionEditLabel())}</p>
           </div>
           <button class="filter-button ${state.parameterFilterOpen ? "active" : ""}" id="toggleParameterFilter" title="Filter">${iconSvg(SlidersHorizontal, 16)}</button>
         </div>
@@ -398,7 +519,7 @@ function renderEmotionParameterTrayWithSave() {
         ${rows || `<p>${state.filePath ? "표시할 shape key가 없습니다." : "VRM을 열면 shape key가 여기에 표시됩니다."}</p>`}
       </div>
       <div class="parameter-tray-footer">
-        <div class="parameter-tray-emotion-name">${selected ? escapeHtml(selected.name) : "No emotion selected"}</div>
+        <div class="parameter-tray-emotion-name">${escapeHtml(getSelectedExpressionEditLabel())}</div>
         <button class="primary-button" id="saveSelectedParameters" ${selected && !selected.locked && state.expressionParameterDirty ? "" : "disabled"}>Save parameter</button>
       </div>
     </aside>
@@ -469,15 +590,205 @@ function syncParameterFilterConfigMemory() {
   updateEditorConfigMemory();
 }
 
+function getModelFrameInfo() {
+  if (!currentVrm?.scene) {
+    return {
+      center: new THREE.Vector3(0, 1, 0),
+      height: 1.6,
+    };
+  }
+  const box = new THREE.Box3().setFromObject(currentVrm.scene);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  return {
+    center,
+    height: Math.max(size.y, 1),
+  };
+}
+
+function getDefaultCameraPreset(mode) {
+  const { center, height } = getModelFrameInfo();
+  if (mode === "expression") {
+    return {
+      yaw: 0,
+      pitch: 0,
+      distance: height * 0.72,
+      fov: 22,
+      target: [center.x, center.y + height * 0.62, center.z],
+    };
+  }
+  return {
+    yaw: 0,
+    pitch: 0,
+    distance: height * 1.65,
+    fov: 28,
+    target: [center.x, center.y + height * 0.1, center.z],
+  };
+}
+
+function getCurrentCameraPreset() {
+  const target = controls?.target ?? new THREE.Vector3(0, 1, 0);
+  const offset = camera.position.clone().sub(target);
+  const distance = Math.max(offset.length(), 0.001);
+  const yaw = THREE.MathUtils.radToDeg(Math.atan2(offset.x, offset.z));
+  const pitch = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(offset.y / distance, -1, 1)));
+  return {
+    yaw,
+    pitch,
+    distance,
+    fov: camera.fov,
+    target: [target.x, target.y, target.z],
+  };
+}
+
+function getCameraPresetForMode(mode) {
+  return state.config?.cameraPresets?.[mode] ?? getDefaultCameraPreset(mode);
+}
+
+function applyCameraPresetForMode(mode) {
+  transitionCameraToPreset(getCameraPresetForMode(mode), 0.5);
+}
+
+function transitionCameraToPreset(preset, duration = 0.5) {
+  if (!controls || !preset) return;
+  if (duration <= 0) {
+    state.cameraTransition = null;
+    applyCameraPreset(preset);
+    return;
+  }
+  state.cameraTransition = {
+    elapsed: 0,
+    duration,
+    from: getCurrentCameraPreset(),
+    to: normalizeCameraPreset(preset),
+  };
+}
+
+function applyCameraPreset(preset) {
+  if (!controls || !preset) return;
+  const normalized = normalizeCameraPreset(preset);
+  const target = new THREE.Vector3(...normalized.target);
+  const yaw = THREE.MathUtils.degToRad(normalized.yaw);
+  const pitch = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(normalized.pitch, -80, 80));
+  const distance = Math.max(normalized.distance, 0.1);
+  const horizontal = Math.cos(pitch) * distance;
+  camera.position.set(
+    target.x + Math.sin(yaw) * horizontal,
+    target.y + Math.sin(pitch) * distance,
+    target.z + Math.cos(yaw) * horizontal,
+  );
+  controls.target.copy(target);
+  camera.fov = THREE.MathUtils.clamp(normalized.fov, 10, 70);
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
+function updateCameraTransition(delta) {
+  const transition = state.cameraTransition;
+  if (!transition) return;
+  transition.elapsed += delta;
+  const t = Math.min(1, transition.elapsed / Math.max(transition.duration, 0.001));
+  const eased = easeInOutCubic(t);
+  const target = [
+    lerp(transition.from.target[0], transition.to.target[0], eased),
+    lerp(transition.from.target[1], transition.to.target[1], eased),
+    lerp(transition.from.target[2], transition.to.target[2], eased),
+  ];
+  applyCameraPreset({
+    yaw: lerpAngleDegrees(transition.from.yaw, transition.to.yaw, eased),
+    pitch: lerp(transition.from.pitch, transition.to.pitch, eased),
+    distance: lerp(transition.from.distance, transition.to.distance, eased),
+    fov: lerp(transition.from.fov, transition.to.fov, eased),
+    target,
+  });
+  if (t >= 1) state.cameraTransition = null;
+}
+
+function updateCameraSetting(key, value, source) {
+  if (!state.cameraSettingsOpen || !Number.isFinite(value)) return;
+  const preset = getCurrentCameraPreset();
+  if (key === "yaw") preset.yaw = value;
+  if (key === "pitch") preset.pitch = value;
+  if (key === "distance") preset.distance = Math.max(0.1, value);
+  if (key === "targetY") preset.target[1] = value;
+  if (key === "fov") preset.fov = value;
+  applyCameraPreset(preset);
+  syncCameraSettingControls(key, value, source);
+}
+
+function syncCameraSettingControls(key, value, source) {
+  const rounded = roundForInput(value);
+  for (const input of document.querySelectorAll(`[data-camera-setting="${key}"], [data-camera-setting-number="${key}"]`)) {
+    if (input === source) continue;
+    input.value = rounded;
+  }
+}
+
+async function closeCameraSettings() {
+  if (!state.cameraSettingsOpen) return;
+  state.config = normalizeEditorConfig({
+    ...state.config,
+    cameraPresets: {
+      ...(state.config?.cameraPresets ?? {}),
+      [state.cameraSettingsOpen]: getCurrentCameraPreset(),
+    },
+  });
+  state.cameraSettingsOpen = null;
+  await saveEditorConfig();
+  render();
+}
+
 function renderModeBar(active) {
+  const modes = [
+    ["transfer", "Shape Transfer", GitCompare],
+    ["correction", "Motion Correction", SlidersHorizontal],
+    ["expression", "Expression Editor", SlidersHorizontal],
+    ["linker", "Emotion Linker", GitCompare],
+  ];
   return `
     <div class="mode-bar">
-      <button class="mode-button ${active === "transfer" ? "active" : ""}" data-mode="transfer">${iconSvg(GitCompare, 14)}Shape Transfer</button>
-      <button class="mode-button ${active === "correction" ? "active" : ""}" data-mode="correction">${iconSvg(SlidersHorizontal, 14)}Motion Correction</button>
-      <button class="mode-button expression-mode-button ${active === "expression" ? "active" : ""}" data-mode="expression">${iconSvg(SlidersHorizontal, 14)}Expression Editor</button>
-      <button class="mode-button expression-mode-button ${active === "linker" ? "active" : ""}" data-mode="linker">${iconSvg(GitCompare, 14)}Emotion Linker</button>
+      ${modes
+        .map(
+          ([mode, label, icon]) => `
+            <div class="mode-row">
+              <button class="mode-button ${active === mode ? "active" : ""}" data-mode="${mode}">${iconSvg(icon, 14)}${label}</button>
+              <button class="camera-preset-button ${state.cameraSettingsOpen === mode ? "active" : ""}" data-camera-settings="${mode}" title="${label} camera">${iconSvg(Camera, 15)}</button>
+            </div>
+          `,
+        )
+        .join("")}
     </div>
     ${renderVrmVersionSelector()}
+  `;
+}
+
+function renderCameraSettingsPanel() {
+  const mode = state.cameraSettingsOpen;
+  if (!mode) return "";
+  const values = getCurrentCameraPreset();
+  return `
+    <div class="camera-settings-panel">
+      <div class="camera-settings-head">
+        <strong>${escapeHtml(formatModeName(mode))} Camera</strong>
+        <button class="mini-button" id="closeCameraSettings">Close</button>
+      </div>
+      ${renderCameraRange("yaw", "Yaw", -180, 180, 1, values.yaw, "deg")}
+      ${renderCameraRange("pitch", "Pitch", -80, 80, 1, values.pitch, "deg")}
+      ${renderCameraRange("distance", "Distance", 0.4, 8, 0.05, values.distance, "m")}
+      ${renderCameraRange("targetY", "Target Y", 0, 2.5, 0.01, values.target[1], "m")}
+      ${renderCameraRange("fov", "FOV", 10, 70, 1, values.fov, "deg")}
+    </div>
+  `;
+}
+
+function renderCameraRange(key, label, min, max, step, value, unit) {
+  return `
+    <label class="camera-setting-row">
+      <span>${escapeHtml(label)}</span>
+      <input type="range" min="${min}" max="${max}" step="${step}" value="${roundForInput(value)}" data-camera-setting="${key}" />
+      <input type="number" min="${min}" max="${max}" step="${step}" value="${roundForInput(value)}" data-camera-setting-number="${key}" />
+      <em>${escapeHtml(unit)}</em>
+    </label>
   `;
 }
 
@@ -505,6 +816,7 @@ function renderEmotionExpressionPanel() {
 
 function renderEmotionPresetCard(preset) {
   const selected = preset.id === state.selectedExpressionPresetId;
+  const slots = normalizeExpressionRangeSlots(preset.rangeSlots);
   return `
     <div class="emotion-card ${preset.locked ? "locked" : "unlocked"} ${selected ? "selected" : ""}" data-emotion-select="${preset.id}" data-emotion-drop="${preset.id}">
       <div class="emotion-card-top">
@@ -519,9 +831,45 @@ function renderEmotionPresetCard(preset) {
         ${preset.locked ? `<span class="delete-emotion-placeholder"></span>` : `<button class="delete-emotion-button" data-emotion-delete="${preset.id}" title="Delete">${iconSvg(X, 18)}</button>`}
       </div>
       <div class="emotion-card-controls">
-        <input class="emotion-slider" type="range" min="0" max="1" step="0.01" value="${formatEmotionValue(preset.value)}" data-emotion-slider="${preset.id}" />
+        <div class="emotion-slider-wrap">
+          <input class="emotion-slider" type="range" min="0" max="1" step="0.01" value="${formatEmotionValue(preset.value)}" data-emotion-slider="${preset.id}" />
+          <div class="emotion-range-markers">
+            ${slots.map((slot, index) => renderEmotionRangeMarker(slot, index)).join("")}
+          </div>
+        </div>
         <input class="emotion-value-input" type="number" min="0" max="1" step="0.01" value="${formatEmotionValue(preset.value)}" data-emotion-value="${preset.id}" />
       </div>
+      ${selected ? renderEmotionRangeSlotList(preset, slots) : ""}
+    </div>
+  `;
+}
+
+function renderEmotionRangeMarker(slot, index) {
+  const left = clampEmotionValue(slot.threshold) * 100;
+  return `
+    <button class="emotion-range-marker ${state.selectedExpressionRangeId === slot.id ? "selected" : ""}" style="left: ${left}%;" data-emotion-range-select="${slot.id}" title="${formatEmotionValue(slot.threshold)}">
+      <span></span>
+      <em>${index + 1}</em>
+    </button>
+  `;
+}
+
+function renderEmotionRangeSlotList(preset, slots) {
+  return `
+    <div class="emotion-range-slot-list">
+      ${slots
+        .map(
+          (slot, index) => `
+            <div class="emotion-range-slot ${state.selectedExpressionRangeId === slot.id ? "selected" : ""}" data-emotion-range-select="${slot.id}">
+              <button class="emotion-range-number" data-emotion-range-jump="${slot.id}" title="Move slider to subslot">${index + 1}</button>
+              <div class="emotion-range-value" data-emotion-range-drag="${slot.id}">${formatEmotionValue(slot.threshold)}</div>
+              <button class="range-init-button" data-emotion-range-sample="${slot.id}" ${preset.locked ? "disabled" : ""} title="Sample initial parameters">${iconSvg(RotateCcw, 15)}</button>
+              <button class="delete-emotion-button compact-delete" data-emotion-range-delete="${slot.id}" ${preset.locked ? "disabled" : ""} title="Delete range">${iconSvg(X, 16)}</button>
+            </div>
+          `,
+        )
+        .join("")}
+      <button class="add-emotion-range-button" data-emotion-range-add="${preset.id}" ${preset.locked || slots.length >= 5 ? "disabled" : ""}>+</button>
     </div>
   `;
 }
@@ -794,6 +1142,9 @@ function renderEmotionLinkerCard(animationName) {
   const catalogEntry = state.animationCatalog?.[animationName] ?? {};
   const metaEntry = getAnimationMetaEntry(animationName);
   const presetId = metaEntry.expressionPresetId ?? "";
+  const linkedPreset = state.expressionPresets.find((preset) => preset.id === presetId);
+  const hasDecayControls = normalizeExpressionRangeSlots(linkedPreset?.rangeSlots).length > 0;
+  const decaySeconds = getAnimationPreviewDecaySeconds(animationName);
   return `
     <div class="emotion-link-card">
       <div class="emotion-link-readonly">${escapeHtml(animationName)}</div>
@@ -812,7 +1163,23 @@ function renderEmotionLinkerCard(animationName) {
           <input type="checkbox" data-link-loop="${escapeHtml(animationName)}" ${metaEntry.loop ? "checked" : ""} />
           Loop
         </label>
-        <button class="icon-button emotion-link-play" data-link-play="${escapeHtml(animationName)}" ${currentVrm ? "" : "disabled"} title="Play">${iconSvg(Play, 24)}</button>
+        <div class="emotion-link-play-cluster ${hasDecayControls ? "has-decay" : ""}">
+          ${
+            hasDecayControls
+              ? `
+                <div class="emotion-decay-time">
+                  <input type="number" min="1" max="30" step="1" value="${roundForInput(decaySeconds)}" data-link-decay-seconds="${escapeHtml(animationName)}" title="Decay seconds" />
+                  <div>
+                    <button data-link-decay-nudge="${escapeHtml(animationName)}" data-direction="1" title="Longer">▲</button>
+                    <button data-link-decay-nudge="${escapeHtml(animationName)}" data-direction="-1" title="Shorter">▼</button>
+                  </div>
+                </div>
+                <button class="icon-button emotion-link-decay-play" data-link-decay-play="${escapeHtml(animationName)}" ${currentVrm ? "" : "disabled"} title="Decay play">${dottedArrowSvg(24)}</button>
+              `
+              : ""
+          }
+          <button class="icon-button emotion-link-play" data-link-play="${escapeHtml(animationName)}" ${currentVrm ? "" : "disabled"} title="Play">${iconSvg(Play, 24)}</button>
+        </div>
       </div>
     </div>
   `;
@@ -984,6 +1351,23 @@ function bindUi() {
   for (const button of document.querySelectorAll("[data-link-play]")) {
     button.addEventListener("click", () => playLinkedAnimation(button.dataset.linkPlay));
   }
+
+  for (const button of document.querySelectorAll("[data-link-decay-play]")) {
+    button.addEventListener("click", () => playLinkedAnimation(button.dataset.linkDecayPlay, { decay: true }));
+  }
+
+  for (const input of document.querySelectorAll("[data-link-decay-seconds]")) {
+    input.addEventListener("change", () => {
+      updateAnimationDecaySeconds(input.dataset.linkDecaySeconds, Number(input.value));
+      renderPreservingEmotionLinkerScroll();
+    });
+  }
+
+  for (const button of document.querySelectorAll("[data-link-decay-nudge]")) {
+    button.addEventListener("click", () =>
+      nudgeAnimationDecaySeconds(button.dataset.linkDecayNudge, Number(button.dataset.direction)),
+    );
+  }
   document.querySelector("#sourceFaceMesh")?.addEventListener("change", (event) => {
     state.transfer.sourceMesh = Number(event.target.value);
     state.transfer.report = null;
@@ -1046,8 +1430,28 @@ function bindUi() {
       state.mode = button.dataset.mode;
       state.editing = null;
       state.confirmBack = false;
+      applyCameraPresetForMode(state.mode);
       render();
     });
+  }
+
+  for (const button of document.querySelectorAll("[data-camera-settings]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      state.cameraSettingsOpen = state.cameraSettingsOpen === button.dataset.cameraSettings ? null : button.dataset.cameraSettings;
+      render();
+    });
+  }
+
+  document.querySelector("#closeCameraSettings")?.addEventListener("click", () => closeCameraSettings());
+  document.querySelector("[data-light-intensity]")?.addEventListener("input", (event) => updateLightIntensity(Number(event.target.value)));
+
+  for (const input of document.querySelectorAll("[data-camera-setting]")) {
+    input.addEventListener("input", () => updateCameraSetting(input.dataset.cameraSetting, Number(input.value), input));
+  }
+
+  for (const input of document.querySelectorAll("[data-camera-setting-number]")) {
+    input.addEventListener("input", () => updateCameraSetting(input.dataset.cameraSettingNumber, Number(input.value), input));
   }
 
   for (const card of document.querySelectorAll("[data-emotion-select]")) {
@@ -1112,6 +1516,45 @@ function bindUi() {
       event.stopPropagation();
       toggleEmotionPresetBlink(button.dataset.emotionBlink);
     });
+  }
+
+  for (const button of document.querySelectorAll("[data-emotion-range-add]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      addEmotionRangeSlot(button.dataset.emotionRangeAdd);
+    });
+  }
+
+  for (const button of document.querySelectorAll("[data-emotion-range-delete]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteEmotionRangeSlot(button.dataset.emotionRangeDelete);
+    });
+  }
+
+  for (const button of document.querySelectorAll("[data-emotion-range-sample]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      sampleEmotionRangeSlotParameters(button.dataset.emotionRangeSample);
+    });
+  }
+
+  for (const button of document.querySelectorAll("[data-emotion-range-jump]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      jumpEmotionSliderToRangeSlot(button.dataset.emotionRangeJump);
+    });
+  }
+
+  for (const target of document.querySelectorAll("[data-emotion-range-select]")) {
+    target.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectEmotionRangeSlot(target.dataset.emotionRangeSelect);
+    });
+  }
+
+  for (const handle of document.querySelectorAll("[data-emotion-range-drag]")) {
+    handle.addEventListener("pointerdown", (event) => beginEmotionRangeThresholdDrag(event, handle.dataset.emotionRangeDrag));
   }
 
   for (const input of document.querySelectorAll("[data-emotion-name]")) {
@@ -1215,8 +1658,27 @@ function getSelectedEmotionPreset() {
   return state.expressionPresets.find((preset) => preset.id === state.selectedExpressionPresetId) ?? state.expressionPresets[0] ?? null;
 }
 
+function getSelectedExpressionRangeSlot() {
+  const selected = getSelectedEmotionPreset();
+  if (!selected || !state.selectedExpressionRangeId) return null;
+  return normalizeExpressionRangeSlots(selected.rangeSlots).find((slot) => slot.id === state.selectedExpressionRangeId) ?? null;
+}
+
+function getSelectedExpressionEditLabel() {
+  const selected = getSelectedEmotionPreset();
+  const slot = getSelectedExpressionRangeSlot();
+  if (!selected) return "No emotion selected";
+  if (!slot) return selected.name;
+  const slots = normalizeExpressionRangeSlots(selected.rangeSlots);
+  const index = Math.max(0, slots.findIndex((item) => item.id === slot.id));
+  return `${selected.name} / ${index + 1} (${formatEmotionValue(slot.threshold)})`;
+}
+
 function selectEmotionPreset(id) {
   if (state.selectedExpressionPresetId === id) {
+    if (!confirmPendingExpressionParameterChanges()) return;
+    state.selectedExpressionRangeId = null;
+    loadSelectedExpressionParameterDraft();
     const current = getSelectedEmotionPreset();
     if (current) current.value = 1;
     transitionToSelectedEmotionPreset(0.2);
@@ -1228,6 +1690,7 @@ function selectEmotionPreset(id) {
     preset.value = preset.id === id ? 1 : 0;
   }
   state.selectedExpressionPresetId = id;
+  state.selectedExpressionRangeId = null;
   loadSelectedExpressionParameterDraft();
   transitionToSelectedEmotionPreset(0.2);
   renderPreservingExpressionScroll();
@@ -1248,6 +1711,7 @@ function addEmotionPreset() {
     preset.value = preset.id === id ? 1 : 0;
   }
   state.selectedExpressionPresetId = id;
+  state.selectedExpressionRangeId = null;
   loadSelectedExpressionParameterDraft();
   markExpressionMetaDirty();
   applySelectedEmotionPreset();
@@ -1265,10 +1729,145 @@ function duplicateEmotionPreset(id) {
     locked: false,
     isDisableBlink: Boolean(source.isDisableBlink),
     parameters: normalizeExpressionParameterValues(source.parameters),
+    rangeSlots: normalizeExpressionRangeSlots(source.rangeSlots).map((slot, index) => ({
+      id: `range-${Date.now()}-${index}`,
+      threshold: slot.threshold,
+      parameters: normalizeExpressionParameterValues(slot.parameters),
+    })),
   };
   state.expressionPresets.splice(sourceIndex + 1, 0, copy);
   markExpressionMetaDirty();
   renderPreservingExpressionScroll();
+}
+
+function addEmotionRangeSlot(presetId) {
+  const preset = state.expressionPresets.find((item) => item.id === presetId);
+  if (!preset || preset.locked) return;
+  const slots = normalizeExpressionRangeSlots(preset.rangeSlots);
+  if (slots.length >= 5) return;
+  const threshold = findNewRangeThreshold(slots);
+  const slot = {
+    id: `range-${Date.now()}-${slots.length}`,
+    threshold,
+    parameters: {},
+  };
+  preset.rangeSlots = [...slots, slot].sort((a, b) => a.threshold - b.threshold);
+  state.selectedExpressionPresetId = preset.id;
+  state.selectedExpressionRangeId = slot.id;
+  loadSelectedExpressionParameterDraft();
+  markExpressionMetaDirty();
+  applySelectedEmotionPreset();
+  renderPreservingExpressionScroll();
+}
+
+function findNewRangeThreshold(slots) {
+  const points = [0, ...slots.map((slot) => slot.threshold), 1].sort((a, b) => a - b);
+  let bestStart = 0;
+  let bestEnd = 1;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = points[index];
+    const end = points[index + 1];
+    if (end - start > bestEnd - bestStart) {
+      bestStart = start;
+      bestEnd = end;
+    }
+  }
+  return clampEmotionValue((bestStart + bestEnd) / 2);
+}
+
+function selectEmotionRangeSlot(slotId) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected) return;
+  if (!normalizeExpressionRangeSlots(selected.rangeSlots).some((slot) => slot.id === slotId)) return;
+  if (!confirmPendingExpressionParameterChanges()) return;
+  state.selectedExpressionRangeId = slotId;
+  loadSelectedExpressionParameterDraft();
+  applySelectedEmotionPreset();
+  renderPreservingExpressionScroll();
+}
+
+function deleteEmotionRangeSlot(slotId) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected || selected.locked) return;
+  selected.rangeSlots = normalizeExpressionRangeSlots(selected.rangeSlots).filter((slot) => slot.id !== slotId);
+  if (state.selectedExpressionRangeId === slotId) state.selectedExpressionRangeId = null;
+  loadSelectedExpressionParameterDraft();
+  markExpressionMetaDirty();
+  applySelectedEmotionPreset();
+  renderPreservingExpressionScroll();
+}
+
+function sampleEmotionRangeSlotParameters(slotId) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected || selected.locked) return;
+  const slots = normalizeExpressionRangeSlots(selected.rangeSlots);
+  const slot = slots.find((item) => item.id === slotId);
+  if (!slot) return;
+  const sampled = getExpressionParametersAtValue(selected, slot.threshold, false, slotId);
+  slot.parameters = normalizeExpressionParameterValues(sampled);
+  selected.rangeSlots = slots;
+  state.selectedExpressionRangeId = slotId;
+  state.expressionParameterDraft = { ...slot.parameters };
+  state.expressionParameterDirty = false;
+  setEmotionPresetPreviewValue(selected.id, slot.threshold);
+  markExpressionMetaDirty();
+  applySelectedEmotionPreset();
+  renderPreservingExpressionScroll();
+}
+
+function jumpEmotionSliderToRangeSlot(slotId) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected) return;
+  const slot = normalizeExpressionRangeSlots(selected.rangeSlots).find((item) => item.id === slotId);
+  if (!slot) return;
+  if (!confirmPendingExpressionParameterChanges()) return;
+  state.selectedExpressionRangeId = slotId;
+  loadSelectedExpressionParameterDraft();
+  setEmotionPresetPreviewValue(selected.id, slot.threshold);
+  applySelectedEmotionPreset();
+  renderPreservingExpressionScroll();
+}
+
+function setEmotionPresetPreviewValue(presetId, value) {
+  for (const preset of state.expressionPresets) {
+    preset.value = preset.id === presetId ? clampEmotionValue(value) : 0;
+  }
+}
+
+function updateEmotionRangeThreshold(slotId, threshold) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected || selected.locked) return;
+  const slots = normalizeExpressionRangeSlots(selected.rangeSlots);
+  const slot = slots.find((item) => item.id === slotId);
+  if (!slot) return;
+  slot.threshold = clampEmotionValue(threshold);
+  selected.rangeSlots = slots.sort((a, b) => a.threshold - b.threshold);
+  markExpressionMetaDirty();
+  applySelectedEmotionPreset();
+  renderPreservingExpressionScroll();
+}
+
+function beginEmotionRangeThresholdDrag(event, slotId) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected || selected.locked) return;
+  event.preventDefault();
+  event.stopPropagation();
+  state.selectedExpressionRangeId = slotId;
+  loadSelectedExpressionParameterDraft();
+  const slot = normalizeExpressionRangeSlots(selected.rangeSlots).find((item) => item.id === slotId);
+  if (!slot) return;
+  const startX = event.clientX;
+  const startThreshold = slot.threshold;
+  const onMove = (moveEvent) => {
+    const delta = (moveEvent.clientX - startX) / 260;
+    updateEmotionRangeThreshold(slotId, startThreshold + delta);
+  };
+  const onUp = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 function toggleEmotionPresetLock(id) {
@@ -1278,6 +1877,7 @@ function toggleEmotionPresetLock(id) {
   if (selectionChanged && !confirmPendingExpressionParameterChanges()) return;
   preset.locked = !preset.locked;
   state.selectedExpressionPresetId = id;
+  if (selectionChanged) state.selectedExpressionRangeId = null;
   if (selectionChanged) loadSelectedExpressionParameterDraft();
   if (preset.locked) state.expressionParameterDirty = false;
   markExpressionMetaDirty();
@@ -1300,6 +1900,7 @@ function deleteEmotionPreset(id) {
   state.expressionPresets = state.expressionPresets.filter((item) => item.id !== id);
   if (state.selectedExpressionPresetId === id) {
     state.selectedExpressionPresetId = state.expressionPresets[0]?.id ?? null;
+    state.selectedExpressionRangeId = null;
   }
   loadSelectedExpressionParameterDraft();
   markExpressionMetaDirty();
@@ -1316,6 +1917,7 @@ function updateEmotionPresetName(id, name) {
   if (preset.name === nextName) return;
   preset.name = nextName;
   state.selectedExpressionPresetId = id;
+  if (selectionChanged) state.selectedExpressionRangeId = null;
   if (selectionChanged) loadSelectedExpressionParameterDraft();
   markExpressionMetaDirty();
   applySelectedEmotionPreset();
@@ -1325,12 +1927,14 @@ function updateEmotionPresetName(id, name) {
 function updateEmotionPresetValue(id, value, source, shouldRender = false) {
   const preset = state.expressionPresets.find((item) => item.id === id);
   if (!preset) return;
+  state.expressionDecay = null;
   if (state.selectedExpressionPresetId !== id) {
     if (!confirmPendingExpressionParameterChanges()) return;
     for (const item of state.expressionPresets) {
       item.value = item.id === id ? item.value : 0;
     }
     state.selectedExpressionPresetId = id;
+    state.selectedExpressionRangeId = null;
     loadSelectedExpressionParameterDraft();
   }
   const nextValue = clampEmotionValue(value);
@@ -1351,6 +1955,7 @@ function reorderEmotionPreset(draggedId, targetId) {
   const [moved] = state.expressionPresets.splice(fromIndex, 1);
   state.expressionPresets.splice(toIndex, 0, moved);
   state.selectedExpressionPresetId = draggedId;
+  if (selectionChanged) state.selectedExpressionRangeId = null;
   if (selectionChanged) loadSelectedExpressionParameterDraft();
   markExpressionMetaDirty();
   renderPreservingExpressionScroll();
@@ -1359,6 +1964,7 @@ function reorderEmotionPreset(draggedId, targetId) {
 function updateSelectedRorrParameter(parameterId, value, source, shouldRender = false) {
   const selected = getSelectedEmotionPreset();
   if (!selected || !state.currentParameterIds.has(parameterId)) return;
+  state.expressionDecay = null;
   state.expressionParameterDraft ??= {};
   state.expressionParameterDraft[parameterId] = clampEmotionValue(value);
   if (!selected.locked) state.expressionParameterDirty = true;
@@ -1374,14 +1980,24 @@ function markExpressionMetaDirty() {
 
 function loadSelectedExpressionParameterDraft() {
   const selected = getSelectedEmotionPreset();
-  state.expressionParameterDraft = { ...(selected?.parameters ?? {}) };
+  const slot = getSelectedExpressionRangeSlot();
+  state.expressionParameterDraft = { ...((slot ?? selected)?.parameters ?? {}) };
   state.expressionParameterDirty = false;
 }
 
 function commitSelectedExpressionParameters() {
   const selected = getSelectedEmotionPreset();
   if (!selected || selected.locked) return false;
-  selected.parameters = normalizeExpressionParameterValues(state.expressionParameterDraft);
+  const slot = getSelectedExpressionRangeSlot();
+  if (slot) {
+    const slots = normalizeExpressionRangeSlots(selected.rangeSlots);
+    const target = slots.find((item) => item.id === slot.id);
+    if (!target) return false;
+    target.parameters = normalizeExpressionParameterValues(state.expressionParameterDraft);
+    selected.rangeSlots = slots;
+  } else {
+    selected.parameters = normalizeExpressionParameterValues(state.expressionParameterDraft);
+  }
   state.expressionParameterDirty = false;
   markExpressionMetaDirty();
   applySelectedEmotionPreset();
@@ -1462,6 +2078,14 @@ function renderPreservingExpressionScroll(options = {}) {
   nextScroller.scrollTop = options.scrollToBottom ? nextScroller.scrollHeight : scrollTop;
 }
 
+function renderPreservingEmotionLinkerScroll() {
+  const scroller = document.querySelector(".emotion-linker-panel");
+  const scrollTop = scroller?.scrollTop ?? 0;
+  render();
+  const nextScroller = document.querySelector(".emotion-linker-panel");
+  if (nextScroller) nextScroller.scrollTop = scrollTop;
+}
+
 function syncEmotionValueControls(id, value, source) {
   const formatted = formatEmotionValue(value);
   for (const input of document.querySelectorAll(`[data-emotion-slider="${id}"], [data-emotion-value="${id}"]`)) {
@@ -1480,18 +2104,73 @@ function syncRorrParameterControls(id, value, source) {
 
 function applySelectedEmotionPreset() {
   const selected = getSelectedEmotionPreset();
-  const weight = selected?.value ?? 0;
-  applyRorrParameterValues(state.expressionParameterDraft ?? {}, weight);
+  if (!selected) return;
+  state.expressionDecay = null;
+  applyRorrParameterValues(getExpressionParametersAtValue(selected, selected.value, true), 1);
 }
 
 function transitionToSelectedEmotionPreset(duration = 0.2) {
   const selected = getSelectedEmotionPreset();
-  startExpressionTransition(state.expressionParameterDraft ?? selected?.parameters ?? {}, selected?.value ?? 0, duration);
+  if (!selected) {
+    startExpressionTransition({}, 0, duration);
+    return;
+  }
+  startExpressionTransition(getExpressionParametersAtValue(selected, selected.value, true), 1, duration);
+}
+
+function getExpressionParametersAtValue(preset, value, includeDraft = false, excludeRangeSlotId = null, easeSegment = false) {
+  const clamped = clampEmotionValue(value);
+  const mainParameters =
+    includeDraft && !state.selectedExpressionRangeId && preset.id === state.selectedExpressionPresetId
+      ? normalizeExpressionParameterValues(state.expressionParameterDraft)
+      : normalizeExpressionParameterValues(preset.parameters);
+  const slots = normalizeExpressionRangeSlots(preset.rangeSlots)
+    .filter((slot) => slot.id !== excludeRangeSlotId)
+    .map((slot) => ({
+      ...slot,
+      parameters:
+        includeDraft && state.selectedExpressionRangeId === slot.id && preset.id === state.selectedExpressionPresetId
+          ? normalizeExpressionParameterValues(state.expressionParameterDraft)
+          : normalizeExpressionParameterValues(slot.parameters),
+    }));
+  const points = [
+    { threshold: 0, parameters: {} },
+    ...slots,
+    { threshold: 1, parameters: mainParameters },
+  ].sort((a, b) => a.threshold - b.threshold);
+  let left = points[0];
+  let right = points[points.length - 1];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    if (clamped >= points[index].threshold && clamped <= points[index + 1].threshold) {
+      left = points[index];
+      right = points[index + 1];
+      break;
+    }
+  }
+  if (Math.abs(right.threshold - left.threshold) < 0.000001) return normalizeExpressionParameterValues(right.parameters);
+  const rawT = (clamped - left.threshold) / (right.threshold - left.threshold);
+  const t = easeSegment ? easeInOutCubic(rawT) : rawT;
+  return interpolateExpressionParameters(left.parameters, right.parameters, t);
+}
+
+function interpolateExpressionParameters(left, right, t) {
+  const next = {};
+  const names = new Set([...Object.keys(left ?? {}), ...Object.keys(right ?? {})]);
+  for (const name of names) {
+    next[name] = clampEmotionValue((left?.[name] ?? 0) + ((right?.[name] ?? 0) - (left?.[name] ?? 0)) * t);
+  }
+  return next;
 }
 
 function clampEmotionValue(value) {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, Math.round(value * 100) / 100));
+}
+
+function normalizeDecaySeconds(value) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return 6;
+  return Math.min(30, Math.max(1, Math.round(next)));
 }
 
 function formatEmotionValue(value) {
@@ -1731,7 +2410,21 @@ function updateAnimationLoop(animationName, checked) {
   syncSaveMetaButton();
 }
 
-async function playLinkedAnimation(animationName) {
+function getAnimationPreviewDecaySeconds(animationName) {
+  return normalizeDecaySeconds(state.decayPreviewSeconds?.[animationName]);
+}
+
+function updateAnimationDecaySeconds(animationName, value) {
+  if (!animationName) return;
+  state.decayPreviewSeconds[animationName] = normalizeDecaySeconds(value);
+}
+
+function nudgeAnimationDecaySeconds(animationName, direction) {
+  updateAnimationDecaySeconds(animationName, getAnimationPreviewDecaySeconds(animationName) + direction);
+  renderPreservingEmotionLinkerScroll();
+}
+
+async function playLinkedAnimation(animationName, options = {}) {
   if (!animationName) return;
   const scroller = document.querySelector(".emotion-linker-panel");
   const scrollTop = scroller?.scrollTop ?? 0;
@@ -1739,7 +2432,12 @@ async function playLinkedAnimation(animationName) {
   if (!entry) return;
   state.selectedAnimationName = animationName;
   const transition = await loadSelectedAnimation({ preserveCurrentAction: true });
-  applyLinkedExpressionPreset(entry.expressionPresetId);
+  if (options.decay) {
+    startLinkedExpressionDecay(entry.expressionPresetId, getAnimationPreviewDecaySeconds(animationName));
+  } else {
+    state.expressionDecay = null;
+    applyLinkedExpressionPreset(entry.expressionPresetId);
+  }
   playAnimationFromStart(Boolean(entry.loop), {
     previousAction: transition?.previousAction,
     transitionSeconds: transition?.previousAction ? 0.2 : 0,
@@ -1747,6 +2445,28 @@ async function playLinkedAnimation(animationName) {
   render();
   const nextScroller = document.querySelector(".emotion-linker-panel");
   if (nextScroller) nextScroller.scrollTop = scrollTop;
+}
+
+function startLinkedExpressionDecay(presetId, duration) {
+  const preset = state.expressionPresets.find((item) => item.id === presetId);
+  if (!preset) {
+    state.expressionDecay = null;
+    startExpressionTransition({}, 0, 0.2);
+    return;
+  }
+  for (const item of state.expressionPresets) {
+    item.value = item.id === preset.id ? 1 : 0;
+  }
+  state.selectedExpressionPresetId = preset.id;
+  state.selectedExpressionRangeId = null;
+  loadSelectedExpressionParameterDraft();
+  state.expressionTransition = null;
+  state.expressionDecay = {
+    presetId: preset.id,
+    elapsed: 0,
+    duration: normalizeDecaySeconds(duration),
+  };
+  applyRorrParameterValues(getExpressionParametersAtValue(preset, 1, false, null, true), 1);
 }
 
 function applyLinkedExpressionPreset(presetId) {
@@ -1968,6 +2688,7 @@ async function loadVrm(bytes) {
   VRMUtils.rotateVRM0(currentVrm);
   scene.add(currentVrm.scene);
   frameModel(currentVrm.scene);
+  applyCameraPreset(getCameraPresetForMode(state.mode));
   state.rorrParameters = collectShapeKeyParameters();
   applyParameterFilterFromConfig();
   state.parameterFilterOpen = false;
@@ -2083,6 +2804,26 @@ function updateExpressionTransition(delta) {
   }
   applyRorrInfluenceValues(values);
   if (t >= 1) state.expressionTransition = null;
+}
+
+function updateExpressionDecay(delta) {
+  const decay = state.expressionDecay;
+  if (!decay) return;
+  const preset = state.expressionPresets.find((item) => item.id === decay.presetId);
+  if (!preset) {
+    state.expressionDecay = null;
+    return;
+  }
+  decay.elapsed += delta;
+  const t = Math.min(1, decay.elapsed / Math.max(decay.duration, 0.001));
+  const value = clampEmotionValue(1 - easeInOutCubic(t));
+  preset.value = value;
+  applyRorrParameterValues(getExpressionParametersAtValue(preset, value, false, null, true), 1);
+  if (t >= 1) {
+    preset.value = 0;
+    applyRorrParameterValues(getExpressionParametersAtValue(preset, 0, false, null, true), 1);
+    state.expressionDecay = null;
+  }
 }
 
 function startEdit(expressionId) {
@@ -2265,7 +3006,7 @@ function createEmptyCorrection() {
       rotationOrder: "XYZ",
     },
     animations: {},
-    expressionPresets: createDefaultEmotionPresets().map(({ id, name, locked, isDisableBlink }) => ({ id, name, locked, isDisableBlink })),
+    expressionPresets: createDefaultEmotionPresets().map(({ id, name, locked, isDisableBlink, rangeSlots }) => ({ id, name, locked, isDisableBlink, rangeSlots })),
   };
 }
 
@@ -2584,7 +3325,20 @@ function normalizeExpressionPresets(presets) {
     locked: Boolean(preset.locked),
     isDisableBlink: Boolean(preset.isDisableBlink),
     parameters: normalizeExpressionParameterValues(preset.parameters),
+    rangeSlots: normalizeExpressionRangeSlots(preset.rangeSlots),
   }));
+}
+
+function normalizeExpressionRangeSlots(slots) {
+  if (!Array.isArray(slots)) return [];
+  return slots
+    .slice(0, 5)
+    .map((slot, index) => ({
+      id: String(slot?.id ?? `range-${index}`),
+      threshold: clampEmotionValue(Number(slot?.threshold ?? 0.5)),
+      parameters: normalizeExpressionParameterValues(slot?.parameters),
+    }))
+    .sort((a, b) => a.threshold - b.threshold);
 }
 
 function normalizeExpressionParameterValues(parameters) {
@@ -2637,12 +3391,13 @@ function serializeCorrection() {
       pruneCorrectionObject(animation.corrections, boneName);
     }
   }
-  next.expressionPresets = normalizeExpressionPresets(state.expressionPresets).map(({ id, name, locked, isDisableBlink, parameters }) => ({
+  next.expressionPresets = normalizeExpressionPresets(state.expressionPresets).map(({ id, name, locked, isDisableBlink, parameters, rangeSlots }) => ({
     id,
     name,
     locked,
     isDisableBlink,
     parameters,
+    rangeSlots,
   }));
   return next;
 }
@@ -3483,6 +4238,14 @@ function formatBoneName(value) {
   return value.replace(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase());
 }
 
+function formatModeName(value) {
+  if (value === "transfer") return "Shape Transfer";
+  if (value === "correction") return "Motion Correction";
+  if (value === "expression") return "Expression Editor";
+  if (value === "linker") return "Emotion Linker";
+  return "Viewer";
+}
+
 function slugify(value) {
   return String(value || "character")
     .trim()
@@ -3533,6 +4296,7 @@ function tick() {
   requestAnimationFrame(tick);
   const delta = clock.getDelta();
   controls.update();
+  updateCameraTransition(delta);
   clearMotionCorrectionPreview();
   if (animationMixer && state.animation.playing) {
     animationMixer.update(delta);
@@ -3548,6 +4312,7 @@ function tick() {
     }
     updateAnimationControls();
   }
+  updateExpressionDecay(delta);
   updateExpressionTransition(delta);
   currentVrm?.update?.(delta);
   applyMotionCorrectionPreview();

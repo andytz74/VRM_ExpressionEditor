@@ -55,6 +55,10 @@ function createDefaultConfig() {
       knownShapeKeys: null,
       visibleShapeKeys: null,
     },
+    cameraPresets: {},
+    viewer: {
+      lightIntensity: 0.75,
+    },
   };
 }
 
@@ -89,6 +93,18 @@ function parseIniConfig(text) {
         config.expressionEditor.knownShapeKeys = null;
       }
     }
+    if (section === "Camera.Presets" && key === "ModesJson") {
+      try {
+        const presets = JSON.parse(value);
+        config.cameraPresets = presets && typeof presets === "object" ? presets : {};
+      } catch {
+        config.cameraPresets = {};
+      }
+    }
+    if (section === "Viewer" && key === "LightIntensity") {
+      const intensity = Number(value);
+      config.viewer.lightIntensity = Number.isFinite(intensity) ? intensity : config.viewer.lightIntensity;
+    }
   }
   if (!Array.isArray(config.expressionEditor.knownShapeKeys) && Array.isArray(config.expressionEditor.visibleShapeKeys)) {
     config.expressionEditor.knownShapeKeys = [...config.expressionEditor.visibleShapeKeys];
@@ -108,6 +124,12 @@ function serializeIniConfig(config) {
     "[ExpressionEditor.Filter]",
     `KnownShapeKeysJson=${JSON.stringify(known)}`,
     `VisibleShapeKeysJson=${JSON.stringify(visible)}`,
+    "",
+    "[Camera.Presets]",
+    `ModesJson=${JSON.stringify(config?.cameraPresets && typeof config.cameraPresets === "object" ? config.cameraPresets : {})}`,
+    "",
+    "[Viewer]",
+    `LightIntensity=${Number.isFinite(Number(config?.viewer?.lightIntensity)) ? Number(config.viewer.lightIntensity) : 0.75}`,
     "",
   ].join("\n");
 }
