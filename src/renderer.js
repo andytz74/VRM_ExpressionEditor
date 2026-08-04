@@ -99,7 +99,7 @@ const MIRROR_AXIS_SIGNS = {
 const DEFAULT_EMOTION_PRESET_NAMES = ["Neutral", "Focus", "Tension", "Surprise", "Joy", "Relief", "Disappointed", "Warm Smile", "Joy"];
 
 const state = {
-  mode: "transfer",
+  mode: "expression",
   filePath: null,
   fileName: null,
   tempPath: null,
@@ -111,6 +111,23 @@ const state = {
   selectedExpressionPresetId: "emotion-0",
   selectedExpressionRangeId: null,
   decayPreviewSeconds: {},
+  transitionViewer: {
+    idle: [],
+    transition: [],
+    event: [],
+    start: null,
+    transitionPick: null,
+    end: null,
+    startBlend: 0.4,
+    endBlend: 0.4,
+    transitionTrim: 0,
+    transitionPivot: 0,
+    playing: false,
+    runId: 0,
+    timelineStartedAt: 0,
+    timelineDuration: 0,
+    timelineProgress: 0,
+  },
   rorrParameters: [],
   currentParameterIds: new Set(),
   newParameterIds: new Set(),
@@ -154,6 +171,7 @@ const state = {
   correctionDirty: false,
   animationCatalog: {},
   selectedAnimationName: null,
+  correctionAnimationTab: "play",
   animation: {
     fileName: null,
     clipName: null,
@@ -218,6 +236,12 @@ async function loadEditorConfig() {
   } catch {
     state.config = normalizeEditorConfig(null);
   }
+  state.transitionViewer = {
+    ...state.transitionViewer,
+    ...normalizeTransitionViewerConfig(state.config.transitionViewer),
+    playing: false,
+    runId: 0,
+  };
 }
 
 function normalizeEditorConfig(config) {
@@ -233,12 +257,59 @@ function normalizeEditorConfig(config) {
     viewer: {
       lightIntensity: clampLightIntensity(config?.viewer?.lightIntensity),
     },
+    transitionViewer: normalizeTransitionViewerConfig(config?.transitionViewer),
   };
+}
+
+function createEmptyTransitionViewerConfig() {
+  return {
+    idle: [],
+    transition: [],
+    event: [],
+    start: null,
+    transitionPick: null,
+    end: null,
+    startBlend: 0.4,
+    endBlend: 0.4,
+    transitionTrim: 0,
+    transitionPivot: 0,
+  };
+}
+
+function normalizeTransitionViewerConfig(config) {
+  const next = createEmptyTransitionViewerConfig();
+  for (const kind of ["idle", "transition", "event"]) {
+    next[kind] = Array.isArray(config?.[kind])
+      ? config[kind]
+          .map((slot, index) => ({
+            id: String(slot?.id || `transition-slot-${kind}-${index}`),
+            kind,
+            fileName: String(slot?.fileName ?? ""),
+          }))
+          .filter((slot) => slot.fileName || slot.id)
+      : [];
+  }
+  for (const key of ["start", "transitionPick", "end"]) {
+    const pick = config?.[key];
+    next[key] =
+      pick && typeof pick === "object" && pick.fileName
+        ? {
+            id: String(pick.id ?? ""),
+            kind: String(pick.kind ?? ""),
+            fileName: String(pick.fileName ?? ""),
+          }
+        : null;
+  }
+  next.startBlend = Math.min(2, Math.max(0, normalizeFiniteNumber(config?.startBlend, 0.4)));
+  next.endBlend = Math.min(2, Math.max(0, normalizeFiniteNumber(config?.endBlend, 0.4)));
+  next.transitionTrim = Math.max(0, normalizeFiniteNumber(config?.transitionTrim, 0));
+  next.transitionPivot = Math.max(0, normalizeFiniteNumber(config?.transitionPivot, 0));
+  return next;
 }
 
 function normalizeCameraPresets(presets) {
   const next = {};
-  for (const mode of ["transfer", "correction", "expression", "linker"]) {
+  for (const mode of ["transfer", "correction", "expression", "linker", "transitionViewer"]) {
     const preset = presets?.[mode];
     if (!preset || typeof preset !== "object") continue;
     next[mode] = normalizeCameraPreset(preset);
@@ -328,6 +399,22 @@ function buildCurrentEditorConfig() {
     },
     cameraPresets: state.config?.cameraPresets ?? {},
     viewer: state.config?.viewer ?? {},
+    transitionViewer: serializeTransitionViewerState(),
+  });
+}
+
+function serializeTransitionViewerState() {
+  return normalizeTransitionViewerConfig({
+    idle: state.transitionViewer.idle,
+    transition: state.transitionViewer.transition,
+    event: state.transitionViewer.event,
+    start: state.transitionViewer.start,
+    transitionPick: state.transitionViewer.transitionPick,
+    end: state.transitionViewer.end,
+    startBlend: state.transitionViewer.startBlend,
+    endBlend: state.transitionViewer.endBlend,
+    transitionTrim: state.transitionViewer.transitionTrim,
+    transitionPivot: state.transitionViewer.transitionPivot,
   });
 }
 
@@ -381,21 +468,31 @@ function lightIconSvg(size = 16) {
   </svg>`;
 }
 
+function verticalSwapSvg(size = 30) {
+  return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 3v16" />
+    <path d="m4 15 4 4 4-4" />
+    <path d="M16 21V5" />
+    <path d="m12 9 4-4 4 4" />
+  </svg>`;
+}
+
 function render() {
   if (!app.innerHTML) {
     app.innerHTML = "";
   }
   const isExpressionLayout = state.mode === "expression" && !state.editing;
+  const isTransitionLayout = state.mode === "transitionViewer";
   app.innerHTML = `
-    <main class="app ${isExpressionLayout ? "expression-layout" : ""}">
+    <main class="app ${isExpressionLayout ? "expression-layout" : ""} ${isTransitionLayout ? "transition-layout" : ""}">
       <aside class="sidebar">
         ${
-          state.mode === "transfer"
-            ? renderTransferPanel()
-            : state.mode === "correction"
+          state.mode === "correction"
             ? renderMotionCorrectionPanel()
             : state.mode === "linker"
             ? renderEmotionLinkerPanel()
+            : state.mode === "transitionViewer"
+            ? renderTransitionViewerPanel()
             : state.editing
               ? renderEditor()
               : renderEmotionExpressionPanel()
@@ -407,8 +504,10 @@ function render() {
         ${state.filePath ? "" : renderDropHint()}
         ${renderStatusPill()}
         ${renderViewerLightControl()}
+        ${state.mode === "transitionViewer" ? renderTransitionTimelineOverlay() : ""}
       </section>
       ${state.mode === "expression" && !state.editing ? renderEmotionParameterTrayWithSave() : ""}
+      ${state.mode === "transitionViewer" ? renderTransitionViewerTray() : ""}
     </main>
   `;
 
@@ -740,10 +839,10 @@ async function closeCameraSettings() {
 
 function renderModeBar(active) {
   const modes = [
-    ["transfer", "Shape Transfer", GitCompare],
     ["correction", "Motion Correction", SlidersHorizontal],
     ["expression", "Expression Editor", SlidersHorizontal],
     ["linker", "Emotion Linker", GitCompare],
+    ["transitionViewer", "Transition Viewer", GitCompare],
   ];
   return `
     <div class="mode-bar">
@@ -1064,7 +1163,12 @@ function renderMotionCorrectionPanel() {
           <input type="text" value="${escapeHtml(correction.vrm.displayName)}" data-correction-meta="name" />
         </label>
       </div>
-      <div class="correction-card">
+      <div class="correction-card animation-card ${state.correctionAnimationTab === "files" ? "files" : "play"}">
+        <div class="animation-card-tabs">
+          <button class="${state.correctionAnimationTab === "files" ? "active" : ""}" data-correction-animation-tab="files">File List</button>
+          <button class="${state.correctionAnimationTab === "play" ? "active" : ""}" data-correction-animation-tab="play">Animation Play</button>
+        </div>
+        ${renderAnimationFileList(animationNames)}
         <div class="animation-toolbar">
           <button class="secondary-button" id="addAnimation">New Ani</button>
           <button class="icon-button compact" id="prevAnimation" ${animationNames.length ? "" : "disabled"} title="Previous animation">&lt;</button>
@@ -1111,6 +1215,30 @@ function renderMotionCorrectionPanel() {
     <div class="correction-footer">
       <button class="primary-button" id="saveCorrection" ${state.correctionPath && state.correctionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
     </div>
+  `;
+}
+
+function renderAnimationFileList(animationNames) {
+  return `
+    <div class="animation-file-list">
+      ${
+        animationNames.length
+          ? animationNames.map((name) => renderAnimationFileItem(name)).join("")
+          : `<p class="parameter-meta">New Ani로 애니메이션을 먼저 등록하세요.</p>`
+      }
+    </div>
+  `;
+}
+
+function renderAnimationFileItem(animationName) {
+  const entry = state.animationCatalog?.[animationName] ?? {};
+  const selected = animationName === state.selectedAnimationName;
+  const description = String(entry.description ?? "").trim();
+  return `
+    <button class="animation-file-item ${selected ? "selected" : ""}" data-animation-file-select="${escapeHtml(animationName)}">
+      <strong>${escapeHtml(getAnimationDisplayName(animationName))}</strong>
+      <span>${escapeHtml(description || "-")}</span>
+    </button>
   `;
 }
 
@@ -1180,6 +1308,189 @@ function renderEmotionLinkerCard(animationName) {
           }
           <button class="icon-button emotion-link-play" data-link-play="${escapeHtml(animationName)}" ${currentVrm ? "" : "disabled"} title="Play">${iconSvg(Play, 24)}</button>
         </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderTransitionViewerPanel() {
+  return `
+    <div class="panel-header">
+      <div class="title-block">
+        <h1>Transition Viewer</h1>
+        <p>Idle, transition pose, event 전환을 확인합니다</p>
+      </div>
+      <button class="icon-button" id="openFile" title="VRM 열기">${iconSvg(FolderOpen)}</button>
+    </div>
+    ${renderModeBar("transitionViewer")}
+    <div class="transition-viewer-panel">
+      ${renderTransitionCategory("idle", "Idle (Loop)")}
+      ${renderTransitionCategory("transition", "Transition")}
+      ${renderTransitionCategory("event", "Event (Once)")}
+    </div>
+  `;
+}
+
+function renderTransitionCategory(kind, title) {
+  const slots = state.transitionViewer[kind] ?? [];
+  return `
+    <section class="transition-category-card">
+      <h2>${escapeHtml(title)}</h2>
+      <div class="transition-slot-list">
+        ${slots.map((slot) => renderTransitionSlot(kind, slot)).join("")}
+        <button class="transition-add-button" data-transition-add="${kind}">+</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderTransitionSlot(kind, slot) {
+  const animationNames = getTransitionLinkerAnimationNames(kind);
+  const selectedName = slot.fileName ?? "";
+  const selectedRecommended = !selectedName || isAnimationRecommendedForTransitionKind(kind, selectedName);
+  return `
+    <div class="transition-slot-row">
+      <select class="transition-slot-select ${selectedRecommended ? "" : "not-recommended"}" data-transition-select="${slot.id}" title="${escapeHtml(formatTransitionLinkerOptionLabel(selectedName) || "link name")}">
+        <option value="">link name</option>
+        ${animationNames
+          .map((name) => {
+            const recommended = isAnimationRecommendedForTransitionKind(kind, name);
+            return `<option class="${recommended ? "recommended" : "not-recommended"}" value="${escapeHtml(name)}" ${name === selectedName ? "selected" : ""}>${escapeHtml(formatTransitionLinkerOptionLabel(name))}</option>`;
+          })
+          .join("")}
+      </select>
+      <button class="transition-remove-button" data-transition-remove="${slot.id}" title="Remove">-</button>
+      ${
+        kind === "transition"
+          ? `<button class="transition-use-button transition-use-mid" data-transition-use="${slot.id}" data-target="transitionPick" title="Use as transition">&gt;</button>`
+          : `<div class="transition-use-stack">
+              <button class="transition-use-button transition-use-start" data-transition-use="${slot.id}" data-target="start" title="Use as start">&gt;</button>
+              <button class="transition-use-button transition-use-end" data-transition-use="${slot.id}" data-target="end" title="Use as end">&gt;</button>
+            </div>`
+      }
+    </div>
+  `;
+}
+
+function renderTransitionViewerTray() {
+  const start = getTransitionPick("start");
+  const transition = getTransitionPick("transitionPick");
+  const end = getTransitionPick("end");
+  return `
+    <aside class="transition-preview-tray">
+      ${renderTransitionPreviewCard("Start animation", start?.fileName, "start")}
+      ${
+        transition
+          ? `
+            ${renderTransitionBlendPanel("startBlend", "Start → Transition", "Start", "Transition", "start", "mid")}
+            ${renderTransitionPreviewCard("Transition", transition.fileName, "mid", true)}
+            ${renderTransitionTrimPanel()}
+            ${renderTransitionBlendPanel("endBlend", "Transition → End", "Transition", "End", "mid", "end")}
+          `
+          : renderTransitionBlendPanel("endBlend", "Start → End", "Start", "End", "start", "end")
+      }
+      ${renderTransitionPreviewCard("End animation", end?.fileName, "end")}
+      <div class="transition-preview-actions">
+        <button class="transition-preview-swap" id="swapTransitionStartEnd" ${start && end ? "" : "disabled"} title="Swap start and end">
+          ${verticalSwapSvg(34)}
+        </button>
+        <button class="transition-preview-play" id="playTransitionViewer" ${start && end && currentVrm ? "" : "disabled"}>
+          ${state.transitionViewer.playing ? "playing" : "play"}
+        </button>
+      </div>
+    </aside>
+  `;
+}
+
+function renderTransitionPreviewCard(title, fileName, tone, canClear = false) {
+  return `
+    <section class="transition-preview-card transition-preview-${tone}">
+      <div class="transition-preview-card-head">
+        <h2>${escapeHtml(title)}</h2>
+        <div class="transition-card-actions">
+          ${
+            canClear
+              ? `<button class="icon-button transition-card-clear" data-clear-transition-pick title="Clear transition">x</button>`
+              : ""
+          }
+          <button class="icon-button transition-card-play" data-transition-preview-play="${escapeHtml(fileName || "")}" ${fileName && currentVrm ? "" : "disabled"} title="Play">
+            ${iconSvg(Play, 24)}
+          </button>
+        </div>
+      </div>
+      <p>${escapeHtml(formatTransitionLinkerOptionLabel(fileName) || "link name")}</p>
+    </section>
+  `;
+}
+
+function renderTransitionBlendPanel(key, title, leftLabel, rightLabel, leftTone, rightTone) {
+  const maxValue = getTransitionBlendMax(key);
+  const value = Math.min(maxValue, state.transitionViewer[key] ?? 0.4);
+  return `
+    <section class="transition-blend-panel">
+      <div class="transition-blend-title">
+        <span>${escapeHtml(title)}</span>
+        <strong>${value.toFixed(2)}s</strong>
+      </div>
+      <div class="transition-blend-bars">
+        <label>${escapeHtml(leftLabel)}</label>
+        <div class="blend-bar ${leftTone}"><span style="width: ${Math.max(12, (1 - value / 2) * 100)}%"></span></div>
+        <label>${escapeHtml(rightLabel)}</label>
+        <div class="blend-bar ${rightTone}"><span style="width: ${Math.max(12, (value / 2) * 100)}%"></span></div>
+      </div>
+      <input type="range" min="0" max="${maxValue}" step="0.05" value="${value}" data-transition-blend="${key}" />
+    </section>
+  `;
+}
+
+function renderTransitionTrimPanel() {
+  const transition = getTransitionPick("transitionPick");
+  const maxTrim = transition ? getAnimationDuration(transition.fileName, 1) : 1;
+  const value = getTransitionTrimSeconds();
+  return `
+    <section class="transition-blend-panel transition-trim-panel">
+      <div class="transition-blend-title">
+        <span>Transition Trim</span>
+        <strong>${value.toFixed(2)}s</strong>
+      </div>
+      <input type="range" min="0.05" max="${Math.max(0.05, maxTrim)}" step="0.05" value="${value}" data-transition-trim />
+    </section>
+  `;
+}
+
+function renderTransitionTimelineOverlay() {
+  const start = getTransitionPick("start");
+  const transition = getTransitionPick("transitionPick");
+  const end = getTransitionPick("end");
+  if (!start && !transition && !end) return "";
+  const metrics = getTransitionTimelineMetrics();
+  const progress = clamp01(state.transitionViewer.timelineProgress ?? 0);
+  const rows = [
+    ["start", metrics.startLeft, metrics.startWidth],
+    ...(metrics.hasTransition === false ? [] : [["mid", metrics.midLeft, metrics.midWidth]]),
+    ["end", metrics.endLeft, metrics.endWidth],
+  ];
+  return `
+    <div class="transition-timeline-overlay" aria-label="Transition progress">
+      <div class="transition-timeline-track">
+        ${rows
+          .map(
+            ([tone, left, width]) =>
+              `<div class="transition-timeline-bar transition-timeline-${tone}" style="left:${left}%;width:${width}%"></div>`,
+          )
+          .join("")}
+        ${
+          metrics.hasTransition === false
+            ? ""
+            : `<button class="transition-timeline-handle handle-a" style="left:${metrics.handleA}%" data-transition-handle="a" title="Start to Transition blend">A</button>`
+        }
+        <button class="transition-timeline-handle handle-b" style="left:${metrics.handleB}%" data-transition-handle="b" title="Transition to End blend">B</button>
+        ${
+          metrics.hasTransition === false
+            ? ""
+            : `<button class="transition-timeline-handle handle-c" style="left:${metrics.handleC}%" data-transition-handle="c" title="Transition trim">C</button>`
+        }
+        <div class="transition-timeline-cursor" style="left:${progress * 100}%"></div>
       </div>
     </div>
   `;
@@ -1335,6 +1646,15 @@ function bindUi() {
   document.querySelector("#toggleAnimation")?.addEventListener("click", toggleAnimationPlayback);
   document.querySelector("#restartAnimation")?.addEventListener("click", restartAnimation);
   document.querySelector("#resetBoneCorrection")?.addEventListener("click", resetSelectedBoneCorrection);
+  for (const button of document.querySelectorAll("[data-correction-animation-tab]")) {
+    button.addEventListener("click", () => {
+      state.correctionAnimationTab = button.dataset.correctionAnimationTab === "files" ? "files" : "play";
+      render();
+    });
+  }
+  for (const button of document.querySelectorAll("[data-animation-file-select]")) {
+    button.addEventListener("click", () => selectAnimationFromFileList(button.dataset.animationFileSelect));
+  }
   document.querySelector("#openTransferSource")?.addEventListener("click", () => openTransferFile("source"));
   document.querySelector("#openTransferTarget")?.addEventListener("click", () => openTransferFile("target"));
   document.querySelector("#checkTransfer")?.addEventListener("click", checkTransferCompatibility);
@@ -1368,6 +1688,42 @@ function bindUi() {
       nudgeAnimationDecaySeconds(button.dataset.linkDecayNudge, Number(button.dataset.direction)),
     );
   }
+
+  for (const button of document.querySelectorAll("[data-transition-add]")) {
+    button.addEventListener("click", () => addTransitionViewerSlot(button.dataset.transitionAdd));
+  }
+
+  for (const button of document.querySelectorAll("[data-transition-remove]")) {
+    button.addEventListener("click", () => removeTransitionViewerSlot(button.dataset.transitionRemove));
+  }
+
+  for (const select of document.querySelectorAll("[data-transition-select]")) {
+    select.addEventListener("change", () => updateTransitionViewerSlot(select.dataset.transitionSelect, select.value));
+  }
+
+  for (const button of document.querySelectorAll("[data-transition-use]")) {
+    button.addEventListener("click", () => useTransitionViewerSlot(button.dataset.transitionUse, button.dataset.target));
+  }
+
+  for (const input of document.querySelectorAll("[data-transition-blend]")) {
+    input.addEventListener("input", () => updateTransitionBlend(input.dataset.transitionBlend, Number(input.value)));
+  }
+
+  document.querySelector("[data-transition-trim]")?.addEventListener("input", (event) =>
+    updateTransitionTrim(Number(event.target.value)),
+  );
+
+  for (const handle of document.querySelectorAll("[data-transition-handle]")) {
+    handle.addEventListener("pointerdown", (event) => beginTransitionTimelineHandleDrag(event, handle.dataset.transitionHandle));
+  }
+
+  for (const button of document.querySelectorAll("[data-transition-preview-play]")) {
+    button.addEventListener("click", () => playTransitionViewerSingle(button.dataset.transitionPreviewPlay));
+  }
+
+  document.querySelector("[data-clear-transition-pick]")?.addEventListener("click", clearTransitionViewerPick);
+  document.querySelector("#swapTransitionStartEnd")?.addEventListener("click", swapTransitionViewerStartEnd);
+  document.querySelector("#playTransitionViewer")?.addEventListener("click", playTransitionViewer);
   document.querySelector("#sourceFaceMesh")?.addEventListener("change", (event) => {
     state.transfer.sourceMesh = Number(event.target.value);
     state.transfer.report = null;
@@ -1635,7 +1991,7 @@ function bindUi() {
     });
   }
 
-  for (const scroller of document.querySelectorAll(".expression-list, .parameter-list, .transfer-panel, .correction-panel, .expression-editor-panel, .emotion-linker-panel")) {
+  for (const scroller of document.querySelectorAll(".expression-list, .parameter-list, .transfer-panel, .correction-panel, .expression-editor-panel, .emotion-linker-panel, .transition-viewer-panel, .transition-preview-tray")) {
     bindPanelWheel(scroller, scroller);
   }
 
@@ -1647,6 +2003,8 @@ function bindUi() {
         ? ".correction-panel"
         : state.mode === "linker"
           ? ".emotion-linker-panel"
+          : state.mode === "transitionViewer"
+            ? ".transition-viewer-panel"
         : state.editing
           ? ".parameter-list"
           : ".expression-editor-panel",
@@ -2006,7 +2364,7 @@ function commitSelectedExpressionParameters() {
 
 function saveSelectedExpressionParameters() {
   if (!commitSelectedExpressionParameters()) return;
-  render();
+  renderPreservingExpressionEditorScrolls();
 }
 
 function confirmPendingExpressionParameterChanges() {
@@ -2076,6 +2434,18 @@ function renderPreservingExpressionScroll(options = {}) {
   const nextScroller = document.querySelector(".expression-editor-panel");
   if (!nextScroller) return;
   nextScroller.scrollTop = options.scrollToBottom ? nextScroller.scrollHeight : scrollTop;
+}
+
+function renderPreservingExpressionEditorScrolls() {
+  const expressionScroller = document.querySelector(".expression-editor-panel");
+  const parameterScroller = document.querySelector(".expression-parameter-tray");
+  const expressionScrollTop = expressionScroller?.scrollTop ?? 0;
+  const parameterScrollTop = parameterScroller?.scrollTop ?? 0;
+  render();
+  const nextExpressionScroller = document.querySelector(".expression-editor-panel");
+  const nextParameterScroller = document.querySelector(".expression-parameter-tray");
+  if (nextExpressionScroller) nextExpressionScroller.scrollTop = expressionScrollTop;
+  if (nextParameterScroller) nextParameterScroller.scrollTop = parameterScrollTop;
 }
 
 function renderPreservingEmotionLinkerScroll() {
@@ -2278,6 +2648,405 @@ async function addAnimation() {
   }
 }
 
+function addTransitionViewerSlot(kind) {
+  if (!["idle", "transition", "event"].includes(kind)) return;
+  state.transitionViewer[kind].push({
+    id: `transition-slot-${Date.now()}-${state.transitionViewer[kind].length}`,
+    kind,
+    fileName: "",
+  });
+  syncTransitionViewerConfigMemory();
+  render();
+}
+
+function findTransitionViewerSlot(slotId) {
+  for (const kind of ["idle", "transition", "event"]) {
+    const slot = state.transitionViewer[kind].find((item) => item.id === slotId);
+    if (slot) return { kind, slot };
+  }
+  return null;
+}
+
+function removeTransitionViewerSlot(slotId) {
+  const found = findTransitionViewerSlot(slotId);
+  if (!found) return;
+  state.transitionViewer[found.kind] = state.transitionViewer[found.kind].filter((slot) => slot.id !== slotId);
+  for (const key of ["start", "transitionPick", "end"]) {
+    if (state.transitionViewer[key]?.id === slotId) state.transitionViewer[key] = null;
+  }
+  syncTransitionViewerConfigMemory();
+  render();
+}
+
+function updateTransitionViewerSlot(slotId, fileName) {
+  const found = findTransitionViewerSlot(slotId);
+  if (!found) return;
+  found.slot.fileName = fileName;
+  for (const key of ["start", "transitionPick", "end"]) {
+    if (state.transitionViewer[key]?.id === slotId) {
+      state.transitionViewer[key] = fileName
+        ? { id: found.slot.id, kind: found.kind, fileName }
+        : null;
+    }
+  }
+  syncTransitionViewerConfigMemory();
+  render();
+}
+
+function useTransitionViewerSlot(slotId, target) {
+  const found = findTransitionViewerSlot(slotId);
+  if (!found || !found.slot.fileName) return;
+  if (!["start", "transitionPick", "end"].includes(target)) return;
+  state.transitionViewer[target] = {
+    id: found.slot.id,
+    kind: found.kind,
+    fileName: found.slot.fileName,
+  };
+  syncTransitionViewerConfigMemory();
+  render();
+}
+
+function getTransitionPick(key) {
+  const pick = state.transitionViewer[key];
+  return pick?.fileName ? pick : null;
+}
+
+function clearTransitionViewerPick() {
+  state.transitionViewer.transitionPick = null;
+  syncTransitionViewerConfigMemory();
+  render();
+}
+
+function swapTransitionViewerStartEnd() {
+  const start = state.transitionViewer.start;
+  const end = state.transitionViewer.end;
+  if (!start || !end) return;
+  state.transitionViewer.start = { ...end };
+  state.transitionViewer.end = { ...start };
+  state.transitionViewer.timelineProgress = 0;
+  stopTransitionTimeline();
+  syncTransitionViewerConfigMemory();
+  render();
+}
+
+function updateTransitionBlend(key, value) {
+  if (key !== "startBlend" && key !== "endBlend") return;
+  if (!Number.isFinite(value)) return;
+  const maxValue = getTransitionBlendMax(key);
+  state.transitionViewer[key] = Math.min(maxValue, Math.max(0, Math.round(value * 100) / 100));
+  const panel = document.querySelector(`[data-transition-blend="${key}"]`)?.closest(".transition-blend-panel");
+  const label = panel?.querySelector(".transition-blend-title strong");
+  if (label) label.textContent = `${state.transitionViewer[key].toFixed(2)}s`;
+  const bars = panel?.querySelectorAll(".blend-bar span");
+  if (bars?.length === 2) {
+    bars[0].style.width = `${Math.max(12, (1 - state.transitionViewer[key] / 2) * 100)}%`;
+    bars[1].style.width = `${Math.max(12, (state.transitionViewer[key] / 2) * 100)}%`;
+  }
+  syncTransitionViewerConfigMemory();
+  refreshTransitionTimelineDom();
+}
+
+function getTransitionBlendMax(key) {
+  const start = getTransitionPick("start");
+  const end = getTransitionPick("end");
+  const startDuration = start ? (start.kind === "idle" ? 2 : getAnimationDuration(start.fileName, 2)) : 2;
+  const endDuration = end ? (end.kind === "idle" ? 2 : getAnimationDuration(end.fileName, 2)) : 2;
+  const transitionDuration = getTransitionTrimSeconds();
+  if (key === "startBlend") return Math.max(0, Math.round(Math.min(startDuration, transitionDuration, 2) * 100) / 100);
+  if (key === "endBlend") return Math.max(0, Math.round(Math.min(endDuration, transitionDuration, 2) * 100) / 100);
+  return 2;
+}
+
+function updateTransitionTrim(value) {
+  const transition = getTransitionPick("transitionPick");
+  const maxTrim = transition ? getAnimationDuration(transition.fileName, 1) : 1;
+  if (!Number.isFinite(value)) return;
+  state.transitionViewer.transitionTrim = Math.min(maxTrim, Math.max(0.05, Math.round(value * 100) / 100));
+  const input = document.querySelector("[data-transition-trim]");
+  if (input && document.activeElement !== input) input.value = state.transitionViewer.transitionTrim;
+  const label = input?.closest(".transition-blend-panel")?.querySelector(".transition-blend-title strong");
+  if (label) label.textContent = `${getTransitionTrimSeconds().toFixed(2)}s`;
+  syncTransitionViewerConfigMemory();
+  refreshTransitionTimelineDom();
+}
+
+function beginTransitionTimelineHandleDrag(event, handleKey) {
+  event.preventDefault();
+  event.stopPropagation();
+  const track = event.currentTarget.closest(".transition-timeline-track");
+  if (!track) return;
+  const move = (moveEvent) => updateTransitionTimelineHandle(handleKey, moveEvent.clientX, track);
+  const stop = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", stop);
+    render();
+  };
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", stop, { once: true });
+}
+
+function updateTransitionTimelineHandle(handleKey, clientX, track) {
+  const rect = track.getBoundingClientRect();
+  const metrics = getTransitionTimelineMetrics();
+  const total = metrics.totalSeconds;
+  const seconds = Math.min(total, Math.max(0, ((clientX - rect.left) / Math.max(rect.width, 1)) * total));
+  if (metrics.hasTransition === false) {
+    const b = Math.min(metrics.startSourceDuration, Math.max(0, seconds));
+    state.transitionViewer.endBlend = Math.round(Math.max(0, metrics.startSourceDuration - b) * 100) / 100;
+    syncTransitionViewerConfigMemory();
+    refreshTransitionControlsDom();
+    refreshTransitionTimelineDom();
+    return;
+  }
+  let a = metrics.transitionLeftSeconds;
+  let b = metrics.endLeftSeconds;
+  let c = metrics.transitionEndSeconds;
+  const maxTrimEnd = a + metrics.transitionSourceDuration;
+
+  if (handleKey === "a") {
+    a = Math.min(metrics.startSourceDuration, b, c - 0.05, Math.max(0, seconds));
+  } else if (handleKey === "b") {
+    b = Math.min(c, Math.max(metrics.startSourceDuration, seconds));
+  } else if (handleKey === "c") {
+    c = Math.min(maxTrimEnd, Math.max(b, a + 0.05, seconds));
+  }
+
+  state.transitionViewer.transitionPivot = Math.round(b * 100) / 100;
+  state.transitionViewer.startBlend = Math.round(Math.max(0, metrics.startSourceDuration - a) * 100) / 100;
+  state.transitionViewer.transitionTrim = Math.round(Math.max(0.05, c - a) * 100) / 100;
+  state.transitionViewer.endBlend = Math.round(Math.max(0, c - b) * 100) / 100;
+  syncTransitionViewerConfigMemory();
+  refreshTransitionControlsDom();
+  refreshTransitionTimelineDom();
+}
+
+function refreshTransitionControlsDom() {
+  for (const key of ["startBlend", "endBlend"]) {
+    const input = document.querySelector(`[data-transition-blend="${key}"]`);
+    if (input) input.value = state.transitionViewer[key];
+    const label = input?.closest(".transition-blend-panel")?.querySelector(".transition-blend-title strong");
+    if (label) label.textContent = `${state.transitionViewer[key].toFixed(2)}s`;
+  }
+  const trimInput = document.querySelector("[data-transition-trim]");
+  if (trimInput) trimInput.value = getTransitionTrimSeconds();
+  const trimLabel = trimInput?.closest(".transition-blend-panel")?.querySelector(".transition-blend-title strong");
+  if (trimLabel) trimLabel.textContent = `${getTransitionTrimSeconds().toFixed(2)}s`;
+}
+
+function refreshTransitionTimelineDom() {
+  const metrics = getTransitionTimelineMetrics();
+  const setBar = (tone, left, width) => {
+    const bar = document.querySelector(`.transition-timeline-${tone}`);
+    if (!bar) return;
+    bar.style.left = `${left}%`;
+    bar.style.width = `${width}%`;
+  };
+  setBar("start", metrics.startLeft, metrics.startWidth);
+  setBar("mid", metrics.midLeft, metrics.midWidth);
+  setBar("end", metrics.endLeft, metrics.endWidth);
+  const handleA = document.querySelector('[data-transition-handle="a"]');
+  const handleB = document.querySelector('[data-transition-handle="b"]');
+  const handleC = document.querySelector('[data-transition-handle="c"]');
+  if (handleA) handleA.style.left = `${metrics.handleA}%`;
+  if (handleB) handleB.style.left = `${metrics.handleB}%`;
+  if (handleC) handleC.style.left = `${metrics.handleC}%`;
+}
+
+function syncTransitionViewerConfigMemory() {
+  state.config = normalizeEditorConfig({
+    ...state.config,
+    transitionViewer: serializeTransitionViewerState(),
+  });
+  updateEditorConfigMemory();
+}
+
+function getTransitionTimelineMetrics() {
+  const start = getTransitionPick("start");
+  const transition = getTransitionPick("transitionPick");
+  const end = getTransitionPick("end");
+  const startDuration = start ? (start.kind === "idle" ? 2 : getAnimationDuration(start.fileName, 2)) : 2;
+  const endDuration = end ? (end.kind === "idle" ? 2 : getAnimationDuration(end.fileName, 2)) : 2;
+  if (!transition) {
+    const blendSeconds = Math.min(startDuration, endDuration, Math.max(0, state.transitionViewer.endBlend ?? 0.2));
+    const endLeftSeconds = Math.max(0, startDuration - blendSeconds);
+    const totalSeconds = Math.max(0.001, endLeftSeconds + endDuration);
+    const percent = (seconds) => (seconds / totalSeconds) * 100;
+    return {
+      totalSeconds,
+      startWindowSeconds: startDuration,
+      startSourceDuration: startDuration,
+      transitionSourceDuration: 0,
+      transitionDuration: 0,
+      endDuration,
+      startBlendSeconds: 0,
+      endBlendSeconds: blendSeconds,
+      transitionLeftSeconds: 0,
+      endLeftSeconds,
+      transitionEndSeconds: 0,
+      startLeft: 0,
+      startWidth: percent(startDuration),
+      midLeft: 0,
+      midWidth: 0,
+      endLeft: percent(endLeftSeconds),
+      endWidth: percent(endDuration),
+      handleA: 0,
+      handleB: percent(endLeftSeconds),
+      handleC: 0,
+      hasTransition: false,
+    };
+  }
+  const transitionSourceDuration = getAnimationDuration(transition.fileName, 1);
+  const pivotFallback = Math.min(startDuration, Math.max(0, startDuration));
+  const rawPivotSeconds = Math.max(0, normalizeFiniteNumber(state.transitionViewer.transitionPivot, 0) || pivotFallback);
+  const startBlendSeconds = Math.min(startDuration, Math.max(0, state.transitionViewer.startBlend ?? 0.4));
+  const endBlendSeconds = Math.min(endDuration, Math.max(0, state.transitionViewer.endBlend ?? 0.4));
+  const minimumTrim = Math.max(0.05, startBlendSeconds + endBlendSeconds);
+  const configuredTrim = Number(state.transitionViewer.transitionTrim);
+  const transitionDuration = Math.min(
+    transitionSourceDuration,
+    Math.max(minimumTrim, Number.isFinite(configuredTrim) && configuredTrim > 0 ? configuredTrim : minimumTrim),
+  );
+  const transitionLeftSeconds = Math.max(0, startDuration - startBlendSeconds);
+  const transitionEndSeconds = transitionLeftSeconds + transitionDuration;
+  const pivotSeconds = Math.min(transitionEndSeconds, Math.max(startDuration, rawPivotSeconds));
+  const endLeftSeconds = Math.min(transitionEndSeconds, Math.max(startDuration, pivotSeconds));
+  const effectiveEndBlend = Math.max(0, transitionEndSeconds - endLeftSeconds);
+  const effectiveStartBlend = Math.max(0, startDuration - transitionLeftSeconds);
+  const totalSeconds = Math.max(0.001, Math.max(endLeftSeconds + endDuration, transitionEndSeconds));
+  const startLeftSeconds = 0;
+  const percent = (seconds) => (seconds / totalSeconds) * 100;
+  return {
+    totalSeconds,
+    startWindowSeconds: startDuration,
+    startSourceDuration: startDuration,
+    transitionSourceDuration,
+    transitionDuration,
+    endDuration,
+    startBlendSeconds: effectiveStartBlend,
+    endBlendSeconds: effectiveEndBlend,
+    transitionLeftSeconds,
+    endLeftSeconds,
+    transitionEndSeconds,
+    startLeft: percent(startLeftSeconds),
+    startWidth: percent(startDuration),
+    midLeft: percent(transitionLeftSeconds),
+    midWidth: percent(transitionDuration),
+    endLeft: percent(endLeftSeconds),
+    endWidth: percent(endDuration),
+    handleA: percent(transitionLeftSeconds),
+    handleB: percent(endLeftSeconds),
+    handleC: percent(transitionEndSeconds),
+  };
+}
+
+function getTransitionTrimSeconds() {
+  const transition = getTransitionPick("transitionPick");
+  const sourceDuration = transition ? getAnimationDuration(transition.fileName, 1) : 1;
+  const configured = Number(state.transitionViewer.transitionTrim);
+  if (!Number.isFinite(configured) || configured <= 0) return sourceDuration;
+  return Math.min(sourceDuration, Math.max(0.05, configured));
+}
+
+function startTransitionTimeline(durationSeconds) {
+  state.transitionViewer.timelineStartedAt = performance.now();
+  state.transitionViewer.timelineDuration = Math.max(0.001, durationSeconds);
+  state.transitionViewer.timelineProgress = 0;
+}
+
+function stopTransitionTimeline() {
+  state.transitionViewer.timelineStartedAt = 0;
+  state.transitionViewer.timelineDuration = 0;
+}
+
+function updateTransitionTimelineProgress() {
+  if (!state.transitionViewer.timelineStartedAt || !state.transitionViewer.timelineDuration) return;
+  const elapsed = (performance.now() - state.transitionViewer.timelineStartedAt) / 1000;
+  state.transitionViewer.timelineProgress = clamp01(elapsed / state.transitionViewer.timelineDuration);
+  const cursor = document.querySelector(".transition-timeline-cursor");
+  if (cursor) cursor.style.left = `${state.transitionViewer.timelineProgress * 100}%`;
+  if (state.transitionViewer.timelineProgress >= 1) stopTransitionTimeline();
+}
+
+async function playTransitionViewerSingle(fileName) {
+  if (!fileName || !currentVrm) return;
+  state.transitionViewer.runId = Date.now();
+  state.transitionViewer.playing = false;
+  state.transitionViewer.timelineProgress = 0;
+  stopTransitionTimeline();
+  await playTransitionViewerStep(fileName, isAnimationLoop(fileName), 0, { preserveCurrentAction: false });
+}
+
+async function playTransitionViewer() {
+  const start = getTransitionPick("start");
+  const transition = getTransitionPick("transitionPick");
+  const end = getTransitionPick("end");
+  if (!start || !end || !currentVrm) return;
+  const runId = Date.now();
+  state.transitionViewer.runId = runId;
+  state.transitionViewer.playing = true;
+  const metrics = getTransitionTimelineMetrics();
+  startTransitionTimeline(metrics.totalSeconds);
+  render();
+  try {
+    const startWindowSeconds = metrics.startWindowSeconds;
+    const transitionDuration = metrics.transitionDuration;
+    const startBlendSeconds = metrics.startBlendSeconds;
+    const endBlendSeconds = metrics.endBlendSeconds;
+    await playTransitionViewerStep(start.fileName, start.kind === "idle", 0, { preserveCurrentAction: false });
+    if (!isCurrentTransitionRun(runId)) return;
+    if (!transition) {
+      await sleep(Math.max(0, startWindowSeconds - endBlendSeconds) * 1000);
+      if (!isCurrentTransitionRun(runId)) return;
+      await playTransitionViewerStep(end.fileName, end.kind === "idle", endBlendSeconds);
+      if (!isCurrentTransitionRun(runId)) return;
+      await sleep(endBlendSeconds * 1000);
+      return;
+    }
+    await sleep(Math.max(0, startWindowSeconds - startBlendSeconds) * 1000);
+    if (!isCurrentTransitionRun(runId)) return;
+    await playTransitionViewerStep(transition.fileName, false, startBlendSeconds);
+    if (!isCurrentTransitionRun(runId)) return;
+    await sleep(Math.max(0, transitionDuration - endBlendSeconds) * 1000);
+    if (!isCurrentTransitionRun(runId)) return;
+    await playTransitionViewerStep(end.fileName, end.kind === "idle", endBlendSeconds);
+    if (!isCurrentTransitionRun(runId)) return;
+    await sleep(endBlendSeconds * 1000);
+  } finally {
+    if (isCurrentTransitionRun(runId)) {
+      state.transitionViewer.playing = false;
+      state.transitionViewer.timelineProgress = 1;
+      stopTransitionTimeline();
+      render();
+    }
+  }
+}
+
+async function playTransitionViewerStep(fileName, loop, transitionSeconds, options = {}) {
+  state.selectedAnimationName = fileName;
+  applyTransitionViewerLinkedExpression(fileName);
+  const transition = await loadSelectedAnimation({ preserveCurrentAction: options.preserveCurrentAction !== false });
+  playAnimationFromStart(loop, {
+    previousAction: transition?.previousAction,
+    transitionSeconds: transition?.previousAction ? transitionSeconds : 0,
+  });
+}
+
+function applyTransitionViewerLinkedExpression(fileName) {
+  const entry = getAnimationMetaEntry(fileName);
+  if (entry.expressionPresetId) {
+    applyLinkedExpressionPreset(entry.expressionPresetId);
+  }
+}
+
+function isCurrentTransitionRun(runId) {
+  return state.transitionViewer.runId === runId;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 async function loadSelectedAnimation(options = {}) {
   const entry = getSelectedAnimationEntry();
   if (!entry) {
@@ -2333,6 +3102,7 @@ async function loadAnimationResult(result, options = {}) {
       loop: Boolean(metaEntry.loop),
       message: "",
     };
+    updateStoredAnimationDuration(result.name, clip.duration);
     return { previousAction };
   } catch (error) {
     clearReferenceAnimation();
@@ -2347,6 +3117,14 @@ async function stepSelectedAnimation(direction) {
   const currentIndex = Math.max(0, names.indexOf(state.selectedAnimationName));
   const nextIndex = (currentIndex + direction + names.length) % names.length;
   state.selectedAnimationName = names[nextIndex];
+  await loadSelectedAnimation();
+  applyMotionCorrectionPreview();
+  render();
+}
+
+async function selectAnimationFromFileList(animationName) {
+  if (!animationName || !state.animationCatalog?.[animationName]) return;
+  state.selectedAnimationName = animationName;
   await loadSelectedAnimation();
   applyMotionCorrectionPreview();
   render();
@@ -3026,6 +3804,61 @@ function getAnimationNames() {
   return Object.keys(state.animationCatalog ?? {}).sort((a, b) => a.localeCompare(b));
 }
 
+function getAnimationDisplayName(animationName) {
+  return String(animationName ?? "").replace(/\.[^.]+$/, "");
+}
+
+function getAnimationDuration(animationName, fallback = 2) {
+  const duration = Number(state.animationCatalog?.[animationName]?.duration);
+  return Number.isFinite(duration) && duration > 0 ? duration : fallback;
+}
+
+function updateStoredAnimationDuration(animationName, duration) {
+  const fileName = fileNameFromPath(animationName);
+  const nextDuration = Number(duration);
+  if (!fileName || !Number.isFinite(nextDuration) || nextDuration <= 0) return;
+  const entry = state.animationCatalog?.[fileName];
+  if (!entry || Math.abs((entry.duration ?? 0) - nextDuration) < 0.01) return;
+  entry.duration = Math.round(nextDuration * 1000) / 1000;
+  window.vrmFiles.updateAnimationInfo(fileName, { duration: entry.duration }).catch(() => {});
+}
+
+function formatAnimationOptionLabel(animationName) {
+  if (!animationName) return "";
+  const entry = state.animationCatalog?.[animationName] ?? {};
+  const displayName = getAnimationDisplayName(animationName);
+  const description = String(entry.description ?? "").trim();
+  return description ? `${displayName} / ${description}` : displayName;
+}
+
+function getTransitionLinkerAnimationNames(kind) {
+  const names = getAnimationNames().filter((name) => {
+    const entry = getAnimationMetaEntry(name);
+    return Boolean(entry.expressionPresetId || state.animationCatalog?.[name]?.description);
+  });
+  const filtered = names.filter((name) => isAnimationRecommendedForTransitionKind(kind, name));
+  return filtered.length ? filtered : names;
+}
+
+function formatTransitionLinkerOptionLabel(animationName) {
+  if (!animationName) return "";
+  const catalogEntry = state.animationCatalog?.[animationName] ?? {};
+  const metaEntry = getAnimationMetaEntry(animationName);
+  const preset = state.expressionPresets.find((item) => item.id === metaEntry.expressionPresetId);
+  const title = String(catalogEntry.description ?? "").trim() || getAnimationDisplayName(animationName);
+  return preset ? `${title} / ${preset.name}` : title;
+}
+
+function isAnimationLoop(animationName) {
+  return Boolean(getAnimationMetaEntry(animationName).loop);
+}
+
+function isAnimationRecommendedForTransitionKind(kind, animationName) {
+  if (!animationName) return true;
+  const loop = isAnimationLoop(animationName);
+  return kind === "idle" ? loop : !loop;
+}
+
 function getSelectedAnimationEntry() {
   if (!state.selectedAnimationName) return null;
   return state.animationCatalog?.[state.selectedAnimationName] ?? null;
@@ -3219,6 +4052,9 @@ function pruneDefaultCorrection(boneName) {
 }
 
 async function saveCorrection() {
+  const modeBeforeSave = state.mode;
+  const emotionLinkerScrollTop = document.querySelector(".emotion-linker-panel")?.scrollTop ?? 0;
+  const correctionScrollTop = document.querySelector(".correction-panel")?.scrollTop ?? 0;
   const payload = JSON.stringify(serializeCorrection(), null, 2);
   const result = await window.vrmFiles.saveMeta(state.correctionPath, payload);
   if (!result) return;
@@ -3228,6 +4064,14 @@ async function saveCorrection() {
   state.expressionDirty = false;
   syncSaveMetaButton();
   render();
+  if (modeBeforeSave === "linker") {
+    const nextScroller = document.querySelector(".emotion-linker-panel");
+    if (nextScroller) nextScroller.scrollTop = emotionLinkerScrollTop;
+  }
+  if (modeBeforeSave === "correction") {
+    const nextScroller = document.querySelector(".correction-panel");
+    if (nextScroller) nextScroller.scrollTop = correctionScrollTop;
+  }
 }
 
 async function loadOrCreateVrmMeta(vrmPath, vrmName) {
@@ -3271,6 +4115,7 @@ async function refreshAnimationCatalog() {
       fileName: safeName,
       description: String(animation.description ?? ""),
       mustWatchFull: Boolean(animation.mustWatchFull),
+      duration: normalizeFiniteNumber(animation.duration, 0),
     };
   }
 }
@@ -3290,6 +4135,7 @@ async function migrateAnimationInfoFromCharacterMeta(meta) {
       fileName,
       description: String(updated.description ?? ""),
       mustWatchFull: Boolean(updated.mustWatchFull),
+      duration: normalizeFiniteNumber(updated.duration, catalogEntry.duration ?? 0),
     };
     changed = true;
   }
@@ -4297,6 +5143,7 @@ function tick() {
   const delta = clock.getDelta();
   controls.update();
   updateCameraTransition(delta);
+  updateTransitionTimelineProgress();
   clearMotionCorrectionPreview();
   if (animationMixer && state.animation.playing) {
     animationMixer.update(delta);

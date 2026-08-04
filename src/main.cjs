@@ -59,6 +59,18 @@ function createDefaultConfig() {
     viewer: {
       lightIntensity: 0.75,
     },
+    transitionViewer: {
+      idle: [],
+      transition: [],
+      event: [],
+      start: null,
+      transitionPick: null,
+      end: null,
+      startBlend: 0.4,
+      endBlend: 0.4,
+      transitionTrim: 0,
+      transitionPivot: 0,
+    },
   };
 }
 
@@ -105,6 +117,14 @@ function parseIniConfig(text) {
       const intensity = Number(value);
       config.viewer.lightIntensity = Number.isFinite(intensity) ? intensity : config.viewer.lightIntensity;
     }
+    if (section === "TransitionViewer" && key === "StateJson") {
+      try {
+        const viewer = JSON.parse(value);
+        config.transitionViewer = viewer && typeof viewer === "object" ? viewer : config.transitionViewer;
+      } catch {
+        config.transitionViewer = createDefaultConfig().transitionViewer;
+      }
+    }
   }
   if (!Array.isArray(config.expressionEditor.knownShapeKeys) && Array.isArray(config.expressionEditor.visibleShapeKeys)) {
     config.expressionEditor.knownShapeKeys = [...config.expressionEditor.visibleShapeKeys];
@@ -131,6 +151,9 @@ function serializeIniConfig(config) {
     "[Viewer]",
     `LightIntensity=${Number.isFinite(Number(config?.viewer?.lightIntensity)) ? Number(config.viewer.lightIntensity) : 0.75}`,
     "",
+    "[TransitionViewer]",
+    `StateJson=${JSON.stringify(config?.transitionViewer && typeof config.transitionViewer === "object" ? config.transitionViewer : createDefaultConfig().transitionViewer)}`,
+    "",
   ].join("\n");
 }
 
@@ -156,6 +179,7 @@ async function writeEditorConfig(config) {
 async function readAnimationCatalog() {
   await fs.mkdir(animationsDir(), { recursive: true });
   let catalog = { schemaVersion: 1, type: "vrm-animation-catalog", animations: {} };
+  let changed = false;
   try {
     catalog = parseJsonCatalog(await fs.readFile(animationCatalogPath(), "utf8"));
     catalog.animations ??= {};
@@ -164,20 +188,40 @@ async function readAnimationCatalog() {
       const brokenPath = `${animationCatalogPath()}.broken-${Date.now()}`;
       await fs.rename(animationCatalogPath(), brokenPath).catch(() => {});
     }
+    changed = true;
   }
 
   const animationFiles = new Set((await fs.readdir(animationsDir())).filter((name) => /\.(vrma|glb|gltf)$/i.test(name)));
-  catalog.animations = Object.fromEntries(
-    Object.entries(catalog.animations ?? {}).filter(([fileName]) => animationFiles.has(fileName)),
-  );
   for (const fileName of animationFiles) {
-    catalog.animations[fileName] ??= {
-      fileName,
-      description: "",
-      mustWatchFull: false,
-    };
+    if (!catalog.animations[fileName]) {
+      catalog.animations[fileName] = {
+        fileName,
+        description: "",
+        mustWatchFull: false,
+        duration: 0,
+      };
+      changed = true;
+    }
+    const entry = catalog.animations[fileName];
+    const normalizedDuration = Number(entry.duration) || 0;
+    if (entry.fileName !== fileName) {
+      entry.fileName = fileName;
+      changed = true;
+    }
+    if (typeof entry.description !== "string") {
+      entry.description = String(entry.description ?? "");
+      changed = true;
+    }
+    if (typeof entry.mustWatchFull !== "boolean") {
+      entry.mustWatchFull = Boolean(entry.mustWatchFull);
+      changed = true;
+    }
+    if (entry.duration !== normalizedDuration) {
+      entry.duration = normalizedDuration;
+      changed = true;
+    }
   }
-  await writeAnimationCatalog(catalog);
+  if (changed) await writeAnimationCatalog(catalog);
   return catalog;
 }
 
@@ -275,7 +319,7 @@ ipcMain.handle("animation:store", async (_event, sourcePath) => {
     await fs.copyFile(sourcePath, targetPath);
   }
   const catalog = await readAnimationCatalog();
-  catalog.animations[fileName] ??= { fileName, description: "", mustWatchFull: false };
+  catalog.animations[fileName] ??= { fileName, description: "", mustWatchFull: false, duration: 0 };
   await writeAnimationCatalog(catalog);
   const data = await fs.readFile(targetPath);
   return { filePath: targetPath, name: fileName, data };
@@ -302,9 +346,13 @@ ipcMain.handle("animation:listStored", async () => readAnimationCatalog());
 ipcMain.handle("animation:updateInfo", async (_event, fileName, patch) => {
   const catalog = await readAnimationCatalog();
   const safeName = path.basename(fileName);
-  catalog.animations[safeName] ??= { fileName: safeName, description: "", mustWatchFull: false };
+  catalog.animations[safeName] ??= { fileName: safeName, description: "", mustWatchFull: false, duration: 0 };
   if (Object.hasOwn(patch, "description")) catalog.animations[safeName].description = String(patch.description ?? "");
   if (Object.hasOwn(patch, "mustWatchFull")) catalog.animations[safeName].mustWatchFull = Boolean(patch.mustWatchFull);
+  if (Object.hasOwn(patch, "duration")) {
+    const duration = Number(patch.duration);
+    catalog.animations[safeName].duration = Number.isFinite(duration) && duration > 0 ? Math.round(duration * 1000) / 1000 : 0;
+  }
   await writeAnimationCatalog(catalog);
   return catalog.animations[safeName];
 });

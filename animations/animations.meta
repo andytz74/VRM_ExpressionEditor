@@ -4,38 +4,87 @@
   "animations": {
     "a0.vrma": {
       "fileName": "a0.vrma",
-      "description": "idle",
-      "mustWatchFull": true
+      "description": "대기-기본 ",
+      "mustWatchFull": false,
+      "duration": 9.958
+    },
+    "a0_standSlantedL.vrma": {
+      "fileName": "a0_standSlantedL.vrma",
+      "description": "대기-손모은",
+      "mustWatchFull": false,
+      "duration": 5.042
+    },
+    "a0_standSlantedR.vrma": {
+      "fileName": "a0_standSlantedR.vrma",
+      "description": "대기-손뒤로",
+      "mustWatchFull": false,
+      "duration": 4.958
     },
     "a1.vrma": {
       "fileName": "a1.vrma",
-      "description": "집중 긴장",
-      "mustWatchFull": false
+      "description": "집중",
+      "mustWatchFull": false,
+      "duration": 8
     },
     "a2.vrma": {
       "fileName": "a2.vrma",
-      "description": "기대 떨림",
-      "mustWatchFull": false
+      "description": "긴장",
+      "mustWatchFull": false,
+      "duration": 7.458
     },
     "a3.vrma": {
       "fileName": "a3.vrma",
-      "description": "조아쓰",
-      "mustWatchFull": false
+      "description": "조아쓰 ",
+      "mustWatchFull": false,
+      "duration": 2.458
+    },
+    "a3_1.vrma": {
+      "fileName": "a3_1.vrma",
+      "description": "조아쓰 큰 ",
+      "mustWatchFull": false,
+      "duration": 2.458
     },
     "a4.vrma": {
       "fileName": "a4.vrma",
-      "description": "작은박수",
-      "mustWatchFull": true
+      "description": "작은 박수 ",
+      "mustWatchFull": false,
+      "duration": 3.708
     },
     "a5.vrma": {
       "fileName": "a5.vrma",
-      "description": "휴우,,,",
-      "mustWatchFull": false
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 2.458
     },
     "a6.vrma": {
       "fileName": "a6.vrma",
-      "description": "어머나!",
-      "mustWatchFull": true
+      "description": "어머나 ",
+      "mustWatchFull": false,
+      "duration": 2.458
+    },
+    "TransitionSubKey.vrma": {
+      "fileName": "TransitionSubKey.vrma",
+      "description": "전환동작",
+      "mustWatchFull": false,
+      "duration": 1.208
+    },
+    "VRMA_hello.vrma": {
+      "fileName": "VRMA_hello.vrma",
+      "description": "인사",
+      "mustWatchFull": false,
+      "duration": 4.125
+    },
+    "a0_armCrossed_loop.vrma": {
+      "fileName": "a0_armCrossed_loop.vrma",
+      "description": "팔짱낀",
+      "mustWatchFull": true,
+      "duration": 4.958
+    },
+    "VRMA_twoHandsUp.vrma": {
+      "fileName": "VRMA_twoHandsUp.vrma",
+      "description": "환호-만세",
+      "mustWatchFull": true,
+      "duration": 4.958
     }
   }
 }
