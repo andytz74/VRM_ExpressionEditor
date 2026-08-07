@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "type": "vrm-animation-catalog",
+  "animations": {
+    "a0.vrma": {
+      "fileName": "a0.vrma",
+      "description": "대기-기본 ",
+      "mustWatchFull": false,
+      "duration": 0
+    },
+    "a0_standSlantedL.vrma": {
+      "fileName": "a0_standSlantedL.vrma",
+      "description": "대기-손모은",
+      "mustWatchFull": false,
+      "duration": 0
+    },
+    "a0_standSlantedR.vrma": {
+      "fileName": "a0_standSlantedR.vrma",
+      "description": "대기-손뒤로",
+      "mustWatchFull": false,
+      "duration": 0
+    },
+    "a1.vrma": {
+      "fileName": "a1.vrma",
+      "description": "집중",
+      "mustWatchFull": false,
+      "duration": 0
+    },
+    "a2.vrma": {
+      "fileName": "a2.vrma",
+      "description": "긴장",
+      "mustWatchFull": false,
+      "duration": 0
+    },
+    "a3.vrma": {
+      "fileName": "a3.vrma",
+      "description": "조아쓰 ",
+      "mustWatchFull": false,
+      "duration": 0
+    },
+    "a3_1.vrma": {
+      "fileName": "a3_1.vrma",
+      "description": "조아쓰 큰 ",
+      "mustWatchFull": false,
+      "duration": 0
+    },
+    "a4.vrma": {
+      "fileName": "a4.vrma",
+      "description": "작은 박수 ",
+      "mustWatchFull": false,
+      "duration": 0
+    },
+    "a5.vrma": {
+      "fileName": "a5.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 0
+    },
+    "a6.vrma": {
+      "fileName": "a6.vrma",
+      "description": "어머나 ",
+      "mustWatchFull": false,
+      "duration": 0
+    },
+    "TransitionSubKey.vrma": {
+      "fileName": "TransitionSubKey.vrma",
+      "description": "전환동작",
+      "mustWatchFull": false,
+      "duration": 0
+    },
+    "VRMA_hello.vrma": {
+      "fileName": "VRMA_hello.vrma",
+      "description": "인사",
+      "mustWatchFull": false,
+      "duration": 4.125
+    }
+  }
+}

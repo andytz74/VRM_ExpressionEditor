@@ -111,6 +111,14 @@ const state = {
   selectedExpressionPresetId: "emotion-0",
   selectedExpressionRangeId: null,
   decayPreviewSeconds: {},
+  linkerTransitionSeconds: 0.2,
+  activeLinkTimeline: null,
+  blushPanelMinimized: false,
+  screenshot: {
+    selecting: false,
+    message: "",
+    rect: { x: 0.62, y: 0.16, width: 0.28, height: 0.42 },
+  },
   transitionViewer: {
     idle: [],
     transition: [],
@@ -122,6 +130,10 @@ const state = {
     endBlend: 0.4,
     transitionTrim: 0,
     transitionPivot: 0,
+    trayMode: "transition",
+    sequence: [],
+    sequencePlaying: false,
+    sequenceActiveIndex: -1,
     playing: false,
     runId: 0,
     timelineStartedAt: 0,
@@ -169,6 +181,7 @@ const state = {
   correction: createEmptyCorrection(),
   correctionPath: null,
   correctionDirty: false,
+  metaImportReport: null,
   animationCatalog: {},
   selectedAnimationName: null,
   correctionAnimationTab: "play",
@@ -196,7 +209,7 @@ scene.background = null;
 const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 100);
 camera.position.set(0, 1.35, 3.2);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
 const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
@@ -212,6 +225,7 @@ let animationUrl = null;
 let animationMixer = null;
 let animationAction = null;
 let lastCorrectionBases = new Map();
+let blushOverlay = null;
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -240,6 +254,7 @@ async function loadEditorConfig() {
     ...state.transitionViewer,
     ...normalizeTransitionViewerConfig(state.config.transitionViewer),
     playing: false,
+    sequencePlaying: false,
     runId: 0,
   };
 }
@@ -273,6 +288,8 @@ function createEmptyTransitionViewerConfig() {
     endBlend: 0.4,
     transitionTrim: 0,
     transitionPivot: 0,
+    trayMode: "transition",
+    sequence: [],
   };
 }
 
@@ -304,7 +321,22 @@ function normalizeTransitionViewerConfig(config) {
   next.endBlend = Math.min(2, Math.max(0, normalizeFiniteNumber(config?.endBlend, 0.4)));
   next.transitionTrim = Math.max(0, normalizeFiniteNumber(config?.transitionTrim, 0));
   next.transitionPivot = Math.max(0, normalizeFiniteNumber(config?.transitionPivot, 0));
+  next.trayMode = config?.trayMode === "sequence" ? "sequence" : "transition";
+  next.sequence = normalizeTransitionSequence(config?.sequence);
   return next;
+}
+
+function normalizeTransitionSequence(sequence) {
+  if (!Array.isArray(sequence)) return [];
+  return sequence
+    .slice(0, 10)
+    .map((slot, index) => ({
+      id: String(slot?.id || `sequence-slot-${index}`),
+      fileName: String(slot?.fileName ?? ""),
+      loopCount: Math.max(1, Math.min(99, Math.round(normalizeFiniteNumber(slot?.loopCount, 1)))),
+      transitionSeconds: clampSequenceTransitionSeconds(normalizeFiniteNumber(slot?.transitionSeconds, 0.2)),
+    }))
+    .filter((slot) => slot.fileName);
 }
 
 function normalizeCameraPresets(presets) {
@@ -415,6 +447,8 @@ function serializeTransitionViewerState() {
     endBlend: state.transitionViewer.endBlend,
     transitionTrim: state.transitionViewer.transitionTrim,
     transitionPivot: state.transitionViewer.transitionPivot,
+    trayMode: state.transitionViewer.trayMode,
+    sequence: state.transitionViewer.sequence,
   });
 }
 
@@ -428,7 +462,7 @@ async function initialize() {
   applyViewerLightIntensity(state.config.viewer.lightIntensity);
   await refreshAnimationCatalog();
   const names = getAnimationNames();
-  state.selectedAnimationName = names[0] ?? null;
+  state.selectedAnimationName = getDefaultAnimationName() ?? names[0] ?? null;
   await loadSelectedAnimation();
   render();
 }
@@ -451,6 +485,17 @@ function dottedArrowSvg(size = 22) {
     <path d="M10 12h3" />
     <path d="M17 12h8" />
     <path d="M20 6l6 6-6 6" />
+  </svg>`;
+}
+
+function crossedDriversSvg(size = 22) {
+  return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5 3l16 16" />
+    <path d="M3 5l3-3 3 3-3 3z" />
+    <path d="M18 16l3 3-2 2-3-3" />
+    <path d="M19 3L3 19" />
+    <path d="M21 5l-3-3-3 3 3 3z" />
+    <path d="M6 16l-3 3 2 2 3-3" />
   </svg>`;
 }
 
@@ -477,14 +522,19 @@ function verticalSwapSvg(size = 30) {
   </svg>`;
 }
 
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 function render() {
   if (!app.innerHTML) {
     app.innerHTML = "";
   }
   const isExpressionLayout = state.mode === "expression" && !state.editing;
   const isTransitionLayout = state.mode === "transitionViewer";
+  const hasEmptyRightTray = state.mode === "correction" || state.mode === "linker";
   app.innerHTML = `
-    <main class="app ${isExpressionLayout ? "expression-layout" : ""} ${isTransitionLayout ? "transition-layout" : ""}">
+    <main class="app ${isExpressionLayout ? "expression-layout" : ""} ${isTransitionLayout ? "transition-layout" : ""} ${hasEmptyRightTray ? "empty-right-layout" : ""}">
       <aside class="sidebar">
         ${
           state.mode === "correction"
@@ -503,26 +553,220 @@ function render() {
         ${renderCameraSettingsPanel()}
         ${state.filePath ? "" : renderDropHint()}
         ${renderStatusPill()}
+        ${renderScreenshotTools()}
+        ${renderScreenshotSelectionOverlay()}
         ${renderViewerLightControl()}
-        ${state.mode === "transitionViewer" ? renderTransitionTimelineOverlay() : ""}
+        ${renderEmotionLinkerTransitionControl()}
+        ${renderBlushOverlayPanel()}
+        ${renderMetaImportOverlay()}
+        ${state.mode === "transitionViewer" && state.transitionViewer.trayMode !== "sequence" ? renderTransitionTimelineOverlay() : ""}
       </section>
       ${state.mode === "expression" && !state.editing ? renderEmotionParameterTrayWithSave() : ""}
       ${state.mode === "transitionViewer" ? renderTransitionViewerTray() : ""}
+      ${hasEmptyRightTray ? renderEmptyRightTray() : ""}
     </main>
   `;
 
   document.querySelector("#canvasHost")?.appendChild(renderer.domElement);
+  attachHeaderMetaButtons();
   bindUi();
   resize();
+}
+
+function attachHeaderMetaButtons() {
+  for (const openButton of document.querySelectorAll("#openFile")) {
+    if (openButton.nextElementSibling?.classList?.contains("meta-load-button")) continue;
+    const metaButton = document.createElement("button");
+    metaButton.type = "button";
+    metaButton.className = "icon-button meta-load-button";
+    metaButton.id = "importMetaSettings";
+    metaButton.title = "Meta 불러오기";
+    metaButton.textContent = ".m";
+    metaButton.disabled = !state.correctionPath;
+    openButton.insertAdjacentElement("afterend", metaButton);
+  }
+}
+
+function renderEmptyRightTray() {
+  return `<aside class="mode-empty-tray" aria-hidden="true"></aside>`;
+}
+
+function renderMetaImportOverlay() {
+  const report = state.metaImportReport;
+  if (!report) return "";
+  return `
+    <aside class="meta-import-overlay ${report.applied ? "has-applied" : ""}">
+      <div class="meta-import-overlay-head">
+        <strong>${escapeHtml(report.title)}</strong>
+        <button class="mini-button" id="closeMetaImportReport">Close</button>
+      </div>
+      <p>${escapeHtml(report.summary)}</p>
+      ${report.messages?.length ? `<ul>${report.messages.map((message) => `<li>${escapeHtml(message)}</li>`).join("")}</ul>` : ""}
+    </aside>
+  `;
 }
 
 function renderStatusPill() {
   if (!state.filePath) return "";
   const parts = [];
+  if (state.screenshot.message) parts.push(state.screenshot.message);
   if (state.hasWorkspaceChanges) parts.push("표정 변경사항 있음");
   if (state.correctionDirty) parts.push("meta 변경사항 있음");
   if (!parts.length) parts.push("원본과 동일");
   return `<div class="status-pill">${escapeHtml(parts.join(" · "))}</div>`;
+}
+
+function renderScreenshotTools() {
+  return `
+    <div class="screenshot-tools">
+      <button class="screenshot-button capture" id="captureScreenshot" title="Screenshot to clipboard">${iconSvg(Camera, 18)}</button>
+      <button class="screenshot-button region ${state.screenshot.selecting ? "active" : ""}" id="toggleScreenshotRegion" title="Set screenshot area">${crossedDriversSvg(22)}</button>
+    </div>
+  `;
+}
+
+function renderScreenshotSelectionOverlay() {
+  if (!state.screenshot.selecting) return "";
+  const rect = normalizeScreenshotRect(state.screenshot.rect);
+  return `
+    <div class="screenshot-selection-layer">
+      <div
+        class="screenshot-selection-box"
+        data-screenshot-drag="move"
+        style="left: ${rect.x * 100}%; top: ${rect.y * 100}%; width: ${rect.width * 100}%; height: ${rect.height * 100}%;"
+      >
+        <span class="screenshot-selection-label">screenshot</span>
+        <button class="screenshot-handle nw" data-screenshot-drag="nw" aria-label="Resize northwest"></button>
+        <button class="screenshot-handle ne" data-screenshot-drag="ne" aria-label="Resize northeast"></button>
+        <button class="screenshot-handle sw" data-screenshot-drag="sw" aria-label="Resize southwest"></button>
+        <button class="screenshot-handle se" data-screenshot-drag="se" aria-label="Resize southeast"></button>
+      </div>
+    </div>
+  `;
+}
+
+function toggleScreenshotRegion() {
+  state.screenshot.selecting = !state.screenshot.selecting;
+  render();
+}
+
+async function captureScreenshotToClipboard() {
+  try {
+    renderer.render(scene, camera);
+    const rect = normalizeScreenshotRect(state.screenshot.rect);
+    const source = await loadImageFromDataUrl(renderer.domElement.toDataURL("image/png"));
+    const crop = document.createElement("canvas");
+    crop.width = Math.max(1, Math.round(source.width * rect.width));
+    crop.height = Math.max(1, Math.round(source.height * rect.height));
+    const context = crop.getContext("2d");
+    context.fillStyle = "#11151b";
+    context.fillRect(0, 0, crop.width, crop.height);
+    context.drawImage(
+      source,
+      Math.round(source.width * rect.x),
+      Math.round(source.height * rect.y),
+      crop.width,
+      crop.height,
+      0,
+      0,
+      crop.width,
+      crop.height,
+    );
+    const result = await window.vrmFiles.writeClipboardImage(crop.toDataURL("image/png"));
+    setScreenshotMessage(`screenshot ${result.size.width}x${result.size.height}`);
+  } catch (error) {
+    console.error(error);
+    setScreenshotMessage("screenshot failed");
+  }
+}
+
+function loadImageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = dataUrl;
+  });
+}
+
+function setScreenshotMessage(message) {
+  state.screenshot.message = message;
+  render();
+  window.clearTimeout(setScreenshotMessage.timer);
+  setScreenshotMessage.timer = window.setTimeout(() => {
+    if (state.screenshot.message !== message) return;
+    state.screenshot.message = "";
+    render();
+  }, 2200);
+}
+
+function beginScreenshotRectDrag(event, mode) {
+  event.preventDefault();
+  event.stopPropagation();
+  const viewer = document.querySelector(".viewer");
+  const box = document.querySelector(".screenshot-selection-box");
+  if (!viewer || !box) return;
+  const viewerRect = viewer.getBoundingClientRect();
+  const startRect = normalizeScreenshotRect(state.screenshot.rect);
+  const startX = event.clientX;
+  const startY = event.clientY;
+  const minSize = 0.05;
+  const onMove = (moveEvent) => {
+    const dx = (moveEvent.clientX - startX) / Math.max(viewerRect.width, 1);
+    const dy = (moveEvent.clientY - startY) / Math.max(viewerRect.height, 1);
+    let next = { ...startRect };
+    if (mode === "move") {
+      next.x = startRect.x + dx;
+      next.y = startRect.y + dy;
+    } else {
+      if (mode.includes("w")) {
+        next.x = startRect.x + dx;
+        next.width = startRect.width - dx;
+      }
+      if (mode.includes("e")) next.width = startRect.width + dx;
+      if (mode.includes("n")) {
+        next.y = startRect.y + dy;
+        next.height = startRect.height - dy;
+      }
+      if (mode.includes("s")) next.height = startRect.height + dy;
+      if (next.width < minSize) {
+        if (mode.includes("w")) next.x -= minSize - next.width;
+        next.width = minSize;
+      }
+      if (next.height < minSize) {
+        if (mode.includes("n")) next.y -= minSize - next.height;
+        next.height = minSize;
+      }
+    }
+    state.screenshot.rect = normalizeScreenshotRect(next);
+    updateScreenshotBoxStyle(box, state.screenshot.rect);
+  };
+  const onUp = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+}
+
+function updateScreenshotBoxStyle(box, rect) {
+  const normalized = normalizeScreenshotRect(rect);
+  box.style.left = `${normalized.x * 100}%`;
+  box.style.top = `${normalized.y * 100}%`;
+  box.style.width = `${normalized.width * 100}%`;
+  box.style.height = `${normalized.height * 100}%`;
+}
+
+function normalizeScreenshotRect(rect) {
+  const minSize = 0.05;
+  const width = Math.min(1, Math.max(minSize, Number(rect?.width) || 0.28));
+  const height = Math.min(1, Math.max(minSize, Number(rect?.height) || 0.42));
+  return {
+    x: Math.min(1 - width, Math.max(0, Number(rect?.x) || 0)),
+    y: Math.min(1 - height, Math.max(0, Number(rect?.y) || 0)),
+    width,
+    height,
+  };
 }
 
 function renderExpressionParameterTray() {
@@ -546,6 +790,72 @@ function renderViewerLightControl() {
       <span class="viewer-light-icon" title="Light">${lightIconSvg()}</span>
       <input type="range" min="0.2" max="1.5" step="0.01" value="${roundForInput(value)}" data-light-intensity />
       <strong>${Math.round(value * 100)}%</strong>
+      <button class="viewer-camera-reset" id="resetModeCamera" title="Reset camera">${iconSvg(Camera, 16)}</button>
+    </div>
+  `;
+}
+
+function renderBlushOverlayPanel() {
+  if (state.mode !== "expression" || state.editing) return "";
+  const selected = getSelectedEmotionPreset();
+  const blush = getActiveBlushSettings();
+  if (!selected || !selected.blush || !blush?.image) return "";
+  if (state.blushPanelMinimized) {
+    return `
+      <button class="blush-mini-button" id="restoreBlushPanel" title="Blush">
+        <span></span>
+      </button>
+    `;
+  }
+  const opacity = getSelectedBlushOpacity();
+  return `
+    <section class="blush-overlay-panel">
+      <div class="blush-overlay-head">
+        <div>
+          <strong>Blush</strong>
+          <span>${escapeHtml(blush.image)}</span>
+        </div>
+        <button class="blush-minimize-button" id="minimizeBlushPanel" title="Minimize">_</button>
+        <button class="blush-remove-button" data-emotion-blush-remove="${escapeHtml(selected.id)}" title="Remove blush">${iconSvg(X, 18)}</button>
+      </div>
+      ${renderBlushControl("y", "Y", 0, 0.1, 0.001, blush.y)}
+      ${renderBlushControl("z", "Z", 0, 0.2, 0.001, blush.z)}
+      ${renderBlushControl("scale", "Scale", 0, 1, 0.001, blush.scale)}
+      ${renderBlushControl("opacity", "Opacity", 0, 1, 0.01, opacity)}
+      <div class="blush-overlay-actions">
+        <button class="secondary-button" data-emotion-blush="${escapeHtml(selected.id)}">Change Image</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderEmotionLinkerTransitionControl() {
+  if (state.mode !== "linker") return "";
+  const value = clampNumber(Number(state.linkerTransitionSeconds), 0, 1, 0.2);
+  return `
+    <div class="linker-transition-control">
+      <span>Transition</span>
+      <input type="range" min="0" max="1" step="0.01" value="${roundForInput(value)}" data-linker-transition />
+      <strong>${value.toFixed(2)}s</strong>
+    </div>
+  `;
+}
+
+function renderBlushControl(key, label, min, max, step, value) {
+  return `
+    <label class="blush-control-row">
+      <span>${escapeHtml(label)}</span>
+      <input type="range" min="${min}" max="${max}" step="${step}" value="${roundForInput(value)}" data-blush-control="${key}" />
+      <input type="number" min="${min}" max="${max}" step="${step}" value="${roundForInput(value)}" data-blush-number="${key}" />
+    </label>
+  `;
+}
+
+function renderFileButtons() {
+  return `
+    <div class="header-file-buttons">
+      <button class="icon-button" id="openFile" title="VRM 열기">${iconSvg(FolderOpen)}</button>
+      <button class="icon-button meta-load-button" id="importMetaSettings" title="Meta 불러오기" ${state.correctionPath ? "" : "disabled"}>.m</button>
     </div>
   `;
 }
@@ -926,6 +1236,7 @@ function renderEmotionPresetCard(preset) {
             : `<input class="emotion-name-input" type="text" value="${escapeHtml(preset.name)}" data-emotion-name="${preset.id}" />`
         }
         <button class="blink-emotion-button ${preset.isDisableBlink ? "active" : ""}" data-emotion-blink="${preset.id}" title="Disable blink">${iconSvg(EyeClosed, 16)}</button>
+        <button class="blush-emotion-button ${preset.blush ? "active" : ""}" data-emotion-blush="${preset.id}" title="Blush image"><span></span></button>
         <button class="duplicate-emotion-button" data-emotion-duplicate="${preset.id}" title="Duplicate">${iconSvg(Copy, 16)}</button>
         ${preset.locked ? `<span class="delete-emotion-placeholder"></span>` : `<button class="delete-emotion-button" data-emotion-delete="${preset.id}" title="Delete">${iconSvg(X, 18)}</button>`}
       </div>
@@ -1142,6 +1453,7 @@ function renderMotionCorrectionPanel() {
   const correction = state.correction;
   const animationNames = getAnimationNames();
   const selectedAnimation = getSelectedAnimationEntry();
+  const selectedAnimationMeta = getAnimationMetaEntry(state.selectedAnimationName);
   const selected = getSelectedCorrection();
   return `
     <div class="panel-header">
@@ -1165,8 +1477,8 @@ function renderMotionCorrectionPanel() {
       </div>
       <div class="correction-card animation-card ${state.correctionAnimationTab === "files" ? "files" : "play"}">
         <div class="animation-card-tabs">
+          <button class="${state.correctionAnimationTab === "play" ? "active" : ""}" data-correction-animation-tab="play">Play & Correction</button>
           <button class="${state.correctionAnimationTab === "files" ? "active" : ""}" data-correction-animation-tab="files">File List</button>
-          <button class="${state.correctionAnimationTab === "play" ? "active" : ""}" data-correction-animation-tab="play">Animation Play</button>
         </div>
         ${renderAnimationFileList(animationNames)}
         <div class="animation-toolbar">
@@ -1175,9 +1487,19 @@ function renderMotionCorrectionPanel() {
           <button class="icon-button compact" id="nextAnimation" ${animationNames.length ? "" : "disabled"} title="Next animation">&gt;</button>
           <button class="icon-button compact danger-compact" id="deleteAnimation" ${selectedAnimation ? "" : "disabled"} title="Delete animation">x</button>
         </div>
-        <label>
-          Ani Name
-          <input type="text" value="${escapeHtml(state.selectedAnimationName ?? "")}" readonly />
+        <div class="animation-name-line">
+          <label>
+            Ani Name
+            <input type="text" value="${escapeHtml(state.selectedAnimationName ?? "")}" readonly />
+          </label>
+        <label class="animation-check-row animation-first-row">
+          <span>is First</span>
+          <input type="checkbox" id="toggleFirstAnimation" ${selectedAnimation?.isFirst ? "checked" : ""} ${selectedAnimation ? "" : "disabled"} />
+        </label>
+        </div>
+        <label class="animation-check-row animation-loop-row">
+          <input type="checkbox" id="toggleSelectedAnimationLoop" ${selectedAnimationMeta.loop ? "checked" : ""} ${selectedAnimation ? "" : "disabled"} />
+          <span>Loop</span>
         </label>
         <div class="animation-description-line">
           <label>
@@ -1188,8 +1510,8 @@ function renderMotionCorrectionPanel() {
         </div>
         <p class="parameter-meta">${escapeHtml(state.animation.fileName ? `${state.animation.fileName}${state.animation.clipName ? ` / ${state.animation.clipName}` : ""}` : state.animation.message)}</p>
         <div class="animation-controls">
-          <button class="secondary-button" id="toggleAnimation" ${animationAction ? "" : "disabled"}>${state.animation.playing ? "Pause" : "Play"}</button>
-          <button class="secondary-button" id="restartAnimation" ${animationAction ? "" : "disabled"}>Restart</button>
+          <button class="animation-action-button" id="toggleAnimation" ${animationAction ? "" : "disabled"} title="${state.animation.playing ? "Pause" : "Play"}">${iconSvg(Play, 20)}</button>
+          <button class="animation-action-button" id="restartAnimation" ${animationAction ? "" : "disabled"} title="Restart">${iconSvg(RotateCcw, 20)}</button>
           <div class="animation-time">${formatAnimationTime(state.animation.time)} / ${formatAnimationTime(state.animation.duration)}</div>
         </div>
         <input class="animation-scrub" type="range" min="0" max="${Math.max(state.animation.duration, 0.001)}" step="0.01" value="${state.animation.time}" data-animation-time ${animationAction ? "" : "disabled"} />
@@ -1309,6 +1631,79 @@ function renderEmotionLinkerCard(animationName) {
           <button class="icon-button emotion-link-play" data-link-play="${escapeHtml(animationName)}" ${currentVrm ? "" : "disabled"} title="Play">${iconSvg(Play, 24)}</button>
         </div>
       </div>
+      ${renderEmotionLinkTimeline(animationName, metaEntry)}
+    </div>
+  `;
+}
+
+function renderEmotionLinkTimeline(animationName, metaEntry) {
+  const duration = getAnimationDuration(animationName, 2);
+  const timeline = normalizeExpressionTimeline(metaEntry.expressionTimeline);
+  const progress =
+    state.selectedAnimationName === animationName && state.animation.duration
+      ? Math.min(100, Math.max(0, (state.animation.time / Math.max(state.animation.duration, 0.001)) * 100))
+      : 0;
+  return `
+    <div class="emotion-link-timeline">
+      <div class="emotion-link-progress">
+        <div class="emotion-link-progress-track">
+          <span class="emotion-link-progress-cursor" data-link-progress="${escapeHtml(animationName)}" style="left: ${progress}%;"></span>
+          ${timeline.map((slot, index) => renderEmotionLinkTimelineMarker(animationName, slot, index, duration)).join("")}
+        </div>
+      </div>
+      <div class="emotion-link-timeline-slots">
+        ${timeline.map((slot, index) => renderEmotionLinkTimelineSlot(animationName, slot, index, duration)).join("")}
+        <button class="emotion-link-add-point" data-link-timeline-add="${escapeHtml(animationName)}">+</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderEmotionLinkTimelineMarker(animationName, slot, index, duration) {
+  const left = Math.min(100, Math.max(0, (slot.time / Math.max(duration, 0.001)) * 100));
+  return `
+    <button class="emotion-link-marker" style="left: ${left}%;" data-link-timeline-jump="${escapeHtml(animationName)}" data-slot-id="${escapeHtml(slot.id)}" title="${slot.time.toFixed(1)}">
+      <span></span>
+      <em>${index + 1}</em>
+    </button>
+  `;
+}
+
+function renderEmotionLinkTimelineSlot(animationName, slot, index, duration) {
+  const preset = findMatchingExpressionPreset(slot.expressionPresetId, slot.expressionPresetName);
+  const rangeSlots = normalizeExpressionRangeSlots(preset?.rangeSlots);
+  const hasRanges = rangeSlots.length > 0;
+  const selectedRangeId = hasRanges && rangeSlots.some((item) => item.id === slot.expressionRangeId) ? slot.expressionRangeId : "";
+  return `
+    <div class="emotion-link-timeline-slot">
+      <button class="emotion-range-number" data-link-timeline-jump="${escapeHtml(animationName)}" data-slot-id="${escapeHtml(slot.id)}">${index + 1}</button>
+      <div class="emotion-link-time-value" data-link-timeline-drag="${escapeHtml(animationName)}" data-slot-id="${escapeHtml(slot.id)}">${slot.time.toFixed(1)}</div>
+      <select data-link-timeline-expression="${escapeHtml(animationName)}" data-slot-id="${escapeHtml(slot.id)}">
+        <option value="">Expression</option>
+        ${state.expressionPresets
+          .map(
+            (item) =>
+              `<option value="${escapeHtml(item.id)}" ${item.id === slot.expressionPresetId ? "selected" : ""}>${escapeHtml(item.name)}</option>`,
+          )
+          .join("")}
+      </select>
+      <select class="emotion-link-range-select" data-link-timeline-range="${escapeHtml(animationName)}" data-slot-id="${escapeHtml(slot.id)}" ${hasRanges ? "" : "disabled"} title="${hasRanges ? "Preset range" : "No ranges"}">
+        <option value="" ${selectedRangeId ? "" : "selected"}>F</option>
+        ${rangeSlots
+          .map(
+            (item, rangeIndex) =>
+              `<option value="${escapeHtml(item.id)}" ${item.id === selectedRangeId ? "selected" : ""}>${rangeIndex + 1}</option>`,
+          )
+          .join("")}
+      </select>
+      <div class="timeline-transition-stepper">
+        <strong>${clampTimelineTransitionSeconds(slot.transitionSeconds).toFixed(1)}</strong>
+        <div class="timeline-transition-buttons">
+          <button data-link-timeline-transition="${escapeHtml(animationName)}" data-slot-id="${escapeHtml(slot.id)}" data-direction="1">+</button>
+          <button data-link-timeline-transition="${escapeHtml(animationName)}" data-slot-id="${escapeHtml(slot.id)}" data-direction="-1">-</button>
+        </div>
+      </div>
+      <button class="delete-emotion-button compact-delete" data-link-timeline-delete="${escapeHtml(animationName)}" data-slot-id="${escapeHtml(slot.id)}">${iconSvg(X, 16)}</button>
     </div>
   `;
 }
@@ -1361,7 +1756,9 @@ function renderTransitionSlot(kind, slot) {
       </select>
       <button class="transition-remove-button" data-transition-remove="${slot.id}" title="Remove">-</button>
       ${
-        kind === "transition"
+        state.transitionViewer.trayMode === "sequence"
+          ? `<button class="transition-use-button transition-use-sequence" data-transition-use="${slot.id}" data-target="sequence" title="Add to sequence">&gt;</button>`
+          : kind === "transition"
           ? `<button class="transition-use-button transition-use-mid" data-transition-use="${slot.id}" data-target="transitionPick" title="Use as transition">&gt;</button>`
           : `<div class="transition-use-stack">
               <button class="transition-use-button transition-use-start" data-transition-use="${slot.id}" data-target="start" title="Use as start">&gt;</button>
@@ -1373,11 +1770,13 @@ function renderTransitionSlot(kind, slot) {
 }
 
 function renderTransitionViewerTray() {
+  if (state.transitionViewer.trayMode === "sequence") return renderTransitionSequenceTray();
   const start = getTransitionPick("start");
   const transition = getTransitionPick("transitionPick");
   const end = getTransitionPick("end");
   return `
     <aside class="transition-preview-tray">
+      ${renderTransitionTrayModeTabs()}
       ${renderTransitionPreviewCard("Start animation", start?.fileName, "start")}
       ${
         transition
@@ -1399,6 +1798,69 @@ function renderTransitionViewerTray() {
         </button>
       </div>
     </aside>
+  `;
+}
+
+function renderTransitionTrayModeTabs() {
+  const active = state.transitionViewer.trayMode === "sequence" ? "sequence" : "transition";
+  return `
+    <div class="transition-tray-tabs">
+      <button class="${active === "transition" ? "active" : ""}" data-transition-tray-mode="transition">Transition</button>
+      <button class="${active === "sequence" ? "active" : ""}" data-transition-tray-mode="sequence">Sequence</button>
+    </div>
+  `;
+}
+
+function renderTransitionSequenceTray() {
+  const sequence = normalizeTransitionSequence(state.transitionViewer.sequence);
+  return `
+    <aside class="transition-preview-tray transition-sequence-tray">
+      ${renderTransitionTrayModeTabs()}
+      <section class="transition-sequence-panel">
+        <div class="transition-sequence-head">
+          <h2>Sequence Play</h2>
+          <span>${sequence.length}/10</span>
+        </div>
+        <div class="transition-sequence-list">
+          ${
+            sequence.length
+              ? sequence.map((slot, index) => renderTransitionSequenceSlot(slot, index)).join("")
+              : `<p class="parameter-meta">왼쪽 슬롯의 &gt; 버튼으로 동작+표정 프리셋을 추가하세요.</p>`
+          }
+        </div>
+      </section>
+      <button class="transition-sequence-play" id="playTransitionSequence" ${sequence.length && currentVrm ? "" : "disabled"}>
+        ${state.transitionViewer.sequencePlaying ? "playing" : "play sequence"}
+      </button>
+    </aside>
+  `;
+}
+
+function renderTransitionSequenceSlot(slot, index) {
+  const isLoop = isAnimationLoop(slot.fileName);
+  const active = state.transitionViewer.sequencePlaying && state.transitionViewer.sequenceActiveIndex === index;
+  return `
+    <section class="transition-sequence-slot ${active ? "playing" : ""}">
+      <div class="transition-sequence-slot-head">
+        <strong>${index + 1}</strong>
+        <span title="${escapeHtml(formatTransitionLinkerOptionLabel(slot.fileName))}">${escapeHtml(formatTransitionLinkerOptionLabel(slot.fileName))}</span>
+        <div class="transition-sequence-move">
+          <button data-sequence-move="${escapeHtml(slot.id)}" data-direction="-1" ${index <= 0 ? "disabled" : ""} title="Move up">▲</button>
+          <button data-sequence-move="${escapeHtml(slot.id)}" data-direction="1" ${index >= normalizeTransitionSequence(state.transitionViewer.sequence).length - 1 ? "disabled" : ""} title="Move down">▼</button>
+        </div>
+        <button class="transition-remove-button" data-sequence-remove="${escapeHtml(slot.id)}" title="Remove">-</button>
+      </div>
+      <div class="transition-sequence-controls">
+        <label class="${isLoop ? "" : "disabled"}">
+          Loop
+          <input type="number" min="1" max="99" step="1" value="${slot.loopCount}" data-sequence-loop-count="${escapeHtml(slot.id)}" ${isLoop ? "" : "disabled"} />
+        </label>
+        <label>
+          Transition
+          <input class="sequence-transition-input" type="number" min="0" max="2" step="0.1" value="${slot.transitionSeconds.toFixed(1)}" data-sequence-transition="${escapeHtml(slot.id)}" data-sequence-transition-drag="${escapeHtml(slot.id)}" />
+        </label>
+      </div>
+    </section>
   `;
 }
 
@@ -1617,6 +2079,30 @@ function renderDropHint() {
 function bindUi() {
   document.querySelector("#openFile")?.addEventListener("click", openFile);
   document.querySelector("#openFileEmpty")?.addEventListener("click", openFile);
+  for (const button of document.querySelectorAll("#importMetaSettings")) {
+    button.addEventListener("click", importMetaSettings);
+  }
+  document.querySelector("#closeMetaImportReport")?.addEventListener("click", () => {
+    state.metaImportReport = null;
+    render();
+  });
+  document.querySelector("#resetModeCamera")?.addEventListener("click", () => applyCameraPresetForMode(state.mode));
+  document.querySelector("#toggleScreenshotRegion")?.addEventListener("click", toggleScreenshotRegion);
+  document.querySelector("#captureScreenshot")?.addEventListener("click", captureScreenshotToClipboard);
+  for (const node of document.querySelectorAll("[data-screenshot-drag]")) {
+    node.addEventListener("pointerdown", (event) => beginScreenshotRectDrag(event, node.dataset.screenshotDrag));
+  }
+  document.querySelector("#minimizeBlushPanel")?.addEventListener("click", () => {
+    state.blushPanelMinimized = true;
+    render();
+  });
+  document.querySelector("#restoreBlushPanel")?.addEventListener("click", () => {
+    state.blushPanelMinimized = false;
+    render();
+  });
+  document.querySelector("[data-linker-transition]")?.addEventListener("input", (event) =>
+    updateLinkerTransitionSeconds(Number(event.target.value)),
+  );
   document.querySelector("#commitAll")?.addEventListener("click", commitAll);
   document.querySelector("#undo")?.addEventListener("click", undo);
   document.querySelector("#redo")?.addEventListener("click", redo);
@@ -1636,20 +2122,24 @@ function bindUi() {
   document.querySelector("#saveSelectedParameters")?.addEventListener("click", saveSelectedExpressionParameters);
   document.querySelector("#toggleParameterFilter")?.addEventListener("click", () => {
     state.parameterFilterOpen = !state.parameterFilterOpen;
-    render();
+    renderPreservingScrollableUi();
   });
   document.querySelector("#addAnimation")?.addEventListener("click", addAnimation);
   document.querySelector("#prevAnimation")?.addEventListener("click", () => stepSelectedAnimation(-1));
   document.querySelector("#nextAnimation")?.addEventListener("click", () => stepSelectedAnimation(1));
   document.querySelector("#deleteAnimation")?.addEventListener("click", deleteSelectedAnimation);
   document.querySelector("#toggleMustWatch")?.addEventListener("click", toggleSelectedAnimationMustWatch);
+  document.querySelector("#toggleFirstAnimation")?.addEventListener("change", (event) => toggleSelectedAnimationFirst(event.target.checked));
+  document.querySelector("#toggleSelectedAnimationLoop")?.addEventListener("change", (event) =>
+    updateAnimationLoop(state.selectedAnimationName, event.target.checked),
+  );
   document.querySelector("#toggleAnimation")?.addEventListener("click", toggleAnimationPlayback);
   document.querySelector("#restartAnimation")?.addEventListener("click", restartAnimation);
   document.querySelector("#resetBoneCorrection")?.addEventListener("click", resetSelectedBoneCorrection);
   for (const button of document.querySelectorAll("[data-correction-animation-tab]")) {
     button.addEventListener("click", () => {
       state.correctionAnimationTab = button.dataset.correctionAnimationTab === "files" ? "files" : "play";
-      render();
+      renderPreservingScrollableUi();
     });
   }
   for (const button of document.querySelectorAll("[data-animation-file-select]")) {
@@ -1689,6 +2179,42 @@ function bindUi() {
     );
   }
 
+  for (const button of document.querySelectorAll("[data-link-timeline-add]")) {
+    button.addEventListener("click", () => addEmotionLinkTimelineSlot(button.dataset.linkTimelineAdd));
+  }
+
+  for (const button of document.querySelectorAll("[data-link-timeline-delete]")) {
+    button.addEventListener("click", () => deleteEmotionLinkTimelineSlot(button.dataset.linkTimelineDelete, button.dataset.slotId));
+  }
+
+  for (const select of document.querySelectorAll("[data-link-timeline-expression]")) {
+    select.addEventListener("change", () =>
+      updateEmotionLinkTimelineExpression(select.dataset.linkTimelineExpression, select.dataset.slotId, select.value),
+    );
+  }
+
+  for (const select of document.querySelectorAll("[data-link-timeline-range]")) {
+    select.addEventListener("change", () =>
+      updateEmotionLinkTimelineRange(select.dataset.linkTimelineRange, select.dataset.slotId, select.value),
+    );
+  }
+
+  for (const button of document.querySelectorAll("[data-link-timeline-transition]")) {
+    button.addEventListener("click", () =>
+      nudgeEmotionLinkTimelineTransition(button.dataset.linkTimelineTransition, button.dataset.slotId, Number(button.dataset.direction)),
+    );
+  }
+
+  for (const node of document.querySelectorAll("[data-link-timeline-drag]")) {
+    node.addEventListener("pointerdown", (event) =>
+      beginEmotionLinkTimelineDrag(event, node.dataset.linkTimelineDrag, node.dataset.slotId),
+    );
+  }
+
+  for (const button of document.querySelectorAll("[data-link-timeline-jump]")) {
+    button.addEventListener("click", () => previewEmotionLinkTimelineSlot(button.dataset.linkTimelineJump, button.dataset.slotId));
+  }
+
   for (const button of document.querySelectorAll("[data-transition-add]")) {
     button.addEventListener("click", () => addTransitionViewerSlot(button.dataset.transitionAdd));
   }
@@ -1703,6 +2229,32 @@ function bindUi() {
 
   for (const button of document.querySelectorAll("[data-transition-use]")) {
     button.addEventListener("click", () => useTransitionViewerSlot(button.dataset.transitionUse, button.dataset.target));
+  }
+
+  for (const button of document.querySelectorAll("[data-transition-tray-mode]")) {
+    button.addEventListener("click", () => setTransitionTrayMode(button.dataset.transitionTrayMode));
+  }
+
+  for (const button of document.querySelectorAll("[data-sequence-remove]")) {
+    button.addEventListener("click", () => removeTransitionSequenceSlot(button.dataset.sequenceRemove));
+  }
+
+  for (const button of document.querySelectorAll("[data-sequence-move]")) {
+    button.addEventListener("click", () => moveTransitionSequenceSlot(button.dataset.sequenceMove, Number(button.dataset.direction)));
+  }
+
+  for (const input of document.querySelectorAll("[data-sequence-loop-count]")) {
+    input.addEventListener("change", () => updateTransitionSequenceSlot(input.dataset.sequenceLoopCount, { loopCount: Number(input.value) }));
+  }
+
+  for (const input of document.querySelectorAll("[data-sequence-transition]")) {
+    input.addEventListener("change", () => updateTransitionSequenceSlot(input.dataset.sequenceTransition, { transitionSeconds: Number(input.value) }));
+  }
+
+  for (const input of document.querySelectorAll("[data-sequence-transition-drag]")) {
+    input.addEventListener("pointerdown", (event) =>
+      beginTransitionSequenceValueDrag(event, input.dataset.sequenceTransitionDrag),
+    );
   }
 
   for (const input of document.querySelectorAll("[data-transition-blend]")) {
@@ -1724,6 +2276,7 @@ function bindUi() {
   document.querySelector("[data-clear-transition-pick]")?.addEventListener("click", clearTransitionViewerPick);
   document.querySelector("#swapTransitionStartEnd")?.addEventListener("click", swapTransitionViewerStartEnd);
   document.querySelector("#playTransitionViewer")?.addEventListener("click", playTransitionViewer);
+  document.querySelector("#playTransitionSequence")?.addEventListener("click", playTransitionSequence);
   document.querySelector("#sourceFaceMesh")?.addEventListener("change", (event) => {
     state.transfer.sourceMesh = Number(event.target.value);
     state.transfer.report = null;
@@ -1808,6 +2361,31 @@ function bindUi() {
 
   for (const input of document.querySelectorAll("[data-camera-setting-number]")) {
     input.addEventListener("input", () => updateCameraSetting(input.dataset.cameraSettingNumber, Number(input.value), input));
+  }
+
+  for (const button of document.querySelectorAll("[data-emotion-blush]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      state.blushPanelMinimized = false;
+      addOrChangeEmotionBlush(button.dataset.emotionBlush, {
+        pickImage: Boolean(button.closest(".blush-overlay-panel")),
+      });
+    });
+  }
+
+  for (const button of document.querySelectorAll("[data-emotion-blush-remove]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      removeEmotionBlush(button.dataset.emotionBlushRemove);
+    });
+  }
+
+  for (const input of document.querySelectorAll("[data-blush-control]")) {
+    input.addEventListener("input", () => updateSelectedBlushValue(input.dataset.blushControl, Number(input.value), input));
+  }
+
+  for (const input of document.querySelectorAll("[data-blush-number]")) {
+    input.addEventListener("input", () => updateSelectedBlushValue(input.dataset.blushNumber, Number(input.value), input));
   }
 
   for (const card of document.querySelectorAll("[data-emotion-select]")) {
@@ -2087,6 +2665,7 @@ function duplicateEmotionPreset(id) {
     locked: false,
     isDisableBlink: Boolean(source.isDisableBlink),
     parameters: normalizeExpressionParameterValues(source.parameters),
+    blush: source.blush ? normalizePresetBlush(source.blush) : null,
     rangeSlots: normalizeExpressionRangeSlots(source.rangeSlots).map((slot, index) => ({
       id: `range-${Date.now()}-${index}`,
       threshold: slot.threshold,
@@ -2096,6 +2675,71 @@ function duplicateEmotionPreset(id) {
   state.expressionPresets.splice(sourceIndex + 1, 0, copy);
   markExpressionMetaDirty();
   renderPreservingExpressionScroll();
+}
+
+async function addOrChangeEmotionBlush(id, options = {}) {
+  const preset = state.expressionPresets.find((item) => item.id === id);
+  if (!preset || preset.locked) return;
+  if (preset.blush && !options.pickImage) {
+    state.selectedExpressionPresetId = id;
+    state.selectedExpressionRangeId = null;
+    updateBlushOverlayForSelected();
+    renderPreservingExpressionScroll();
+    return;
+  }
+  const shouldPickImage = options.pickImage || !state.correction.blush?.image;
+  if (shouldPickImage) {
+    const result = await window.vrmFiles.storeImage();
+    if (!result) return;
+    state.correction.blush = normalizeBlushSettings({
+      ...(state.correction.blush ?? {}),
+      image: result.name,
+    });
+  }
+  preset.blush = normalizePresetBlush(preset.blush);
+  state.selectedExpressionPresetId = id;
+  state.selectedExpressionRangeId = null;
+  markExpressionMetaDirty();
+  updateBlushOverlayForSelected();
+  renderPreservingExpressionScroll();
+}
+
+function removeEmotionBlush(id) {
+  const preset = state.expressionPresets.find((item) => item.id === id);
+  if (!preset || preset.locked) return;
+  preset.blush = null;
+  preset.rangeSlots = normalizeExpressionRangeSlots(preset.rangeSlots).map((slot) => {
+    const next = { ...slot };
+    delete next.blushOpacity;
+    return next;
+  });
+  markExpressionMetaDirty();
+  updateBlushOverlayForSelected();
+  renderPreservingExpressionScroll();
+}
+
+function updateSelectedBlushValue(key, value, source) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected || !selected.blush || selected.locked || !Number.isFinite(value)) return;
+  if (key === "opacity") {
+    setSelectedBlushOpacity(value);
+  } else {
+    state.correction.blush = normalizeBlushSettings({
+      ...(state.correction.blush ?? {}),
+      [key]: value,
+    });
+  }
+  syncBlushControls(key, key === "opacity" ? getSelectedBlushOpacity() : state.correction.blush?.[key], source);
+  markExpressionMetaDirty();
+  updateBlushOverlayForSelected();
+}
+
+function syncBlushControls(key, value, source) {
+  const formatted = roundForInput(value);
+  for (const input of document.querySelectorAll(`[data-blush-control="${key}"], [data-blush-number="${key}"]`)) {
+    if (input === source) continue;
+    input.value = formatted;
+  }
 }
 
 function addEmotionRangeSlot(presetId) {
@@ -2456,6 +3100,32 @@ function renderPreservingEmotionLinkerScroll() {
   if (nextScroller) nextScroller.scrollTop = scrollTop;
 }
 
+function renderPreservingScrollableUi() {
+  const selectors = [
+    ".expression-list",
+    ".parameter-list",
+    ".transfer-panel",
+    ".correction-panel",
+    ".expression-editor-panel",
+    ".expression-parameter-tray",
+    ".emotion-linker-panel",
+    ".transition-viewer-panel",
+    ".transition-preview-tray",
+    ".parameter-filter-popup",
+  ];
+  const positions = selectors.map((selector) => {
+    const element = document.querySelector(selector);
+    return { selector, scrollTop: element?.scrollTop ?? 0, scrollLeft: element?.scrollLeft ?? 0 };
+  });
+  render();
+  for (const position of positions) {
+    const element = document.querySelector(position.selector);
+    if (!element) continue;
+    element.scrollTop = position.scrollTop;
+    element.scrollLeft = position.scrollLeft;
+  }
+}
+
 function syncEmotionValueControls(id, value, source) {
   const formatted = formatEmotionValue(value);
   for (const input of document.querySelectorAll(`[data-emotion-slider="${id}"], [data-emotion-value="${id}"]`)) {
@@ -2477,15 +3147,100 @@ function applySelectedEmotionPreset() {
   if (!selected) return;
   state.expressionDecay = null;
   applyRorrParameterValues(getExpressionParametersAtValue(selected, selected.value, true), 1);
+  updateBlushOverlayForSelected();
+}
+
+function updateBlushOverlayForSelected() {
+  const selected = getSelectedEmotionPreset();
+  const blush = selected?.blush ? getActiveBlushSettings() : null;
+  if (!currentVrm || !blush?.image) {
+    clearBlushOverlay();
+    return;
+  }
+  void ensureBlushOverlay(blush).then(() => applyBlushOverlaySettings(blush, selected.value));
+}
+
+async function ensureBlushOverlay(blush) {
+  const head = getRawBoneNode("head");
+  if (!head) {
+    clearBlushOverlay();
+    return;
+  }
+  if (blushOverlay?.image === blush.image && blushOverlay.mesh?.parent === head) return;
+  clearBlushOverlay();
+  let result;
+  try {
+    result = await window.vrmFiles.openStoredImage(blush.image);
+  } catch {
+    clearBlushOverlay();
+    return;
+  }
+  if (!result || getActiveBlushSettings()?.image !== blush.image || !getSelectedEmotionPreset()?.blush) return;
+  const url = URL.createObjectURL(new Blob([new Uint8Array(result.data)], { type: getImageMimeType(result.name) }));
+  let texture;
+  try {
+    texture = await new THREE.TextureLoader().loadAsync(url);
+  } catch {
+    URL.revokeObjectURL(url);
+    clearBlushOverlay();
+    return;
+  }
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const imageWidth = texture.image?.width || 1;
+  const imageHeight = texture.image?.height || 1;
+  const aspect = imageWidth / Math.max(imageHeight, 1);
+  const geometry = new THREE.PlaneGeometry(aspect, 1);
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = "ExpressionEditor_BlushOverlay";
+  mesh.renderOrder = 999;
+  head.add(mesh);
+  blushOverlay = { mesh, material, texture, geometry, url, image: blush.image };
+}
+
+function applyBlushOverlaySettings(blush, weight = 1) {
+  if (!blushOverlay?.mesh || !blushOverlay?.material) return;
+  const normalized = normalizeBlushSettings(blush);
+  if (!normalized) return;
+  blushOverlay.mesh.position.set(0, normalized.y, normalized.z);
+  blushOverlay.mesh.rotation.set(0, 0, 0);
+  blushOverlay.mesh.scale.setScalar(normalized.scale);
+  blushOverlay.material.opacity = getBlushOpacityAtValue(getSelectedEmotionPreset(), weight);
+  blushOverlay.mesh.visible = blushOverlay.material.opacity > 0.001;
+}
+
+function clearBlushOverlay() {
+  if (!blushOverlay) return;
+  blushOverlay.mesh?.parent?.remove(blushOverlay.mesh);
+  blushOverlay.geometry?.dispose?.();
+  blushOverlay.material?.dispose?.();
+  blushOverlay.texture?.dispose?.();
+  if (blushOverlay.url) URL.revokeObjectURL(blushOverlay.url);
+  blushOverlay = null;
+}
+
+function getImageMimeType(fileName) {
+  const lower = String(fileName ?? "").toLowerCase();
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  return "image/png";
 }
 
 function transitionToSelectedEmotionPreset(duration = 0.2) {
   const selected = getSelectedEmotionPreset();
   if (!selected) {
     startExpressionTransition({}, 0, duration);
+    clearBlushOverlay();
     return;
   }
   startExpressionTransition(getExpressionParametersAtValue(selected, selected.value, true), 1, duration);
+  updateBlushOverlayForSelected();
 }
 
 function getExpressionParametersAtValue(preset, value, includeDraft = false, excludeRangeSlotId = null, easeSegment = false) {
@@ -2537,6 +3292,11 @@ function clampEmotionValue(value) {
   return Math.min(1, Math.max(0, Math.round(value * 100) / 100));
 }
 
+function clampNumber(value, min, max, fallback) {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
 function normalizeDecaySeconds(value) {
   const next = Number(value);
   if (!Number.isFinite(next)) return 6;
@@ -2572,6 +3332,171 @@ function bindPanelWheel(target, scroller) {
       scroller.scrollLeft += event.deltaX;
     },
     { passive: false, capture: true },
+  );
+}
+
+async function importMetaSettings() {
+  if (!state.correctionPath) return;
+  const result = await window.vrmFiles.openMeta();
+  if (!result) return;
+  let source;
+  try {
+    source = normalizeCorrectionJson(JSON.parse(dec.decode(new Uint8Array(result.data))));
+  } catch (error) {
+    state.metaImportReport = {
+      title: "Import failed",
+      summary: "meta 파일을 읽지 못했습니다.",
+      messages: [String(error?.message ?? error)],
+      applied: false,
+    };
+    renderPreservingScrollableUi();
+    return;
+  }
+
+  const report =
+    state.mode === "correction"
+      ? importCorrectionMeta(source)
+      : state.mode === "expression"
+        ? importExpressionMeta(source)
+        : state.mode === "linker" || state.mode === "transitionViewer"
+          ? importLinkerMeta(source)
+          : {
+              summary: "현재 모드에는 가져올 캐릭터 meta 설정이 없습니다.",
+              messages: [],
+              applied: false,
+            };
+
+  state.metaImportReport = {
+    ...report,
+    title: `${fileNameFromPath(result.filePath)} 가져오기`,
+  };
+  if (report.applied) {
+    state.correctionDirty = true;
+    if (state.mode === "expression") state.expressionDirty = true;
+    loadSelectedExpressionParameterDraft();
+    applySelectedEmotionPreset();
+    applyMotionCorrectionPreview();
+    syncSaveMetaButton();
+  }
+  renderPreservingScrollableUi();
+}
+
+function importCorrectionMeta(source) {
+  const messages = [];
+  let animationCount = 0;
+  let boneCount = 0;
+  for (const [animationName, sourceEntry] of Object.entries(source.animations ?? {})) {
+    const fileName = fileNameFromPath(animationName);
+    if (!state.animationCatalog[fileName]) {
+      messages.push(`${fileName} 없음`);
+      continue;
+    }
+    const targetEntry = ensureAnimationMetaEntry(fileName);
+    if (!targetEntry) {
+      messages.push(`${fileName} 없음`);
+      continue;
+    }
+    targetEntry.loop = Boolean(sourceEntry.loop);
+    const nextCorrections = {};
+    for (const [boneName, correction] of Object.entries(sourceEntry.corrections ?? {})) {
+      if (!HUMAN_BONE_SET.has(boneName) || !getRawBoneNode(boneName)) {
+        messages.push(`${boneName} 본 없음`);
+        continue;
+      }
+      nextCorrections[boneName] = normalizeBoneCorrection(correction);
+      pruneCorrectionObject(nextCorrections, boneName);
+      if (nextCorrections[boneName]) boneCount += 1;
+    }
+    targetEntry.corrections = nextCorrections;
+    animationCount += 1;
+  }
+  return {
+    summary: `${animationCount}개 애니메이션, ${boneCount}개 본 보정값 적용`,
+    messages,
+    applied: animationCount > 0,
+  };
+}
+
+function importLinkerMeta(source) {
+  const messages = [];
+  let linkCount = 0;
+  for (const [animationName, sourceEntry] of Object.entries(source.animations ?? {})) {
+    const fileName = fileNameFromPath(animationName);
+    if (!state.animationCatalog[fileName]) {
+      messages.push(`${fileName} 없음`);
+      continue;
+    }
+    const targetEntry = ensureAnimationMetaEntry(fileName);
+    if (!targetEntry) {
+      messages.push(`${fileName} 없음`);
+      continue;
+    }
+    targetEntry.loop = Boolean(sourceEntry.loop);
+    const preset = findMatchingExpressionPreset(sourceEntry.expressionPresetId, sourceEntry.expressionPresetName);
+    if (sourceEntry.expressionPresetId || sourceEntry.expressionPresetName) {
+      if (preset) {
+        targetEntry.expressionPresetId = preset.id;
+        targetEntry.expressionPresetName = preset.name;
+        linkCount += 1;
+      } else {
+        delete targetEntry.expressionPresetId;
+        delete targetEntry.expressionPresetName;
+        messages.push(`${sourceEntry.expressionPresetName || sourceEntry.expressionPresetId} 표정 없음`);
+      }
+    }
+  }
+  return {
+    summary: `${linkCount}개 애니메이션-표정 연결 적용`,
+    messages,
+    applied: linkCount > 0,
+  };
+}
+
+function importExpressionMeta(source) {
+  const messages = [];
+  const imported = normalizeExpressionPresets(source.expressionPresets);
+  if (!imported.length) {
+    return { summary: "가져올 표정 프리셋이 없습니다.", messages, applied: false };
+  }
+  if (source.blush?.image) state.correction.blush = normalizeBlushSettings(source.blush);
+  state.expressionPresets = imported.map((preset) => {
+    const next = cloneJson(preset);
+    next.value = 0;
+    next.parameters = filterImportedExpressionParameters(next.parameters, state.currentParameterIds, messages);
+    next.rangeSlots = next.rangeSlots.map((slot) => ({
+      ...slot,
+      parameters: filterImportedExpressionParameters(slot.parameters, state.currentParameterIds, messages),
+    }));
+    return next;
+  });
+  state.selectedExpressionPresetId = state.expressionPresets[0]?.id ?? null;
+  state.selectedExpressionRangeId = null;
+  return {
+    summary: `${state.expressionPresets.length}개 표정 프리셋 적용`,
+    messages: [...new Set(messages)],
+    applied: state.expressionPresets.length > 0,
+  };
+}
+
+function filterImportedExpressionParameters(parameters, parameterIds, messages) {
+  const next = {};
+  for (const [name, value] of Object.entries(parameters ?? {})) {
+    if (!parameterIds.has(name)) {
+      messages.push(`${name} 파라미터 없음`);
+      continue;
+    }
+    next[name] = clampEmotionValue(Number(value));
+  }
+  return next;
+}
+
+function findMatchingExpressionPreset(id, name) {
+  const idText = String(id ?? "");
+  const nameText = String(name ?? "");
+  return (
+    state.expressionPresets.find((preset) => preset.id === idText) ??
+    state.expressionPresets.find((preset) => preset.name === nameText) ??
+    null
   );
 }
 
@@ -2656,7 +3581,7 @@ function addTransitionViewerSlot(kind) {
     fileName: "",
   });
   syncTransitionViewerConfigMemory();
-  render();
+  renderPreservingScrollableUi();
 }
 
 function findTransitionViewerSlot(slotId) {
@@ -2675,7 +3600,7 @@ function removeTransitionViewerSlot(slotId) {
     if (state.transitionViewer[key]?.id === slotId) state.transitionViewer[key] = null;
   }
   syncTransitionViewerConfigMemory();
-  render();
+  renderPreservingScrollableUi();
 }
 
 function updateTransitionViewerSlot(slotId, fileName) {
@@ -2690,12 +3615,16 @@ function updateTransitionViewerSlot(slotId, fileName) {
     }
   }
   syncTransitionViewerConfigMemory();
-  render();
+  renderPreservingScrollableUi();
 }
 
 function useTransitionViewerSlot(slotId, target) {
   const found = findTransitionViewerSlot(slotId);
   if (!found || !found.slot.fileName) return;
+  if (target === "sequence") {
+    addTransitionSequencePick(found.slot.fileName);
+    return;
+  }
   if (!["start", "transitionPick", "end"].includes(target)) return;
   state.transitionViewer[target] = {
     id: found.slot.id,
@@ -2703,7 +3632,95 @@ function useTransitionViewerSlot(slotId, target) {
     fileName: found.slot.fileName,
   };
   syncTransitionViewerConfigMemory();
-  render();
+  renderPreservingScrollableUi();
+}
+
+function setTransitionTrayMode(mode) {
+  state.transitionViewer.trayMode = mode === "sequence" ? "sequence" : "transition";
+  syncTransitionViewerConfigMemory();
+  renderPreservingScrollableUi();
+}
+
+function addTransitionSequencePick(fileName) {
+  if (!fileName) return;
+  const sequence = normalizeTransitionSequence(state.transitionViewer.sequence);
+  if (sequence.length >= 10) return;
+  sequence.push({
+    id: `sequence-slot-${Date.now()}-${sequence.length}`,
+    fileName,
+    loopCount: 1,
+    transitionSeconds: 0.2,
+  });
+  state.transitionViewer.sequence = sequence;
+  syncTransitionViewerConfigMemory();
+  renderPreservingScrollableUi();
+}
+
+function removeTransitionSequenceSlot(slotId) {
+  state.transitionViewer.sequence = normalizeTransitionSequence(state.transitionViewer.sequence).filter((slot) => slot.id !== slotId);
+  syncTransitionViewerConfigMemory();
+  renderPreservingScrollableUi();
+}
+
+function updateTransitionSequenceSlot(slotId, patch) {
+  state.transitionViewer.sequence = normalizeTransitionSequence(state.transitionViewer.sequence).map((slot) =>
+    slot.id === slotId
+      ? normalizeTransitionSequence([
+          {
+            ...slot,
+            ...patch,
+          },
+        ])[0] ?? slot
+      : slot,
+  );
+  syncTransitionViewerConfigMemory();
+  renderPreservingScrollableUi();
+}
+
+function moveTransitionSequenceSlot(slotId, direction) {
+  const sequence = normalizeTransitionSequence(state.transitionViewer.sequence);
+  const index = sequence.findIndex((slot) => slot.id === slotId);
+  const nextIndex = index + Math.sign(direction);
+  if (index < 0 || nextIndex < 0 || nextIndex >= sequence.length) return;
+  const next = sequence.slice();
+  [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+  state.transitionViewer.sequence = next;
+  syncTransitionViewerConfigMemory();
+  renderPreservingScrollableUi();
+}
+
+function beginTransitionSequenceValueDrag(event, slotId) {
+  if (event.button !== 0) return;
+  const input = event.currentTarget;
+  const sequence = normalizeTransitionSequence(state.transitionViewer.sequence);
+  const slot = sequence.find((item) => item.id === slotId);
+  if (!slot) return;
+  const startX = event.clientX;
+  const startValue = slot.transitionSeconds;
+  let dragging = false;
+  let latestValue = startValue;
+  const onMove = (moveEvent) => {
+    const delta = moveEvent.clientX - startX;
+    if (!dragging && Math.abs(delta) < 3) return;
+    dragging = true;
+    moveEvent.preventDefault();
+    latestValue = clampSequenceTransitionSeconds(startValue + delta / 80);
+    input.value = latestValue.toFixed(1);
+  };
+  const onUp = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    if (dragging) {
+      updateTransitionSequenceSlot(slotId, { transitionSeconds: latestValue });
+    }
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp, { once: true });
+}
+
+function clampSequenceTransitionSeconds(value) {
+  if (!Number.isFinite(value)) return 0.2;
+  return Math.min(2, Math.max(0, Math.round(value * 10) / 10));
 }
 
 function getTransitionPick(key) {
@@ -2714,7 +3731,7 @@ function getTransitionPick(key) {
 function clearTransitionViewerPick() {
   state.transitionViewer.transitionPick = null;
   syncTransitionViewerConfigMemory();
-  render();
+  renderPreservingScrollableUi();
 }
 
 function swapTransitionViewerStartEnd() {
@@ -2726,7 +3743,7 @@ function swapTransitionViewerStartEnd() {
   state.transitionViewer.timelineProgress = 0;
   stopTransitionTimeline();
   syncTransitionViewerConfigMemory();
-  render();
+  renderPreservingScrollableUi();
 }
 
 function updateTransitionBlend(key, value) {
@@ -3022,6 +4039,51 @@ async function playTransitionViewer() {
   }
 }
 
+async function playTransitionSequence() {
+  const sequence = normalizeTransitionSequence(state.transitionViewer.sequence);
+  if (!sequence.length || !currentVrm) return;
+  const runId = Date.now();
+  state.transitionViewer.runId = runId;
+  state.transitionViewer.playing = false;
+  state.transitionViewer.sequencePlaying = true;
+  state.transitionViewer.sequenceActiveIndex = -1;
+  state.transitionViewer.timelineProgress = 0;
+  stopTransitionTimeline();
+  render();
+  try {
+    let previousAction = false;
+    for (let index = 0; index < sequence.length; index += 1) {
+      const slot = sequence[index];
+      state.transitionViewer.sequenceActiveIndex = index;
+      renderPreservingScrollableUi();
+      const loop = isAnimationLoop(slot.fileName);
+      const transitionSeconds = previousAction ? slot.transitionSeconds : 0;
+      await playTransitionViewerStep(slot.fileName, loop, transitionSeconds, {
+        preserveCurrentAction: previousAction,
+      });
+      previousAction = true;
+      if (!isCurrentTransitionRun(runId)) return;
+      const next = sequence[index + 1];
+      const duration = getTransitionSequenceSlotDuration(slot);
+      const nextTransition = next ? Math.min(duration, next.transitionSeconds) : 0;
+      await sleep(Math.max(0, duration - nextTransition) * 1000);
+      if (!isCurrentTransitionRun(runId)) return;
+    }
+  } finally {
+    if (isCurrentTransitionRun(runId)) {
+      state.transitionViewer.sequencePlaying = false;
+      state.transitionViewer.sequenceActiveIndex = -1;
+      state.transitionViewer.playing = false;
+      render();
+    }
+  }
+}
+
+function getTransitionSequenceSlotDuration(slot) {
+  const duration = getAnimationDuration(slot.fileName, 2);
+  return isAnimationLoop(slot.fileName) ? Math.max(0.1, duration * Math.max(1, slot.loopCount)) : Math.max(0.1, duration);
+}
+
 async function playTransitionViewerStep(fileName, loop, transitionSeconds, options = {}) {
   state.selectedAnimationName = fileName;
   applyTransitionViewerLinkedExpression(fileName);
@@ -3034,8 +4096,15 @@ async function playTransitionViewerStep(fileName, loop, transitionSeconds, optio
 
 function applyTransitionViewerLinkedExpression(fileName) {
   const entry = getAnimationMetaEntry(fileName);
-  if (entry.expressionPresetId) {
-    applyLinkedExpressionPreset(entry.expressionPresetId);
+  state.expressionDecay = null;
+  startActiveLinkTimeline(fileName);
+  const active = state.activeLinkTimeline;
+  if (active?.timeline?.length) {
+    applyInitialLinkedExpression(entry);
+  } else if (entry.expressionPresetId) {
+    applyLinkedExpressionPreset(entry.expressionPresetId, state.linkerTransitionSeconds);
+  } else {
+    state.activeLinkTimeline = null;
   }
 }
 
@@ -3119,7 +4188,7 @@ async function stepSelectedAnimation(direction) {
   state.selectedAnimationName = names[nextIndex];
   await loadSelectedAnimation();
   applyMotionCorrectionPreview();
-  render();
+  renderPreservingScrollableUi();
 }
 
 async function selectAnimationFromFileList(animationName) {
@@ -3127,7 +4196,7 @@ async function selectAnimationFromFileList(animationName) {
   state.selectedAnimationName = animationName;
   await loadSelectedAnimation();
   applyMotionCorrectionPreview();
-  render();
+  renderPreservingScrollableUi();
 }
 
 async function deleteSelectedAnimation() {
@@ -3144,7 +4213,7 @@ async function deleteSelectedAnimation() {
   if (hadCharacterCorrection && state.correctionPath) state.correctionDirty = true;
   await loadSelectedAnimation();
   applyMotionCorrectionPreview();
-  render();
+  renderPreservingScrollableUi();
 }
 
 function toggleSelectedAnimationMustWatch() {
@@ -3152,7 +4221,16 @@ function toggleSelectedAnimationMustWatch() {
   if (!entry) return;
   entry.mustWatchFull = !entry.mustWatchFull;
   window.vrmFiles.updateAnimationInfo(entry.fileName, { mustWatchFull: entry.mustWatchFull });
-  render();
+  renderPreservingScrollableUi();
+}
+
+async function toggleSelectedAnimationFirst(checked) {
+  const entry = getSelectedAnimationEntry();
+  if (!entry) return;
+  const updated = await window.vrmFiles.updateAnimationInfo(entry.fileName, { isFirst: Boolean(checked) });
+  for (const animation of Object.values(state.animationCatalog)) animation.isFirst = false;
+  entry.isFirst = Boolean(updated?.isFirst);
+  renderPreservingScrollableUi();
 }
 
 function updateSelectedAnimationDescription(value) {
@@ -3202,6 +4280,157 @@ function nudgeAnimationDecaySeconds(animationName, direction) {
   renderPreservingEmotionLinkerScroll();
 }
 
+function getEmotionLinkTimeline(animationName) {
+  return normalizeExpressionTimeline(getAnimationMetaEntry(animationName).expressionTimeline);
+}
+
+function setEmotionLinkTimeline(animationName, timeline) {
+  const entry = ensureAnimationMetaEntry(animationName);
+  if (!entry) return;
+  const normalized = normalizeExpressionTimeline(timeline);
+  if (normalized.length) entry.expressionTimeline = normalized;
+  else delete entry.expressionTimeline;
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+}
+
+function addEmotionLinkTimelineSlot(animationName) {
+  const entry = ensureAnimationMetaEntry(animationName);
+  if (!entry) return;
+  const timeline = getEmotionLinkTimeline(animationName);
+  const duration = getAnimationDuration(animationName, 2);
+  const presetId = entry.expressionPresetId || state.expressionPresets[0]?.id || "";
+  const preset = state.expressionPresets.find((item) => item.id === presetId);
+  const time = findNewTimelineTime(timeline, duration);
+  timeline.push({
+    id: `link-point-${Date.now()}-${timeline.length}`,
+    time,
+    expressionPresetId: presetId,
+    expressionPresetName: preset?.name ?? "",
+    expressionRangeId: "",
+    expressionValue: 1,
+    transitionSeconds: 0.2,
+  });
+  setEmotionLinkTimeline(animationName, timeline);
+  renderPreservingEmotionLinkerScroll();
+}
+
+function findNewTimelineTime(timeline, duration) {
+  const maxTime = Math.max(0.01, duration);
+  const points = [0, ...timeline.map((slot) => slot.time), maxTime].sort((a, b) => a - b);
+  let bestStart = 0;
+  let bestEnd = maxTime;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    if (points[index + 1] - points[index] > bestEnd - bestStart) {
+      bestStart = points[index];
+      bestEnd = points[index + 1];
+    }
+  }
+  return Math.round(((bestStart + bestEnd) / 2) * 10) / 10;
+}
+
+function deleteEmotionLinkTimelineSlot(animationName, slotId) {
+  setEmotionLinkTimeline(
+    animationName,
+    getEmotionLinkTimeline(animationName).filter((slot) => slot.id !== slotId),
+  );
+  renderPreservingEmotionLinkerScroll();
+}
+
+function updateEmotionLinkTimelineExpression(animationName, slotId, presetId) {
+  const preset = state.expressionPresets.find((item) => item.id === presetId);
+  const timeline = getEmotionLinkTimeline(animationName).map((slot) =>
+    slot.id === slotId
+      ? {
+          ...slot,
+          expressionPresetId: preset?.id ?? "",
+          expressionPresetName: preset?.name ?? "",
+          expressionRangeId: "",
+          expressionValue: 1,
+        }
+      : slot,
+  );
+  setEmotionLinkTimeline(animationName, timeline);
+  renderPreservingEmotionLinkerScroll();
+}
+
+function updateEmotionLinkTimelineRange(animationName, slotId, rangeId) {
+  const timeline = getEmotionLinkTimeline(animationName).map((slot) => {
+    if (slot.id !== slotId) return slot;
+    const preset = findMatchingExpressionPreset(slot.expressionPresetId, slot.expressionPresetName);
+    const rangeSlots = normalizeExpressionRangeSlots(preset?.rangeSlots);
+    const rangeSlot = rangeSlots.find((item) => item.id === rangeId);
+    return {
+      ...slot,
+      expressionRangeId: rangeSlot?.id ?? "",
+      expressionValue: rangeSlot ? clampEmotionValue(rangeSlot.threshold) : 1,
+    };
+  });
+  setEmotionLinkTimeline(animationName, timeline);
+  renderPreservingEmotionLinkerScroll();
+}
+
+function nudgeEmotionLinkTimelineTransition(animationName, slotId, direction) {
+  const timeline = getEmotionLinkTimeline(animationName).map((slot) =>
+    slot.id === slotId
+      ? {
+          ...slot,
+          transitionSeconds: clampTimelineTransitionSeconds(slot.transitionSeconds + direction * 0.1),
+        }
+      : slot,
+  );
+  setEmotionLinkTimeline(animationName, timeline);
+  renderPreservingEmotionLinkerScroll();
+}
+
+function beginEmotionLinkTimelineDrag(event, animationName, slotId) {
+  event.preventDefault();
+  event.stopPropagation();
+  const duration = getAnimationDuration(animationName, 2);
+  const timeline = getEmotionLinkTimeline(animationName);
+  const slot = timeline.find((item) => item.id === slotId);
+  if (!slot) return;
+  const startX = event.clientX;
+  const startTime = slot.time;
+  const onMove = (moveEvent) => {
+    const delta = ((moveEvent.clientX - startX) / 260) * duration;
+    const nextTime = Math.min(duration, Math.max(0, Math.round((startTime + delta) * 10) / 10));
+    setEmotionLinkTimeline(
+      animationName,
+      getEmotionLinkTimeline(animationName).map((item) => (item.id === slotId ? { ...item, time: nextTime } : item)),
+    );
+    updateEmotionLinkTimelineTimeUi(animationName, slotId, nextTime, duration);
+  };
+  const onUp = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    renderPreservingEmotionLinkerScroll();
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+}
+
+function updateEmotionLinkTimelineTimeUi(animationName, slotId, time, duration) {
+  const value = document.querySelector(`[data-link-timeline-drag="${cssEscape(animationName)}"][data-slot-id="${cssEscape(slotId)}"]`);
+  if (value) value.textContent = time.toFixed(1);
+  const marker = document.querySelector(`[data-link-timeline-jump="${cssEscape(animationName)}"][data-slot-id="${cssEscape(slotId)}"].emotion-link-marker`);
+  if (marker) marker.style.left = `${Math.min(100, Math.max(0, (time / Math.max(duration, 0.001)) * 100))}%`;
+}
+
+function previewEmotionLinkTimelineSlot(animationName, slotId) {
+  const slot = getEmotionLinkTimeline(animationName).find((item) => item.id === slotId);
+  if (!slot) return;
+  const preset = state.expressionPresets.find((item) => item.id === slot.expressionPresetId);
+  if (!preset) return;
+  applyTimelineExpressionSlot(slot, slot.transitionSeconds);
+}
+
+function updateLinkerTransitionSeconds(value) {
+  state.linkerTransitionSeconds = clampNumber(Number(value), 0, 1, 0.2);
+  const label = document.querySelector(".linker-transition-control strong");
+  if (label) label.textContent = `${state.linkerTransitionSeconds.toFixed(2)}s`;
+}
+
 async function playLinkedAnimation(animationName, options = {}) {
   if (!animationName) return;
   const scroller = document.querySelector(".emotion-linker-panel");
@@ -3211,18 +4440,83 @@ async function playLinkedAnimation(animationName, options = {}) {
   state.selectedAnimationName = animationName;
   const transition = await loadSelectedAnimation({ preserveCurrentAction: true });
   if (options.decay) {
+    state.activeLinkTimeline = null;
     startLinkedExpressionDecay(entry.expressionPresetId, getAnimationPreviewDecaySeconds(animationName));
   } else {
+    startActiveLinkTimeline(animationName);
     state.expressionDecay = null;
-    applyLinkedExpressionPreset(entry.expressionPresetId);
+    applyInitialLinkedExpression(entry);
   }
   playAnimationFromStart(Boolean(entry.loop), {
     previousAction: transition?.previousAction,
-    transitionSeconds: transition?.previousAction ? 0.2 : 0,
+    transitionSeconds: transition?.previousAction ? state.linkerTransitionSeconds : 0,
   });
   render();
   const nextScroller = document.querySelector(".emotion-linker-panel");
   if (nextScroller) nextScroller.scrollTop = scrollTop;
+}
+
+function startActiveLinkTimeline(animationName) {
+  const timeline = getEmotionLinkTimeline(animationName).filter((slot) => findMatchingExpressionPreset(slot.expressionPresetId, slot.expressionPresetName));
+  state.activeLinkTimeline = {
+    animationName,
+    timeline,
+    previousTime: 0,
+    appliedIds: new Set(),
+  };
+}
+
+function applyInitialLinkedExpression(entry) {
+  const active = state.activeLinkTimeline;
+  const first = active?.timeline?.[0];
+  if (first && first.time <= 0.001) {
+    applyTimelineExpressionSlot(first, 0);
+    active.appliedIds.add(first.id);
+    return;
+  }
+  applyLinkedExpressionPreset(entry.expressionPresetId, state.linkerTransitionSeconds);
+}
+
+function updateActiveLinkTimeline() {
+  const active = state.activeLinkTimeline;
+  if (!active || active.animationName !== state.selectedAnimationName || !state.animation.playing) return;
+  const currentTime = state.animation.time;
+  const looped = currentTime + 0.001 < active.previousTime;
+  if (looped) active.appliedIds = new Set();
+  for (const slot of active.timeline) {
+    const shouldApply = looped ? slot.time <= currentTime || slot.time > active.previousTime : slot.time > active.previousTime && slot.time <= currentTime;
+    if (!shouldApply || active.appliedIds.has(slot.id)) continue;
+    applyTimelineExpressionSlot(slot, slot.transitionSeconds);
+    active.appliedIds.add(slot.id);
+  }
+  active.previousTime = currentTime;
+}
+
+function applyTimelineExpressionSlot(slot, fallbackTransitionSeconds = 0.2) {
+  const preset = findMatchingExpressionPreset(slot.expressionPresetId, slot.expressionPresetName);
+  if (!preset) return;
+  const value = getTimelineExpressionValue(slot, preset);
+  for (const item of state.expressionPresets) item.value = item.id === preset.id ? value : 0;
+  state.selectedExpressionPresetId = preset.id;
+  state.selectedExpressionRangeId = getTimelineExpressionRangeSlot(slot, preset)?.id ?? null;
+  loadSelectedExpressionParameterDraft();
+  startExpressionTransition(
+    getExpressionParametersAtValue(preset, value, false, null, true),
+    1,
+    clampTimelineTransitionSeconds(slot.transitionSeconds ?? fallbackTransitionSeconds),
+  );
+  updateBlushOverlayForSelected();
+}
+
+function getTimelineExpressionRangeSlot(slot, preset) {
+  const rangeSlots = normalizeExpressionRangeSlots(preset?.rangeSlots);
+  return rangeSlots.find((item) => item.id === slot?.expressionRangeId) ?? null;
+}
+
+function getTimelineExpressionValue(slot, preset) {
+  const rangeSlot = getTimelineExpressionRangeSlot(slot, preset);
+  if (rangeSlot) return clampEmotionValue(rangeSlot.threshold);
+  return clampEmotionValue(slot?.expressionValue ?? 1);
 }
 
 function startLinkedExpressionDecay(presetId, duration) {
@@ -3245,12 +4539,13 @@ function startLinkedExpressionDecay(presetId, duration) {
     duration: normalizeDecaySeconds(duration),
   };
   applyRorrParameterValues(getExpressionParametersAtValue(preset, 1, false, null, true), 1);
+  updateBlushOverlayForSelected();
 }
 
-function applyLinkedExpressionPreset(presetId) {
+function applyLinkedExpressionPreset(presetId, duration = 0.2) {
   const preset = state.expressionPresets.find((item) => item.id === presetId);
   if (!preset) {
-    startExpressionTransition({}, 0, 0.2);
+    startExpressionTransition({}, 0, duration);
     return;
   }
   for (const item of state.expressionPresets) {
@@ -3258,11 +4553,12 @@ function applyLinkedExpressionPreset(presetId) {
   }
   state.selectedExpressionPresetId = preset.id;
   loadSelectedExpressionParameterDraft();
-  transitionToSelectedEmotionPreset(0.2);
+  transitionToSelectedEmotionPreset(duration);
 }
 
 function clearReferenceAnimation() {
   clearMotionCorrectionPreview();
+  state.activeLinkTimeline = null;
   animationMixer?.stopAllAction();
   animationMixer = null;
   animationAction = null;
@@ -3354,6 +4650,15 @@ function updateAnimationControls() {
   if (time) time.textContent = `${formatAnimationTime(state.animation.time)} / ${formatAnimationTime(state.animation.duration)}`;
   const scrub = document.querySelector("[data-animation-time]");
   if (scrub && document.activeElement !== scrub) scrub.value = state.animation.time;
+  updateEmotionLinkProgressCursor();
+}
+
+function updateEmotionLinkProgressCursor() {
+  if (!state.selectedAnimationName || !state.animation.duration) return;
+  const cursor = document.querySelector(`[data-link-progress="${cssEscape(state.selectedAnimationName)}"]`);
+  if (!cursor) return;
+  const progress = Math.min(100, Math.max(0, (state.animation.time / Math.max(state.animation.duration, 0.001)) * 100));
+  cursor.style.left = `${progress}%`;
 }
 
 function checkTransferCompatibility() {
@@ -3449,6 +4754,7 @@ function getTransferReport() {
 async function loadVrm(bytes) {
   clearReferenceAnimation();
   resetAnimationState("기준 애니메이션을 불러오세요.");
+  clearBlushOverlay();
   if (currentVrm) {
     scene.remove(currentVrm.scene);
     VRMUtils.deepDispose(currentVrm.scene);
@@ -3597,9 +4903,11 @@ function updateExpressionDecay(delta) {
   const value = clampEmotionValue(1 - easeInOutCubic(t));
   preset.value = value;
   applyRorrParameterValues(getExpressionParametersAtValue(preset, value, false, null, true), 1);
+  updateBlushOverlayForSelected();
   if (t >= 1) {
     preset.value = 0;
     applyRorrParameterValues(getExpressionParametersAtValue(preset, 0, false, null, true), 1);
+    updateBlushOverlayForSelected();
     state.expressionDecay = null;
   }
 }
@@ -3784,6 +5092,7 @@ function createEmptyCorrection() {
       rotationOrder: "XYZ",
     },
     animations: {},
+    blush: null,
     expressionPresets: createDefaultEmotionPresets().map(({ id, name, locked, isDisableBlink, rangeSlots }) => ({ id, name, locked, isDisableBlink, rangeSlots })),
   };
 }
@@ -3802,6 +5111,10 @@ function getSelectedCorrection() {
 
 function getAnimationNames() {
   return Object.keys(state.animationCatalog ?? {}).sort((a, b) => a.localeCompare(b));
+}
+
+function getDefaultAnimationName() {
+  return getAnimationNames().find((name) => state.animationCatalog?.[name]?.isFirst) ?? null;
 }
 
 function getAnimationDisplayName(animationName) {
@@ -4103,7 +5416,7 @@ async function loadOrCreateVrmMeta(vrmPath, vrmName) {
   state.correctionDirty = false;
   state.expressionDirty = false;
   const names = getAnimationNames();
-  state.selectedAnimationName = names.includes(state.selectedAnimationName) ? state.selectedAnimationName : (names[0] ?? null);
+  state.selectedAnimationName = getDefaultAnimationName() ?? (names.includes(state.selectedAnimationName) ? state.selectedAnimationName : (names[0] ?? null));
 }
 
 async function refreshAnimationCatalog() {
@@ -4116,6 +5429,7 @@ async function refreshAnimationCatalog() {
       description: String(animation.description ?? ""),
       mustWatchFull: Boolean(animation.mustWatchFull),
       duration: normalizeFiniteNumber(animation.duration, 0),
+      isFirst: Boolean(animation.isFirst),
     };
   }
 }
@@ -4136,6 +5450,7 @@ async function migrateAnimationInfoFromCharacterMeta(meta) {
       description: String(updated.description ?? ""),
       mustWatchFull: Boolean(updated.mustWatchFull),
       duration: normalizeFiniteNumber(updated.duration, catalogEntry.duration ?? 0),
+      isFirst: Boolean(updated.isFirst),
     };
     changed = true;
   }
@@ -4158,6 +5473,10 @@ function normalizeCorrectionJson(json) {
     const legacyName = "legacy.vrma";
     next.animations[legacyName] = normalizeAnimationCorrectionEntry({ corrections: json.corrections });
   }
+  const legacyBlush = Array.isArray(json.expressionPresets)
+    ? json.expressionPresets.find((preset) => preset?.blush?.image)?.blush
+    : null;
+  next.blush = normalizeBlushSettings(json.blush ?? legacyBlush);
   next.expressionPresets = normalizeExpressionPresets(json.expressionPresets);
   return next;
 }
@@ -4171,8 +5490,77 @@ function normalizeExpressionPresets(presets) {
     locked: Boolean(preset.locked),
     isDisableBlink: Boolean(preset.isDisableBlink),
     parameters: normalizeExpressionParameterValues(preset.parameters),
+    blush: preset.blush ? normalizePresetBlush(preset.blush) : null,
     rangeSlots: normalizeExpressionRangeSlots(preset.rangeSlots),
   }));
+}
+
+function normalizeBlushSettings(blush) {
+  if (!blush || !blush.image) return null;
+  return {
+    image: fileNameFromPath(blush.image),
+    y: clampNumber(Number(blush.y), 0, 0.1, 0),
+    z: clampNumber(Number(blush.z), 0, 0.2, 0.08),
+    scale: clampNumber(Number(blush.scale), 0, 1, 0.28),
+  };
+}
+
+function normalizePresetBlush(blush) {
+  if (!blush) return { opacity: 0.65 };
+  return {
+    opacity: clampEmotionValue(Number(blush.opacity ?? 0.65)),
+  };
+}
+
+function getActiveBlushSettings() {
+  return normalizeBlushSettings(state.correction.blush);
+}
+
+function getSelectedBlushOpacity() {
+  const selected = getSelectedEmotionPreset();
+  if (!selected?.blush) return 0;
+  const slot = getSelectedExpressionRangeSlot();
+  return slot?.blushOpacity != null ? clampEmotionValue(Number(slot.blushOpacity)) : normalizePresetBlush(selected.blush).opacity;
+}
+
+function setSelectedBlushOpacity(value) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected?.blush) return;
+  const opacity = clampEmotionValue(Number(value));
+  const slot = getSelectedExpressionRangeSlot();
+  if (slot) {
+    const slots = normalizeExpressionRangeSlots(selected.rangeSlots);
+    const target = slots.find((item) => item.id === slot.id);
+    if (target) target.blushOpacity = opacity;
+    selected.rangeSlots = slots;
+  } else {
+    selected.blush = { ...normalizePresetBlush(selected.blush), opacity };
+  }
+}
+
+function getBlushOpacityAtValue(preset, value) {
+  if (!preset?.blush) return 0;
+  const clamped = clampEmotionValue(value);
+  const mainOpacity = normalizePresetBlush(preset.blush).opacity;
+  const points = [
+    { threshold: 0, opacity: 0 },
+    ...normalizeExpressionRangeSlots(preset.rangeSlots)
+      .filter((slot) => slot.blushOpacity != null)
+      .map((slot) => ({ threshold: slot.threshold, opacity: clampEmotionValue(Number(slot.blushOpacity)) })),
+    { threshold: 1, opacity: mainOpacity },
+  ].sort((a, b) => a.threshold - b.threshold);
+  let left = points[0];
+  let right = points[points.length - 1];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    if (clamped >= points[index].threshold && clamped <= points[index + 1].threshold) {
+      left = points[index];
+      right = points[index + 1];
+      break;
+    }
+  }
+  if (Math.abs(right.threshold - left.threshold) < 0.000001) return right.opacity;
+  const t = (clamped - left.threshold) / (right.threshold - left.threshold);
+  return clampEmotionValue(left.opacity + (right.opacity - left.opacity) * t);
 }
 
 function normalizeExpressionRangeSlots(slots) {
@@ -4183,6 +5571,7 @@ function normalizeExpressionRangeSlots(slots) {
       id: String(slot?.id ?? `range-${index}`),
       threshold: clampEmotionValue(Number(slot?.threshold ?? 0.5)),
       parameters: normalizeExpressionParameterValues(slot?.parameters),
+      ...(slot?.blushOpacity != null ? { blushOpacity: clampEmotionValue(Number(slot.blushOpacity)) } : {}),
     }))
     .sort((a, b) => a.threshold - b.threshold);
 }
@@ -4213,6 +5602,7 @@ function normalizeAnimationCorrectionEntry(animation) {
     loop: Boolean(animation?.loop),
     expressionPresetId: String(animation?.expressionPresetId ?? ""),
     expressionPresetName: String(animation?.expressionPresetName ?? ""),
+    expressionTimeline: normalizeExpressionTimeline(animation?.expressionTimeline),
     corrections: {},
   };
   for (const [boneName, correction] of Object.entries(animation.corrections ?? {})) {
@@ -4222,28 +5612,68 @@ function normalizeAnimationCorrectionEntry(animation) {
   }
   if (!next.expressionPresetId) delete next.expressionPresetId;
   if (!next.expressionPresetName) delete next.expressionPresetName;
+  if (!next.expressionTimeline.length) delete next.expressionTimeline;
   return next;
+}
+
+function normalizeExpressionTimeline(timeline) {
+  if (!Array.isArray(timeline)) return [];
+  return timeline
+    .slice(0, 12)
+    .map((item, index) => ({
+      id: String(item?.id ?? `timeline-${index}`),
+      time: Math.max(0, Math.round(Number(item?.time ?? 0) * 10) / 10),
+      expressionPresetId: String(item?.expressionPresetId ?? ""),
+      expressionPresetName: String(item?.expressionPresetName ?? ""),
+      expressionRangeId: String(item?.expressionRangeId ?? ""),
+      expressionValue: clampEmotionValue(Number(item?.expressionValue ?? 1)),
+      transitionSeconds: clampTimelineTransitionSeconds(Number(item?.transitionSeconds ?? 0.2)),
+    }))
+    .filter((item) => item.expressionPresetId || item.expressionPresetName)
+    .sort((a, b) => a.time - b.time);
+}
+
+function clampTimelineTransitionSeconds(value) {
+  if (!Number.isFinite(value)) return 0.2;
+  return Math.min(1, Math.max(0, Math.round(value * 10) / 10));
 }
 
 function serializeCorrection() {
   const next = normalizeCorrectionJson(state.correction);
   for (const animation of Object.values(next.animations)) {
-    if (!animation.expressionPresetId) continue;
-    const preset = state.expressionPresets.find((item) => item.id === animation.expressionPresetId);
-    if (preset) animation.expressionPresetName = preset.name;
+    if (animation.expressionPresetId) {
+      const preset = state.expressionPresets.find((item) => item.id === animation.expressionPresetId);
+      if (preset) animation.expressionPresetName = preset.name;
+    }
+    if (Array.isArray(animation.expressionTimeline)) {
+      animation.expressionTimeline = animation.expressionTimeline.map((slot) => {
+        const preset = findMatchingExpressionPreset(slot.expressionPresetId, slot.expressionPresetName);
+        if (!preset) return slot;
+        const rangeSlot = normalizeExpressionRangeSlots(preset.rangeSlots).find((item) => item.id === slot.expressionRangeId);
+        return {
+          ...slot,
+          expressionPresetId: preset.id,
+          expressionPresetName: preset.name,
+          expressionRangeId: rangeSlot?.id ?? "",
+          expressionValue: rangeSlot ? clampEmotionValue(rangeSlot.threshold) : clampEmotionValue(slot.expressionValue ?? 1),
+        };
+      });
+    }
   }
   for (const animation of Object.values(next.animations)) {
     for (const boneName of Object.keys(animation.corrections)) {
       pruneCorrectionObject(animation.corrections, boneName);
     }
   }
-  next.expressionPresets = normalizeExpressionPresets(state.expressionPresets).map(({ id, name, locked, isDisableBlink, parameters, rangeSlots }) => ({
+  next.blush = normalizeBlushSettings(state.correction.blush);
+  next.expressionPresets = normalizeExpressionPresets(state.expressionPresets).map(({ id, name, locked, isDisableBlink, parameters, rangeSlots, blush }) => ({
     id,
     name,
     locked,
     isDisableBlink,
     parameters,
     rangeSlots,
+    blush,
   }));
   return next;
 }
@@ -5157,6 +6587,7 @@ function tick() {
         if (animationAction) animationAction.paused = true;
       }
     }
+    updateActiveLinkTimeline();
     updateAnimationControls();
   }
   updateExpressionDecay(delta);

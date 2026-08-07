@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, clipboard, nativeImage } = require("electron");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 
@@ -41,6 +41,10 @@ function animationsDir() {
   return path.join(__dirname, "..", "animations");
 }
 
+function imageDir() {
+  return path.join(__dirname, "..", "img");
+}
+
 function animationCatalogPath() {
   return path.join(animationsDir(), "animations.meta");
 }
@@ -70,6 +74,8 @@ function createDefaultConfig() {
       endBlend: 0.4,
       transitionTrim: 0,
       transitionPivot: 0,
+      trayMode: "transition",
+      sequence: [],
     },
   };
 }
@@ -196,9 +202,10 @@ async function readAnimationCatalog() {
     if (!catalog.animations[fileName]) {
       catalog.animations[fileName] = {
         fileName,
-        description: "",
-        mustWatchFull: false,
-        duration: 0,
+      description: "",
+      mustWatchFull: false,
+      duration: 0,
+      isFirst: false,
       };
       changed = true;
     }
@@ -214,6 +221,10 @@ async function readAnimationCatalog() {
     }
     if (typeof entry.mustWatchFull !== "boolean") {
       entry.mustWatchFull = Boolean(entry.mustWatchFull);
+      changed = true;
+    }
+    if (typeof entry.isFirst !== "boolean") {
+      entry.isFirst = Boolean(entry.isFirst);
       changed = true;
     }
     if (entry.duration !== normalizedDuration) {
@@ -310,6 +321,36 @@ ipcMain.handle("animation:open", async () => {
   return { filePath, name: path.basename(filePath), data };
 });
 
+ipcMain.handle("image:store", async () => {
+  const dir = imageDir();
+  await fs.mkdir(dir, { recursive: true });
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Open Emotion Image",
+    defaultPath: dir,
+    properties: ["openFile"],
+    filters: [
+      { name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+
+  const sourcePath = result.filePaths[0];
+  const fileName = path.basename(sourcePath);
+  const targetPath = path.join(dir, fileName);
+  if (path.resolve(sourcePath) !== path.resolve(targetPath)) {
+    await fs.copyFile(sourcePath, targetPath);
+  }
+  const data = await fs.readFile(targetPath);
+  return { filePath: targetPath, name: fileName, data };
+});
+
+ipcMain.handle("image:openStored", async (_event, fileName) => {
+  const filePath = path.join(imageDir(), path.basename(fileName));
+  const data = await fs.readFile(filePath);
+  return { filePath, name: path.basename(filePath), data };
+});
+
 ipcMain.handle("animation:store", async (_event, sourcePath) => {
   const dir = animationsDir();
   await fs.mkdir(dir, { recursive: true });
@@ -319,7 +360,7 @@ ipcMain.handle("animation:store", async (_event, sourcePath) => {
     await fs.copyFile(sourcePath, targetPath);
   }
   const catalog = await readAnimationCatalog();
-  catalog.animations[fileName] ??= { fileName, description: "", mustWatchFull: false, duration: 0 };
+  catalog.animations[fileName] ??= { fileName, description: "", mustWatchFull: false, duration: 0, isFirst: false };
   await writeAnimationCatalog(catalog);
   const data = await fs.readFile(targetPath);
   return { filePath: targetPath, name: fileName, data };
@@ -346,9 +387,14 @@ ipcMain.handle("animation:listStored", async () => readAnimationCatalog());
 ipcMain.handle("animation:updateInfo", async (_event, fileName, patch) => {
   const catalog = await readAnimationCatalog();
   const safeName = path.basename(fileName);
-  catalog.animations[safeName] ??= { fileName: safeName, description: "", mustWatchFull: false, duration: 0 };
+  catalog.animations[safeName] ??= { fileName: safeName, description: "", mustWatchFull: false, duration: 0, isFirst: false };
   if (Object.hasOwn(patch, "description")) catalog.animations[safeName].description = String(patch.description ?? "");
   if (Object.hasOwn(patch, "mustWatchFull")) catalog.animations[safeName].mustWatchFull = Boolean(patch.mustWatchFull);
+  if (Object.hasOwn(patch, "isFirst")) {
+    const enabled = Boolean(patch.isFirst);
+    for (const animation of Object.values(catalog.animations)) animation.isFirst = false;
+    catalog.animations[safeName].isFirst = enabled;
+  }
   if (Object.hasOwn(patch, "duration")) {
     const duration = Number(patch.duration);
     catalog.animations[safeName].duration = Number.isFinite(duration) && duration > 0 ? Math.round(duration * 1000) / 1000 : 0;
@@ -376,6 +422,13 @@ ipcMain.handle("config:updateMemory", async (_event, config) => {
 
 ipcMain.handle("config:save", async (_event, config) => writeEditorConfig(config));
 
+ipcMain.handle("clipboard:image", async (_event, dataUrl) => {
+  const image = nativeImage.createFromDataURL(String(dataUrl ?? ""));
+  if (image.isEmpty()) throw new Error("Screenshot image is empty.");
+  clipboard.writeImage(image);
+  return { ok: true, size: image.getSize() };
+});
+
 ipcMain.handle("meta:loadOrCreate", async (_event, vrmPath, data) => {
   const filePath = `${vrmPath}.meta`;
   try {
@@ -386,6 +439,22 @@ ipcMain.handle("meta:loadOrCreate", async (_event, vrmPath, data) => {
     await fs.writeFile(filePath, data, "utf8");
     return { filePath, name: path.basename(filePath), data: Buffer.from(data, "utf8"), created: true };
   }
+});
+
+ipcMain.handle("meta:open", async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Import Character Meta",
+    properties: ["openFile"],
+    filters: [
+      { name: "VRM Meta", extensions: ["meta", "json"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+
+  const filePath = result.filePaths[0];
+  const data = await fs.readFile(filePath);
+  return { filePath, name: path.basename(filePath), data };
 });
 
 ipcMain.handle("meta:save", async (_event, filePath, data) => {

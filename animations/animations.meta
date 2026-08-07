@@ -6,85 +6,148 @@
       "fileName": "a0.vrma",
       "description": "대기-기본 ",
       "mustWatchFull": false,
-      "duration": 9.958
+      "duration": 9.958,
+      "isFirst": true
     },
     "a0_standSlantedL.vrma": {
       "fileName": "a0_standSlantedL.vrma",
       "description": "대기-손모은",
-      "mustWatchFull": false,
-      "duration": 5.042
+      "mustWatchFull": true,
+      "duration": 5.042,
+      "isFirst": false
     },
     "a0_standSlantedR.vrma": {
       "fileName": "a0_standSlantedR.vrma",
       "description": "대기-손뒤로",
       "mustWatchFull": false,
-      "duration": 4.958
+      "duration": 4.958,
+      "isFirst": false
     },
     "a1.vrma": {
       "fileName": "a1.vrma",
       "description": "집중",
       "mustWatchFull": false,
-      "duration": 8
+      "duration": 8,
+      "isFirst": false
     },
     "a2.vrma": {
       "fileName": "a2.vrma",
       "description": "긴장",
       "mustWatchFull": false,
-      "duration": 7.458
+      "duration": 7.458,
+      "isFirst": false
     },
     "a3.vrma": {
       "fileName": "a3.vrma",
       "description": "조아쓰 ",
       "mustWatchFull": false,
-      "duration": 2.458
+      "duration": 2.458,
+      "isFirst": false
     },
     "a3_1.vrma": {
       "fileName": "a3_1.vrma",
       "description": "조아쓰 큰 ",
       "mustWatchFull": false,
-      "duration": 2.458
+      "duration": 2.458,
+      "isFirst": false
     },
     "a4.vrma": {
       "fileName": "a4.vrma",
       "description": "작은 박수 ",
-      "mustWatchFull": false,
-      "duration": 3.708
+      "mustWatchFull": true,
+      "duration": 3.708,
+      "isFirst": false
     },
     "a5.vrma": {
       "fileName": "a5.vrma",
       "description": "",
       "mustWatchFull": false,
-      "duration": 2.458
+      "duration": 2.458,
+      "isFirst": false
     },
     "a6.vrma": {
       "fileName": "a6.vrma",
       "description": "어머나 ",
       "mustWatchFull": false,
-      "duration": 2.458
+      "duration": 2.458,
+      "isFirst": false
     },
     "TransitionSubKey.vrma": {
       "fileName": "TransitionSubKey.vrma",
       "description": "전환동작",
       "mustWatchFull": false,
-      "duration": 1.208
+      "duration": 1.208,
+      "isFirst": false
     },
     "VRMA_hello.vrma": {
       "fileName": "VRMA_hello.vrma",
       "description": "인사",
       "mustWatchFull": false,
-      "duration": 4.125
-    },
-    "a0_armCrossed_loop.vrma": {
-      "fileName": "a0_armCrossed_loop.vrma",
-      "description": "팔짱낀",
-      "mustWatchFull": true,
-      "duration": 4.958
+      "duration": 4.125,
+      "isFirst": false
     },
     "VRMA_twoHandsUp.vrma": {
       "fileName": "VRMA_twoHandsUp.vrma",
       "description": "환호-만세",
       "mustWatchFull": true,
-      "duration": 4.958
+      "duration": 4.958,
+      "isFirst": false
+    },
+    "a0_1.vrma": {
+      "fileName": "a0_1.vrma",
+      "description": "앞으로 손모은",
+      "mustWatchFull": true,
+      "duration": 4.958,
+      "isFirst": false
+    },
+    "a0_2.vrma": {
+      "fileName": "a0_2.vrma",
+      "description": "팔짱낀정자세",
+      "mustWatchFull": true,
+      "duration": 4.958,
+      "isFirst": false
+    },
+    "a0_3.vrma": {
+      "fileName": "a0_3.vrma",
+      "description": "두손 뒤로",
+      "mustWatchFull": false,
+      "duration": 4.958,
+      "isFirst": false
+    },
+    "SA0.vrma": {
+      "fileName": "SA0.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 3.333,
+      "isFirst": false
+    },
+    "SA1.vrma": {
+      "fileName": "SA1.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 4.958,
+      "isFirst": false
+    },
+    "SA2.vrma": {
+      "fileName": "SA2.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 4.958,
+      "isFirst": false
+    },
+    "SA3.vrma": {
+      "fileName": "SA3.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 2.458,
+      "isFirst": false
+    },
+    "SA3_.vrma": {
+      "fileName": "SA3_.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 2.458,
+      "isFirst": false
     }
   }
 }

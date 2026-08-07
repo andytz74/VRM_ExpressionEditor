@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("vrmFiles", {
   open: () => ipcRenderer.invoke("vrm:open"),
   openAnimation: () => ipcRenderer.invoke("animation:open"),
+  storeImage: () => ipcRenderer.invoke("image:store"),
+  openStoredImage: (fileName) => ipcRenderer.invoke("image:openStored", fileName),
   storeAnimation: (filePath) => ipcRenderer.invoke("animation:store", filePath),
   openStoredAnimation: (fileName) => ipcRenderer.invoke("animation:openStored", fileName),
   existsStoredAnimation: (fileName) => ipcRenderer.invoke("animation:existsStored", fileName),
@@ -12,7 +14,9 @@ contextBridge.exposeInMainWorld("vrmFiles", {
   loadConfig: () => ipcRenderer.invoke("config:load"),
   updateConfigMemory: (config) => ipcRenderer.invoke("config:updateMemory", config),
   saveConfig: (config) => ipcRenderer.invoke("config:save", config),
+  writeClipboardImage: (dataUrl) => ipcRenderer.invoke("clipboard:image", dataUrl),
   loadOrCreateMeta: (vrmPath, data) => ipcRenderer.invoke("meta:loadOrCreate", vrmPath, data),
+  openMeta: () => ipcRenderer.invoke("meta:open"),
   saveMeta: (filePath, data) => ipcRenderer.invoke("meta:save", filePath, data),
   openJson: () => ipcRenderer.invoke("json:open"),
   saveJson: (filePath, data) => ipcRenderer.invoke("json:save", filePath, data),
