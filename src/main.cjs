@@ -5,6 +5,13 @@ const path = require("node:path");
 let mainWindow;
 let editorConfigCache = null;
 let configSavedForQuit = false;
+let animationCatalogQueue = Promise.resolve();
+
+function queueAnimationCatalogWrite(operation) {
+  const next = animationCatalogQueue.then(operation, operation);
+  animationCatalogQueue = next.catch(() => {});
+  return next;
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -200,13 +207,7 @@ async function readAnimationCatalog() {
   const animationFiles = new Set((await fs.readdir(animationsDir())).filter((name) => /\.(vrma|glb|gltf)$/i.test(name)));
   for (const fileName of animationFiles) {
     if (!catalog.animations[fileName]) {
-      catalog.animations[fileName] = {
-        fileName,
-      description: "",
-      mustWatchFull: false,
-      duration: 0,
-      isFirst: false,
-      };
+      catalog.animations[fileName] = createAnimationCatalogEntry(fileName);
       changed = true;
     }
     const entry = catalog.animations[fileName];
@@ -225,6 +226,10 @@ async function readAnimationCatalog() {
     }
     if (typeof entry.isFirst !== "boolean") {
       entry.isFirst = Boolean(entry.isFirst);
+      changed = true;
+    }
+    if (typeof entry.loop !== "boolean") {
+      entry.loop = Boolean(entry.loop);
       changed = true;
     }
     if (entry.duration !== normalizedDuration) {
@@ -253,6 +258,17 @@ function parseJsonCatalog(text) {
     }
     throw new Error("Animation catalog is not JSON.");
   }
+}
+
+function createAnimationCatalogEntry(fileName, existing = {}) {
+  return {
+    fileName,
+    description: String(existing.description ?? ""),
+    mustWatchFull: Boolean(existing.mustWatchFull),
+    duration: Number(existing.duration) || 0,
+    isFirst: Boolean(existing.isFirst),
+    loop: Boolean(existing.loop),
+  };
 }
 
 async function writeAnimationCatalog(catalog) {
@@ -359,9 +375,11 @@ ipcMain.handle("animation:store", async (_event, sourcePath) => {
   if (path.resolve(sourcePath) !== path.resolve(targetPath)) {
     await fs.copyFile(sourcePath, targetPath);
   }
-  const catalog = await readAnimationCatalog();
-  catalog.animations[fileName] ??= { fileName, description: "", mustWatchFull: false, duration: 0, isFirst: false };
-  await writeAnimationCatalog(catalog);
+  await queueAnimationCatalogWrite(async () => {
+    const catalog = await readAnimationCatalog();
+    catalog.animations[fileName] = createAnimationCatalogEntry(fileName, catalog.animations[fileName]);
+    await writeAnimationCatalog(catalog);
+  });
   const data = await fs.readFile(targetPath);
   return { filePath: targetPath, name: fileName, data };
 });
@@ -385,31 +403,44 @@ ipcMain.handle("animation:existsStored", async (_event, fileName) => {
 ipcMain.handle("animation:listStored", async () => readAnimationCatalog());
 
 ipcMain.handle("animation:updateInfo", async (_event, fileName, patch) => {
-  const catalog = await readAnimationCatalog();
-  const safeName = path.basename(fileName);
-  catalog.animations[safeName] ??= { fileName: safeName, description: "", mustWatchFull: false, duration: 0, isFirst: false };
-  if (Object.hasOwn(patch, "description")) catalog.animations[safeName].description = String(patch.description ?? "");
-  if (Object.hasOwn(patch, "mustWatchFull")) catalog.animations[safeName].mustWatchFull = Boolean(patch.mustWatchFull);
-  if (Object.hasOwn(patch, "isFirst")) {
-    const enabled = Boolean(patch.isFirst);
-    for (const animation of Object.values(catalog.animations)) animation.isFirst = false;
-    catalog.animations[safeName].isFirst = enabled;
-  }
-  if (Object.hasOwn(patch, "duration")) {
-    const duration = Number(patch.duration);
-    catalog.animations[safeName].duration = Number.isFinite(duration) && duration > 0 ? Math.round(duration * 1000) / 1000 : 0;
-  }
-  await writeAnimationCatalog(catalog);
-  return catalog.animations[safeName];
+  return queueAnimationCatalogWrite(async () => {
+    const catalog = await readAnimationCatalog();
+    const safeName = path.basename(fileName);
+    const storedPath = path.join(animationsDir(), safeName);
+    try {
+      await fs.access(storedPath);
+    } catch {
+      delete catalog.animations[safeName];
+      await writeAnimationCatalog(catalog);
+      return null;
+    }
+    catalog.animations[safeName] = createAnimationCatalogEntry(safeName, catalog.animations[safeName]);
+    if (Object.hasOwn(patch, "description")) catalog.animations[safeName].description = String(patch.description ?? "");
+    if (Object.hasOwn(patch, "mustWatchFull")) catalog.animations[safeName].mustWatchFull = Boolean(patch.mustWatchFull);
+    if (Object.hasOwn(patch, "loop")) catalog.animations[safeName].loop = Boolean(patch.loop);
+    if (Object.hasOwn(patch, "isFirst")) {
+      const enabled = Boolean(patch.isFirst);
+      for (const animation of Object.values(catalog.animations)) animation.isFirst = false;
+      catalog.animations[safeName].isFirst = enabled;
+    }
+    if (Object.hasOwn(patch, "duration")) {
+      const duration = Number(patch.duration);
+      catalog.animations[safeName].duration = Number.isFinite(duration) && duration > 0 ? Math.round(duration * 1000) / 1000 : 0;
+    }
+    await writeAnimationCatalog(catalog);
+    return catalog.animations[safeName];
+  });
 });
 
 ipcMain.handle("animation:deleteStored", async (_event, fileName) => {
   const safeName = path.basename(fileName);
   const filePath = path.join(animationsDir(), safeName);
   await fs.rm(filePath, { force: true });
-  const catalog = await readAnimationCatalog();
-  delete catalog.animations[safeName];
-  await writeAnimationCatalog(catalog);
+  await queueAnimationCatalogWrite(async () => {
+    const catalog = await readAnimationCatalog();
+    delete catalog.animations[safeName];
+    await writeAnimationCatalog(catalog);
+  });
   return { filePath, name: path.basename(filePath) };
 });
 

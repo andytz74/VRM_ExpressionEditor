@@ -288,6 +288,147 @@ input[type="range"] {
   overflow: hidden;
 }
 
+.material-outline-tray {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-left: 1px solid #2b3038;
+  background: #1b1f25;
+  overflow: hidden;
+}
+
+.material-outline-head {
+  flex: 0 0 auto;
+  padding: 14px;
+  border-bottom: 1px solid #2b3038;
+}
+
+.material-outline-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.material-outline-title-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #b5bec8;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.material-outline-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.material-outline-head p {
+  margin: 4px 0 0;
+  color: #98a2ad;
+  font-size: 12px;
+}
+
+.material-outline-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.material-outline-item {
+  display: grid;
+  grid-template-columns: 24px 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid #2c333d;
+  border-radius: 7px;
+  background: #20252c;
+}
+
+.material-outline-item.is-hidden {
+  opacity: 0.72;
+}
+
+.material-outline-hide {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #49525f;
+  border-radius: 5px;
+  color: #929daa;
+  background: #252b33;
+  cursor: pointer;
+}
+
+.material-outline-hide.active {
+  color: #ffdddd;
+  border-color: #8b4b52;
+  background: #5c2730;
+}
+
+.material-outline-swatch {
+  width: 22px;
+  height: 22px;
+  border: 1px solid #566170;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.material-outline-item > span {
+  min-width: 0;
+  overflow: hidden;
+  color: #e7edf4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.material-outline-picker {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.material-outline-picker input[type="color"] {
+  width: 42px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #3a424d;
+  border-radius: 6px;
+  background: #15191f;
+}
+
+.material-outline-picker input[type="text"] {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid #3a424d;
+  border-radius: 6px;
+  color: #f0f4f8;
+  background: #15191f;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.material-outline-empty {
+  padding: 14px;
+  border: 1px solid #2c333d;
+  border-radius: 7px;
+  color: #9da7b2;
+  background: #20252c;
+  font-size: 12px;
+}
+
 .meta-load-button {
   font-size: 14px;
   font-weight: 900;
@@ -767,7 +908,8 @@ input[type="range"] {
 .transfer-panel,
 .correction-panel,
 .expression-editor-panel,
-.emotion-linker-panel {
+.emotion-linker-panel,
+.extra-bone-panel {
   flex: 1;
   min-height: 0;
   overflow-x: hidden;
@@ -777,7 +919,8 @@ input[type="range"] {
 }
 
 .correction-panel,
-.emotion-linker-panel {
+.emotion-linker-panel,
+.extra-bone-panel {
   padding-bottom: 24px;
 }
 
@@ -1464,6 +1607,110 @@ input[type="range"] {
   margin-top: 0;
 }
 
+.extra-bone-list {
+  display: grid;
+  gap: 12px;
+}
+
+.extra-bone-slot {
+  display: grid;
+  gap: 12px;
+}
+
+.extra-bone-slot.selected {
+  border-color: #2f9d7d;
+  box-shadow: 0 0 0 1px rgba(47, 157, 125, 0.25);
+}
+
+.extra-bone-factor-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 2px;
+}
+
+.correction-card .extra-bone-factor-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  margin-bottom: 0;
+  color: #c4ced8;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.correction-card .extra-bone-factor-row > span:first-child {
+  color: #f2f5f8;
+  text-align: left;
+}
+
+.correction-card .extra-bone-factor-row input[type="number"] {
+  width: 100%;
+  min-height: 32px;
+  margin-top: 0;
+}
+
+.extra-bone-ignore {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.extra-bone-ignore input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: #2e92df;
+}
+
+.bone-gizmo-toggle {
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  z-index: 18;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #3b4552;
+  border-radius: 8px;
+  color: #e8eef6;
+  background: rgba(37, 43, 51, 0.92);
+  cursor: pointer;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+}
+
+.bone-gizmo-toggle:hover {
+  background: rgba(49, 57, 70, 0.96);
+}
+
+.bone-gizmo-toggle.active {
+  border-color: #3d8dff;
+  color: #f4f8ff;
+  background: rgba(32, 94, 154, 0.96);
+}
+
+.bone-gizmo-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.bone-gizmo-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.9;
+}
+
 .correction-actions {
   display: grid;
   grid-template-columns: 0.75fr 1fr 1fr;
@@ -1820,6 +2067,56 @@ canvas {
   color: #c8d0d8;
   font-size: 12px;
   transform: none;
+}
+
+.lip-sync-preview {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  z-index: 18;
+  display: flex;
+  width: min(520px, calc(100% - 48px));
+  gap: 8px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+
+.lip-sync-preview input {
+  flex: 1;
+  min-width: 0;
+  height: 42px;
+  padding: 0 14px;
+  border: 1px solid #34404d;
+  border-radius: 8px;
+  background: rgba(19, 23, 29, 0.9);
+  color: #f4f7fb;
+  font-size: 15px;
+  outline: none;
+}
+
+.lip-sync-preview input:focus {
+  border-color: #2fb383;
+  box-shadow: 0 0 0 2px rgba(47, 179, 131, 0.2);
+}
+
+.lip-sync-play-button {
+  width: 48px;
+  height: 42px;
+  border: 1px solid #3a4654;
+  border-radius: 8px;
+  background: #27303b;
+  color: #ecf4fb;
+  cursor: pointer;
+}
+
+.lip-sync-play-button.active {
+  border-color: #2fb383;
+  background: #23785d;
+}
+
+.lip-sync-play-button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .screenshot-tools {

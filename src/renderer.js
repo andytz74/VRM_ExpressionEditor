@@ -140,6 +140,14 @@ const state = {
     timelineDuration: 0,
     timelineProgress: 0,
   },
+  lipSyncPreview: {
+    text: "",
+    playing: false,
+    elapsed: 0,
+    duration: 0,
+    timeline: [],
+    activeShape: "",
+  },
   rorrParameters: [],
   currentParameterIds: new Set(),
   newParameterIds: new Set(),
@@ -161,6 +169,13 @@ const state = {
   expressionParameterDirty: false,
   expressionTransition: null,
   expressionDecay: null,
+  activeRorrInfluenceValues: {},
+  blink: {
+    elapsed: 0,
+    nextDelay: 0.5 + Math.random() * 4.5,
+    duration: 0.16,
+    closing: false,
+  },
   expressionDirty: false,
   draggingEmotionPresetId: null,
   editing: null,
@@ -182,6 +197,7 @@ const state = {
   correctionPath: null,
   correctionDirty: false,
   metaImportReport: null,
+  selectedExtraBoneFollowId: null,
   animationCatalog: {},
   selectedAnimationName: null,
   correctionAnimationTab: "play",
@@ -195,6 +211,7 @@ const state = {
     message: "기준 애니메이션을 불러오세요.",
   },
   selectedBone: "hips",
+  extraBoneGizmoVisible: false,
   correctionSteps: {
     positionOffset: 0.01,
     rotationOffset: 0.1,
@@ -225,6 +242,7 @@ let animationUrl = null;
 let animationMixer = null;
 let animationAction = null;
 let lastCorrectionBases = new Map();
+let lastExtraBoneFollowBases = new Map();
 let blushOverlay = null;
 
 const enc = new TextEncoder();
@@ -341,7 +359,7 @@ function normalizeTransitionSequence(sequence) {
 
 function normalizeCameraPresets(presets) {
   const next = {};
-  for (const mode of ["transfer", "correction", "expression", "linker", "transitionViewer"]) {
+  for (const mode of ["transfer", "correction", "expression", "linker", "extraBone", "transitionViewer"]) {
     const preset = presets?.[mode];
     if (!preset || typeof preset !== "object") continue;
     next[mode] = normalizeCameraPreset(preset);
@@ -541,6 +559,8 @@ function render() {
             ? renderMotionCorrectionPanel()
             : state.mode === "linker"
             ? renderEmotionLinkerPanel()
+            : state.mode === "extraBone"
+            ? renderExtraBoneFollowPanel()
             : state.mode === "transitionViewer"
             ? renderTransitionViewerPanel()
             : state.editing
@@ -556,14 +576,17 @@ function render() {
         ${renderScreenshotTools()}
         ${renderScreenshotSelectionOverlay()}
         ${renderViewerLightControl()}
+        ${renderExtraBoneGizmoControls()}
+        ${renderExtraBoneGizmoOverlay()}
         ${renderEmotionLinkerTransitionControl()}
+        ${renderLipSyncPreviewOverlay()}
         ${renderBlushOverlayPanel()}
         ${renderMetaImportOverlay()}
         ${state.mode === "transitionViewer" && state.transitionViewer.trayMode !== "sequence" ? renderTransitionTimelineOverlay() : ""}
       </section>
       ${state.mode === "expression" && !state.editing ? renderEmotionParameterTrayWithSave() : ""}
       ${state.mode === "transitionViewer" ? renderTransitionViewerTray() : ""}
-      ${hasEmptyRightTray ? renderEmptyRightTray() : ""}
+      ${state.mode === "correction" ? renderMaterialOutlineTray() : state.mode === "linker" ? renderEmptyRightTray() : ""}
     </main>
   `;
 
@@ -589,6 +612,48 @@ function attachHeaderMetaButtons() {
 
 function renderEmptyRightTray() {
   return `<aside class="mode-empty-tray" aria-hidden="true"></aside>`;
+}
+
+function renderMaterialOutlineTray() {
+  const outlineSettings = normalizeMaterialSettings(state.correction.materialSettings).outline;
+  const materials = collectVisibleOutlineMaterials(outlineSettings.showAll);
+  return `
+    <aside class="material-outline-tray">
+      <div class="material-outline-head">
+        <div class="material-outline-title-row">
+          <h2>Outline</h2>
+          <label>
+            <input type="checkbox" id="showAllOutlineMaterials" ${outlineSettings.showAll ? "checked" : ""} />
+            Show all
+          </label>
+        </div>
+        <p>MToon material color</p>
+      </div>
+      <div class="material-outline-list">
+        ${
+          materials.length
+            ? materials.map((material) => renderMaterialOutlineItem(material)).join("")
+            : `<div class="material-outline-empty">VRM material 없음</div>`
+        }
+      </div>
+    </aside>
+  `;
+}
+
+function renderMaterialOutlineItem(material) {
+  const color = getMaterialOutlineColor(material);
+  const hidden = isMaterialOutlineHidden(material);
+  return `
+    <div class="material-outline-item ${hidden ? "is-hidden" : ""}">
+      <button class="material-outline-hide ${hidden ? "active" : ""}" data-outline-hide="${escapeHtml(material.name)}" title="${hidden ? "Show material" : "Hide material"}">${iconSvg(X, 13)}</button>
+      <button class="material-outline-swatch" data-outline-pick="${escapeHtml(material.name)}" style="background: ${escapeHtml(color)}" title="${escapeHtml(material.name)}"></button>
+      <span>${escapeHtml(material.name)}</span>
+      <div class="material-outline-picker">
+        <input type="color" value="${escapeHtml(color)}" data-outline-color="${escapeHtml(material.name)}" />
+        <input type="text" value="${escapeHtml(color)}" data-outline-hex="${escapeHtml(material.name)}" />
+      </div>
+    </div>
+  `;
 }
 
 function renderMetaImportOverlay() {
@@ -757,6 +822,90 @@ function updateScreenshotBoxStyle(box, rect) {
   box.style.height = `${normalized.height * 100}%`;
 }
 
+function updateExtraBoneGizmoOverlay() {
+  const svg = document.querySelector(".bone-gizmo-overlay");
+  if (!svg || state.mode !== "extraBone" || !state.extraBoneGizmoVisible || !currentVrm?.scene) return;
+  const viewer = document.querySelector(".viewer");
+  if (!viewer) return;
+  const rect = viewer.getBoundingClientRect();
+  svg.setAttribute("viewBox", `0 0 ${Math.max(1, rect.width)} ${Math.max(1, rect.height)}`);
+  const humanoidLines = collectHumanoidBoneLineSegments();
+  const extraLines = collectExtraBoneFollowLineSegments();
+  svg.innerHTML = [
+    ...humanoidLines.map((line) => renderProjectedBoneLine(line, rect, "humanoid")),
+    ...extraLines.map((line) => renderProjectedBoneLine(line, rect, "extra")),
+  ]
+    .filter(Boolean)
+    .join("");
+}
+
+function renderProjectedBoneLine(line, rect, kind) {
+  const start = projectWorldPointToViewer(line.start, rect);
+  const end = projectWorldPointToViewer(line.end, rect);
+  if (!start || !end) return "";
+  const stroke = kind === "extra" ? "#3d8dff" : "#24d46a";
+  const width = kind === "extra" ? 6 : 4;
+  return `<line class="bone-gizmo-line ${kind}" x1="${start.x.toFixed(1)}" y1="${start.y.toFixed(1)}" x2="${end.x.toFixed(1)}" y2="${end.y.toFixed(1)}" stroke="${stroke}" stroke-width="${width}" />`;
+}
+
+function projectWorldPointToViewer(point, rect) {
+  const projected = point.clone().project(camera);
+  if (projected.z < -1 || projected.z > 1) return null;
+  return {
+    x: (projected.x * 0.5 + 0.5) * rect.width,
+    y: (-projected.y * 0.5 + 0.5) * rect.height,
+  };
+}
+
+function collectHumanoidBoneLineSegments() {
+  const humanoidObjects = new Map(HUMAN_BONES.map((boneName) => [getRawBoneNode(boneName), boneName]).filter(([bone]) => bone));
+  const lines = [];
+  for (const bone of humanoidObjects.keys()) {
+    const parent = findNearestMappedBoneAncestor(bone, humanoidObjects);
+    if (!parent) continue;
+    lines.push(createBoneLineSegment(parent, bone));
+  }
+  return lines.filter(Boolean);
+}
+
+function collectExtraBoneFollowLineSegments() {
+  const settings = normalizeExtraBoneFollowSettings(state.correction.extraBoneFollowSettings);
+  const lines = [];
+  for (const setting of settings) {
+    const bone = findBoneByName(setting.targetBone);
+    if (!bone) continue;
+    const tailTarget = getRawBoneNode(setting.tailDirectionBone);
+    if (tailTarget) {
+      lines.push(createBoneLineSegment(bone, tailTarget));
+      continue;
+    }
+    const childBones = bone.children.filter((child) => child?.isBone);
+    if (childBones.length) {
+      for (const child of childBones) lines.push(createBoneLineSegment(bone, child));
+    } else if (bone.parent?.isBone) {
+      lines.push(createBoneLineSegment(bone.parent, bone));
+    }
+  }
+  return lines.filter(Boolean);
+}
+
+function findNearestMappedBoneAncestor(bone, mappedBones) {
+  let parent = bone?.parent ?? null;
+  while (parent) {
+    if (mappedBones.has(parent)) return parent;
+    parent = parent.parent;
+  }
+  return null;
+}
+
+function createBoneLineSegment(startBone, endBone) {
+  if (!startBone || !endBone) return null;
+  return {
+    start: startBone.getWorldPosition(new THREE.Vector3()),
+    end: endBone.getWorldPosition(new THREE.Vector3()),
+  };
+}
+
 function normalizeScreenshotRect(rect) {
   const minSize = 0.05;
   const width = Math.min(1, Math.max(minSize, Number(rect?.width) || 0.28));
@@ -793,6 +942,37 @@ function renderViewerLightControl() {
       <button class="viewer-camera-reset" id="resetModeCamera" title="Reset camera">${iconSvg(Camera, 16)}</button>
     </div>
   `;
+}
+
+function renderLipSyncPreviewOverlay() {
+  if (state.mode !== "transitionViewer") return "";
+  return `
+    <section class="lip-sync-preview">
+      <input
+        type="text"
+        value="${escapeHtml(state.lipSyncPreview.text)}"
+        data-lip-sync-text
+        placeholder="말할 문장을 입력"
+      />
+      <button class="lip-sync-play-button ${state.lipSyncPreview.playing ? "active" : ""}" id="playLipSyncPreview" ${currentVrm ? "" : "disabled"} title="Lip sync preview">
+        ${iconSvg(Play, 17)}
+      </button>
+    </section>
+  `;
+}
+
+function renderExtraBoneGizmoControls() {
+  if (state.mode !== "extraBone") return "";
+  return `
+    <button class="bone-gizmo-toggle ${state.extraBoneGizmoVisible ? "active" : ""}" id="toggleBoneGizmo" title="Bone structure">
+      ${iconSvg(GitCompare, 18)}
+    </button>
+  `;
+}
+
+function renderExtraBoneGizmoOverlay() {
+  if (state.mode !== "extraBone" || !state.extraBoneGizmoVisible) return "";
+  return `<svg class="bone-gizmo-overlay" aria-hidden="true"></svg>`;
 }
 
 function renderBlushOverlayPanel() {
@@ -1152,6 +1332,7 @@ function renderModeBar(active) {
     ["correction", "Motion Correction", SlidersHorizontal],
     ["expression", "Expression Editor", SlidersHorizontal],
     ["linker", "Emotion Linker", GitCompare],
+    ["extraBone", "Extra Bone Follow Setting", GitCompare],
     ["transitionViewer", "Transition Viewer", GitCompare],
   ];
   return `
@@ -1708,6 +1889,105 @@ function renderEmotionLinkTimelineSlot(animationName, slot, index, duration) {
   `;
 }
 
+function renderExtraBoneFollowPanel() {
+  const settings = normalizeExtraBoneFollowSettings(state.correction.extraBoneFollowSettings);
+  return `
+    <div class="panel-header">
+      <div class="title-block">
+        <h1>Extra Bone Follow Setting</h1>
+        <p>${state.correctionPath ? escapeHtml(fileNameFromPath(state.correctionPath)) : "VRM을 열면 extra bone follow 설정을 저장합니다"}</p>
+      </div>
+      <button class="icon-button" id="openFile" title="VRM 열기">${iconSvg(FolderOpen)}</button>
+    </div>
+    ${renderModeBar("extraBone")}
+    <div class="extra-bone-panel">
+      <div class="extra-bone-list">
+        ${settings.map((setting, index) => renderExtraBoneFollowSlot(setting, index)).join("")}
+        <button class="add-emotion-button" id="addExtraBoneFollow">+</button>
+      </div>
+    </div>
+    <div class="correction-footer">
+      <button class="primary-button" id="saveCorrection" ${state.correctionPath && state.correctionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
+    </div>
+  `;
+}
+
+function renderExtraBoneFollowSlot(setting, index) {
+  const targetOptions = collectExtraBoneOptions();
+  const sourceOptions = collectAvailableHumanoidBoneOptions();
+  return `
+    <section class="correction-card extra-bone-slot ${state.selectedExtraBoneFollowId === setting.id ? "selected" : ""}">
+      <div class="correction-card-head">
+        <strong>Follow ${index + 1}</strong>
+        <button class="delete-emotion-button compact-delete" data-extra-bone-delete="${escapeHtml(setting.id)}" title="Delete">${iconSvg(X, 16)}</button>
+      </div>
+      <label>
+        Apply Bone
+        <select data-extra-bone-target="${escapeHtml(setting.id)}">
+          <option value="">extra bone</option>
+          ${targetOptions
+            .map(
+              (boneName) =>
+                `<option value="${escapeHtml(boneName)}" ${boneName === setting.targetBone ? "selected" : ""}>${escapeHtml(boneName)}</option>`,
+            )
+            .join("")}
+        </select>
+      </label>
+      <label>
+        Follow Target
+        <select data-extra-bone-source="${escapeHtml(setting.id)}">
+          <option value="">humanoid bone</option>
+          ${sourceOptions
+            .map(
+              (boneName) =>
+                `<option value="${escapeHtml(boneName)}" ${boneName === setting.sourceBone ? "selected" : ""}>${escapeHtml(formatBoneName(boneName))}</option>`,
+            )
+            .join("")}
+        </select>
+      </label>
+      <label>
+        Tail Direction Target
+        <select data-extra-bone-tail="${escapeHtml(setting.id)}">
+          <option value="">tail direction bone</option>
+          ${sourceOptions
+            .map(
+              (boneName) =>
+                `<option value="${escapeHtml(boneName)}" ${boneName === setting.tailDirectionBone ? "selected" : ""}>${escapeHtml(formatBoneName(boneName))}</option>`,
+            )
+            .join("")}
+        </select>
+      </label>
+      <div class="extra-bone-factor-list">
+        ${renderExtraBoneFactorRow(setting, "swing", "Swing", setting.swingFactor)}
+        ${renderExtraBoneFactorRow(setting, "twist", "Twist", setting.twistFactor)}
+      </div>
+    </section>
+  `;
+}
+
+function renderExtraBoneFactorRow(setting, key, label, value) {
+  return `
+    <label class="extra-bone-factor-row">
+      <span>${label}</span>
+      <input type="number" step="0.01" value="${roundForInput(value)}" data-extra-bone-factor="${escapeHtml(setting.id)}" data-factor="${key}" />
+    </label>
+  `;
+}
+
+function renderExtraBoneAxisRow(setting, axis) {
+  const axisSetting = normalizeExtraBoneAxisSetting(setting.axes?.[axis]);
+  return `
+    <label class="extra-bone-axis-row">
+      <span>${axis.toUpperCase()}</span>
+      <input type="number" step="0.01" value="${roundForInput(axisSetting.factor)}" data-extra-bone-factor="${escapeHtml(setting.id)}" data-axis="${axis}" />
+      <span class="extra-bone-ignore">
+        <input type="checkbox" data-extra-bone-ignore="${escapeHtml(setting.id)}" data-axis="${axis}" ${axisSetting.ignore ? "checked" : ""} />
+        제외
+      </span>
+    </label>
+  `;
+}
+
 function renderTransitionViewerPanel() {
   return `
     <div class="panel-header">
@@ -2119,6 +2399,7 @@ function bindUi() {
   });
   document.querySelector("#saveCorrection")?.addEventListener("click", saveCorrection);
   document.querySelector("#saveExpressionMeta")?.addEventListener("click", saveCorrection);
+  document.querySelector("#addExtraBoneFollow")?.addEventListener("click", addExtraBoneFollowSetting);
   document.querySelector("#saveSelectedParameters")?.addEventListener("click", saveSelectedExpressionParameters);
   document.querySelector("#toggleParameterFilter")?.addEventListener("click", () => {
     state.parameterFilterOpen = !state.parameterFilterOpen;
@@ -2296,6 +2577,60 @@ function bindUi() {
     input.addEventListener("input", () => updateCorrectionMeta(input.dataset.correctionMeta, input.value));
   }
 
+  document.querySelector("#showAllOutlineMaterials")?.addEventListener("change", (event) => updateOutlineMaterialShowAll(event.target.checked));
+
+  for (const input of document.querySelectorAll("[data-outline-color]")) {
+    input.addEventListener("input", () => updateMaterialOutlineColor(input.dataset.outlineColor, input.value));
+  }
+
+  for (const button of document.querySelectorAll("[data-outline-hide]")) {
+    button.addEventListener("click", () => toggleOutlineMaterialVisibility(button.dataset.outlineHide));
+  }
+
+  for (const button of document.querySelectorAll("[data-outline-pick]")) {
+    button.addEventListener("click", () => {
+      document.querySelector(`[data-outline-color="${cssEscape(button.dataset.outlinePick)}"]`)?.click();
+    });
+  }
+
+  for (const input of document.querySelectorAll("[data-outline-hex]")) {
+    input.addEventListener("blur", () => updateMaterialOutlineColor(input.dataset.outlineHex, input.value));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        updateMaterialOutlineColor(input.dataset.outlineHex, input.value);
+        input.blur();
+      }
+    });
+  }
+
+  for (const select of document.querySelectorAll("[data-extra-bone-target]")) {
+    select.addEventListener("change", () => updateExtraBoneFollowSetting(select.dataset.extraBoneTarget, { targetBone: select.value }));
+  }
+
+  for (const select of document.querySelectorAll("[data-extra-bone-source]")) {
+    select.addEventListener("change", () => {
+      const existing = normalizeExtraBoneFollowSettings(state.correction.extraBoneFollowSettings).find((setting) => setting.id === select.dataset.extraBoneSource);
+      updateExtraBoneFollowSetting(select.dataset.extraBoneSource, {
+        sourceBone: select.value,
+        tailDirectionBone: existing?.tailDirectionBone || getDefaultTailDirectionBone(select.value),
+      });
+    });
+  }
+
+  for (const select of document.querySelectorAll("[data-extra-bone-tail]")) {
+    select.addEventListener("change", () => updateExtraBoneFollowSetting(select.dataset.extraBoneTail, { tailDirectionBone: select.value }));
+  }
+
+  for (const input of document.querySelectorAll("[data-extra-bone-factor]")) {
+    input.addEventListener("input", () =>
+      updateExtraBoneFollowFactor(input.dataset.extraBoneFactor, input.dataset.factor, Number(input.value)),
+    );
+  }
+
+  for (const button of document.querySelectorAll("[data-extra-bone-delete]")) {
+    button.addEventListener("click", () => deleteExtraBoneFollowSetting(button.dataset.extraBoneDelete));
+  }
+
   for (const input of document.querySelectorAll("[name='vrmVersion']")) {
     input.addEventListener("change", () => updateVrmVersion(input.value));
   }
@@ -2307,6 +2642,15 @@ function bindUi() {
   for (const input of document.querySelectorAll("[data-animation-time]")) {
     input.addEventListener("input", () => setAnimationTime(Number(input.value)));
   }
+
+  const lipSyncInput = document.querySelector("[data-lip-sync-text]");
+  lipSyncInput?.addEventListener("input", (event) => {
+    state.lipSyncPreview.text = event.target.value;
+  });
+  lipSyncInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") startLipSyncPreview();
+  });
+  document.querySelector("#playLipSyncPreview")?.addEventListener("click", startLipSyncPreview);
 
   for (const input of document.querySelectorAll("[data-correction-vector]")) {
     input.addEventListener("input", () => updateCorrectionValue(input.dataset.correctionVector, Number(input.dataset.axis), Number(input.value)));
@@ -2354,6 +2698,10 @@ function bindUi() {
 
   document.querySelector("#closeCameraSettings")?.addEventListener("click", () => closeCameraSettings());
   document.querySelector("[data-light-intensity]")?.addEventListener("input", (event) => updateLightIntensity(Number(event.target.value)));
+  document.querySelector("#toggleBoneGizmo")?.addEventListener("click", () => {
+    state.extraBoneGizmoVisible = !state.extraBoneGizmoVisible;
+    renderPreservingScrollableUi();
+  });
 
   for (const input of document.querySelectorAll("[data-camera-setting]")) {
     input.addEventListener("input", () => updateCameraSetting(input.dataset.cameraSetting, Number(input.value), input));
@@ -2569,7 +2917,7 @@ function bindUi() {
     });
   }
 
-  for (const scroller of document.querySelectorAll(".expression-list, .parameter-list, .transfer-panel, .correction-panel, .expression-editor-panel, .emotion-linker-panel, .transition-viewer-panel, .transition-preview-tray")) {
+  for (const scroller of document.querySelectorAll(".expression-list, .parameter-list, .transfer-panel, .correction-panel, .expression-editor-panel, .emotion-linker-panel, .material-outline-list, .extra-bone-panel, .transition-viewer-panel, .transition-preview-tray")) {
     bindPanelWheel(scroller, scroller);
   }
 
@@ -2581,6 +2929,8 @@ function bindUi() {
         ? ".correction-panel"
         : state.mode === "linker"
           ? ".emotion-linker-panel"
+          : state.mode === "extraBone"
+            ? ".extra-bone-panel"
           : state.mode === "transitionViewer"
             ? ".transition-viewer-panel"
         : state.editing
@@ -2592,6 +2942,16 @@ function bindUi() {
 
 function getSelectedEmotionPreset() {
   return state.expressionPresets.find((preset) => preset.id === state.selectedExpressionPresetId) ?? state.expressionPresets[0] ?? null;
+}
+
+function repairSelectedExpressionPreset(fallbackId = null) {
+  if (state.expressionPresets.some((preset) => preset.id === state.selectedExpressionPresetId)) return;
+  const fallback = fallbackId && state.expressionPresets.some((preset) => preset.id === fallbackId)
+    ? fallbackId
+    : (state.expressionPresets[0]?.id ?? null);
+  state.selectedExpressionPresetId = fallback;
+  state.selectedExpressionRangeId = null;
+  loadSelectedExpressionParameterDraft();
 }
 
 function getSelectedExpressionRangeSlot() {
@@ -2896,14 +3256,20 @@ function toggleEmotionPresetBlink(id) {
 }
 
 function deleteEmotionPreset(id) {
-  const preset = state.expressionPresets.find((item) => item.id === id);
+  const deleteIndex = state.expressionPresets.findIndex((item) => item.id === id);
+  const preset = state.expressionPresets[deleteIndex];
   if (!preset || preset.locked) return;
   if (!window.confirm("삭제할까요?")) return;
+  const wasSelected = state.selectedExpressionPresetId === id;
+  const nextFallbackIndex = Math.max(0, Math.min(deleteIndex, state.expressionPresets.length - 2));
   state.expressionPresets = state.expressionPresets.filter((item) => item.id !== id);
-  if (state.selectedExpressionPresetId === id) {
-    state.selectedExpressionPresetId = state.expressionPresets[0]?.id ?? null;
+  if (wasSelected) {
+    state.selectedExpressionPresetId = state.expressionPresets[nextFallbackIndex]?.id ?? null;
     state.selectedExpressionRangeId = null;
+    state.expressionTransition = null;
+    state.expressionDecay = null;
   }
+  repairSelectedExpressionPreset();
   loadSelectedExpressionParameterDraft();
   markExpressionMetaDirty();
   applySelectedEmotionPreset();
@@ -3109,6 +3475,8 @@ function renderPreservingScrollableUi() {
     ".expression-editor-panel",
     ".expression-parameter-tray",
     ".emotion-linker-panel",
+    ".material-outline-list",
+    ".extra-bone-panel",
     ".transition-viewer-panel",
     ".transition-preview-tray",
     ".parameter-filter-popup",
@@ -3396,7 +3764,6 @@ function importCorrectionMeta(source) {
       messages.push(`${fileName} 없음`);
       continue;
     }
-    targetEntry.loop = Boolean(sourceEntry.loop);
     const nextCorrections = {};
     for (const [boneName, correction] of Object.entries(sourceEntry.corrections ?? {})) {
       if (!HUMAN_BONE_SET.has(boneName) || !getRawBoneNode(boneName)) {
@@ -3431,7 +3798,6 @@ function importLinkerMeta(source) {
       messages.push(`${fileName} 없음`);
       continue;
     }
-    targetEntry.loop = Boolean(sourceEntry.loop);
     const preset = findMatchingExpressionPreset(sourceEntry.expressionPresetId, sourceEntry.expressionPresetName);
     if (sourceEntry.expressionPresetId || sourceEntry.expressionPresetName) {
       if (preset) {
@@ -4204,12 +4570,15 @@ async function deleteSelectedAnimation() {
   const name = state.selectedAnimationName;
   const shouldDelete = window.confirm(`현재 애니메이션을 삭제할까요?\n${name}\n\n앱 공통 애니메이션 목록과 animations 폴더의 파일이 삭제됩니다.`);
   if (!shouldDelete) return;
+  const beforeNames = getAnimationNames();
+  const deletedIndex = beforeNames.indexOf(name);
   await window.vrmFiles.deleteStoredAnimation(name);
   const hadCharacterCorrection = Boolean(state.correction.animations[name]);
   delete state.correction.animations[name];
   await refreshAnimationCatalog();
   const names = getAnimationNames();
-  state.selectedAnimationName = names[0] ?? null;
+  const fallbackIndex = Math.max(0, Math.min(deletedIndex, names.length - 1));
+  state.selectedAnimationName = getDefaultAnimationName() ?? names[fallbackIndex] ?? null;
   if (hadCharacterCorrection && state.correctionPath) state.correctionDirty = true;
   await loadSelectedAnimation();
   applyMotionCorrectionPreview();
@@ -4228,6 +4597,7 @@ async function toggleSelectedAnimationFirst(checked) {
   const entry = getSelectedAnimationEntry();
   if (!entry) return;
   const updated = await window.vrmFiles.updateAnimationInfo(entry.fileName, { isFirst: Boolean(checked) });
+  if (!updated) return;
   for (const animation of Object.values(state.animationCatalog)) animation.isFirst = false;
   entry.isFirst = Boolean(updated?.isFirst);
   renderPreservingScrollableUi();
@@ -4256,12 +4626,14 @@ function updateAnimationExpressionLink(animationName, presetId) {
 }
 
 function updateAnimationLoop(animationName, checked) {
-  const entry = ensureAnimationMetaEntry(animationName);
-  if (!entry) return;
-  entry.loop = Boolean(checked);
-  state.correctionDirty = true;
+  if (!animationName || !state.animationCatalog?.[animationName]) return;
+  const loop = Boolean(checked);
+  state.animationCatalog[animationName].loop = loop;
+  const entry = state.correction.animations?.[animationName];
+  if (entry) entry.loop = loop;
+  window.vrmFiles.updateAnimationInfo(animationName, { loop }).catch(() => {});
   if (state.selectedAnimationName === animationName && animationAction) {
-    configureAnimationLoop(entry.loop);
+    configureAnimationLoop(loop);
   }
   syncSaveMetaButton();
 }
@@ -4558,6 +4930,7 @@ function applyLinkedExpressionPreset(presetId, duration = 0.2) {
 
 function clearReferenceAnimation() {
   clearMotionCorrectionPreview();
+  clearExtraBoneFollowPreview();
   state.activeLinkTimeline = null;
   animationMixer?.stopAllAction();
   animationMixer = null;
@@ -4632,6 +5005,7 @@ function configureAnimationLoop(loop, action = animationAction) {
 function setAnimationTime(time) {
   if (!animationAction || !animationMixer) return;
   clearMotionCorrectionPreview();
+  clearExtraBoneFollowPreview();
   const nextTime = Math.min(Math.max(time, 0), state.animation.duration || 0);
   animationAction.paused = true;
   state.animation.playing = false;
@@ -4640,6 +5014,7 @@ function setAnimationTime(time) {
   state.animation.time = nextTime;
   currentVrm?.update?.(0);
   applyMotionCorrectionPreview();
+  applyExtraBoneFollowPreview();
   updateAnimationControls();
 }
 
@@ -4777,6 +5152,7 @@ async function loadVrm(bytes) {
   applyParameterFilterFromConfig();
   state.parameterFilterOpen = false;
   captureBoneRestTransforms();
+  applyMaterialOutlineSettings();
   applyAllExpressionPreviews();
   applySelectedEmotionPreset();
   applyMotionCorrectionPreview();
@@ -4807,6 +5183,143 @@ function collectShapeKeyParameters() {
     id: name,
     label: name,
   }));
+}
+
+function collectRenderableMaterials() {
+  if (!currentVrm?.scene) return [];
+  const byName = new Map();
+  currentVrm.scene.traverse((object) => {
+    if (!object?.isMesh || !object.material) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      if (!material?.name || byName.has(material.name)) continue;
+      byName.set(material.name, material);
+    }
+  });
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function collectVisibleOutlineMaterials(showAll = false) {
+  const materials = collectRenderableMaterials();
+  if (showAll) return materials;
+  return materials.filter((material) => !isMaterialOutlineHidden(material));
+}
+
+function isMaterialOutlineHidden(material) {
+  const settings = normalizeMaterialSettings(state.correction.materialSettings).outline;
+  const name = material?.name ?? "";
+  if (!name) return true;
+  if (settings.hiddenMaterials.includes(name)) return true;
+  if (settings.includedMaterials.includes(name)) return false;
+  return !isOutlineEditableMaterial(material);
+}
+
+function isOutlineEditableMaterial(material) {
+  return Boolean(
+    material?.isMToonMaterial ||
+      material?.outlineColorFactor ||
+      material?.outlineWidthFactor ||
+      material?.uniforms?.outlineColorFactor ||
+      material?.uniforms?.outlineWidthFactor ||
+      material?.userData?.gltfExtensions?.VRMC_materials_mtoon ||
+      material?.userData?.gltfExtensions?.VRM?.materialProperties,
+  );
+}
+
+function getMaterialOutlineColor(material) {
+  const saved = normalizeHexColor(state.correction.materialSettings?.outline?.materials?.[material.name]?.color);
+  if (saved) return saved;
+  return readMaterialOutlineColor(material) ?? "#000000";
+}
+
+function readMaterialOutlineColor(material) {
+  const color = new THREE.Color();
+  if (material?.outlineColorFactor?.isColor) return `#${material.outlineColorFactor.getHexString()}`;
+  if (material?.uniforms?.outlineColorFactor?.value?.isColor) return `#${material.uniforms.outlineColorFactor.value.getHexString()}`;
+  const extension = material?.userData?.gltfExtensions?.VRMC_materials_mtoon ?? material?.userData?.gltfExtensions?.VRM?.materialProperties;
+  const factor = extension?.outlineColorFactor ?? extension?.floatProperties?._OutlineColor;
+  if (Array.isArray(factor) && factor.length >= 3) {
+    color.setRGB(factor[0], factor[1], factor[2]);
+    return `#${color.getHexString()}`;
+  }
+  return null;
+}
+
+function updateMaterialOutlineColor(materialName, colorValue) {
+  const color = normalizeHexColor(colorValue);
+  if (!materialName || !color) return;
+  state.correction.materialSettings = normalizeMaterialSettings(state.correction.materialSettings);
+  state.correction.materialSettings.outline.materials[materialName] = { color };
+  applyMaterialOutlineSettings();
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+  syncMaterialOutlineControls(materialName, color);
+}
+
+function updateOutlineMaterialShowAll(showAll) {
+  state.correction.materialSettings = normalizeMaterialSettings(state.correction.materialSettings);
+  state.correction.materialSettings.outline.showAll = Boolean(showAll);
+  renderPreservingScrollableUi();
+}
+
+function toggleOutlineMaterialVisibility(materialName) {
+  if (!materialName) return;
+  state.correction.materialSettings = normalizeMaterialSettings(state.correction.materialSettings);
+  const settings = state.correction.materialSettings.outline;
+  const material = collectRenderableMaterials().find((item) => item.name === materialName);
+  const hidden = material ? isMaterialOutlineHidden(material) : settings.hiddenMaterials.includes(materialName);
+  const hiddenSet = new Set(settings.hiddenMaterials);
+  const includedSet = new Set(settings.includedMaterials);
+  if (hidden) {
+    hiddenSet.delete(materialName);
+    includedSet.add(materialName);
+  } else {
+    hiddenSet.add(materialName);
+    includedSet.delete(materialName);
+  }
+  settings.hiddenMaterials = [...hiddenSet].sort((a, b) => a.localeCompare(b));
+  settings.includedMaterials = [...includedSet].sort((a, b) => a.localeCompare(b));
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+  renderPreservingScrollableUi();
+}
+
+function applyMaterialOutlineSettings() {
+  const settings = normalizeMaterialSettings(state.correction.materialSettings).outline.materials;
+  if (!currentVrm?.scene || !Object.keys(settings).length) return;
+  for (const material of collectRenderableMaterials()) {
+    const color = settings[material.name]?.color;
+    if (!color) continue;
+    applyOutlineColorToMaterial(material, color);
+  }
+}
+
+function applyOutlineColorToMaterial(material, colorValue) {
+  const color = new THREE.Color(colorValue);
+  if (material.outlineColorFactor?.isColor) material.outlineColorFactor.copy(color);
+  if (material.uniforms?.outlineColorFactor?.value?.isColor) material.uniforms.outlineColorFactor.value.copy(color);
+  const extension = material.userData?.gltfExtensions?.VRMC_materials_mtoon;
+  if (extension) extension.outlineColorFactor = [color.r, color.g, color.b];
+  material.needsUpdate = true;
+}
+
+function syncMaterialOutlineControls(materialName, color) {
+  for (const input of document.querySelectorAll(`[data-outline-color="${cssEscape(materialName)}"], [data-outline-hex="${cssEscape(materialName)}"]`)) {
+    input.value = color;
+  }
+  for (const swatch of document.querySelectorAll(`[data-outline-pick="${cssEscape(materialName)}"]`)) {
+    swatch.style.background = color;
+  }
+}
+
+function normalizeHexColor(value) {
+  const text = String(value ?? "").trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(text)) return text.toLowerCase();
+  if (/^[0-9a-fA-F]{6}$/.test(text)) return `#${text.toLowerCase()}`;
+  if (/^#[0-9a-fA-F]{3}$/.test(text)) {
+    return `#${text[1]}${text[1]}${text[2]}${text[2]}${text[3]}${text[3]}`.toLowerCase();
+  }
+  return null;
 }
 
 function applyRorrParameterValues(values, weight = 1) {
@@ -4862,6 +5375,12 @@ function readCurrentRorrInfluenceValues() {
 
 function applyRorrInfluenceValues(values) {
   if (!currentVrm) return;
+  state.activeRorrInfluenceValues = { ...(values ?? {}) };
+  applyRorrInfluenceValuesRaw(state.activeRorrInfluenceValues);
+}
+
+function applyRorrInfluenceValuesRaw(values) {
+  if (!currentVrm) return;
   const rorrNames = new Set(state.rorrParameters.map((parameter) => parameter.id));
   currentVrm.scene.traverse((object) => {
     if (!object.isMesh || !object.morphTargetDictionary || !Array.isArray(object.morphTargetInfluences)) return;
@@ -4869,6 +5388,235 @@ function applyRorrInfluenceValues(values) {
       const index = object.morphTargetDictionary[name];
       if (index == null) continue;
       object.morphTargetInfluences[index] = clampEmotionValue(values?.[name] ?? 0);
+    }
+  });
+}
+
+function reapplyActiveRorrInfluences() {
+  if (!currentVrm || !Object.keys(state.activeRorrInfluenceValues ?? {}).length) return;
+  applyRorrInfluenceValuesRaw(state.activeRorrInfluenceValues);
+}
+
+function startLipSyncPreview() {
+  if (state.mode !== "transitionViewer" || !currentVrm) return;
+  const text = String(state.lipSyncPreview.text ?? "").trim();
+  const timeline = buildLipSyncTimeline(text);
+  state.lipSyncPreview.timeline = timeline;
+  state.lipSyncPreview.elapsed = 0;
+  state.lipSyncPreview.duration = timeline.at(-1)?.end ?? 0;
+  state.lipSyncPreview.playing = timeline.length > 0;
+  state.lipSyncPreview.activeShape = "";
+  state.lipSyncPreview.restoreValues = readMouthInfluenceValues();
+  if (!state.lipSyncPreview.playing) {
+    applyMouthInfluenceValues(state.lipSyncPreview.restoreValues ?? {});
+  }
+  renderPreservingScrollableUi();
+}
+
+function buildLipSyncTimeline(text) {
+  const timeline = [];
+  let cursor = 0;
+  for (const char of String(text ?? "")) {
+    if (/\s/.test(char)) {
+      cursor += 0.16;
+      continue;
+    }
+    const shape = getVisemeForCharacter(char);
+    const duration = shape === "closed" ? 0.08 : 0.16;
+    timeline.push({ start: cursor, end: cursor + duration, shape });
+    cursor += duration;
+    if (shape !== "closed") {
+      timeline.push({ start: cursor, end: cursor + 0.04, shape: "closed" });
+      cursor += 0.04;
+    }
+  }
+  return timeline;
+}
+
+function getVisemeForCharacter(char) {
+  const code = char.codePointAt(0);
+  if (code >= 0xac00 && code <= 0xd7a3) {
+    const offset = code - 0xac00;
+    const vowelIndex = Math.floor((offset % 588) / 28);
+    const finalIndex = offset % 28;
+    const vowelToViseme = {
+      0: "A",
+      1: "A",
+      2: "A",
+      3: "A",
+      4: "E",
+      5: "E",
+      6: "E",
+      7: "E",
+      8: "O",
+      9: "O",
+      10: "O",
+      11: "O",
+      12: "O",
+      13: "U",
+      14: "U",
+      15: "U",
+      16: "U",
+      17: "U",
+      18: "U",
+      19: "I",
+      20: "I",
+    };
+    return finalIndex ? vowelToViseme[vowelIndex] ?? "closed" : vowelToViseme[vowelIndex] ?? "A";
+  }
+  const lower = String(char).toLowerCase();
+  if ("a".includes(lower)) return "A";
+  if ("i".includes(lower)) return "I";
+  if ("u".includes(lower)) return "U";
+  if ("e".includes(lower)) return "E";
+  if ("o".includes(lower)) return "O";
+  if (/[.,!?;:]/.test(lower)) return "closed";
+  return "A";
+}
+
+function updateLipSyncPreview(delta) {
+  if (state.mode !== "transitionViewer") {
+    if (state.lipSyncPreview.playing) stopLipSyncPreview();
+    return;
+  }
+  if (!currentVrm || !state.lipSyncPreview.playing) return;
+  state.lipSyncPreview.elapsed += delta;
+  const elapsed = state.lipSyncPreview.elapsed;
+  const active = state.lipSyncPreview.timeline.find((slot) => elapsed >= slot.start && elapsed < slot.end);
+  if (!active) {
+    if (elapsed >= state.lipSyncPreview.duration) {
+      stopLipSyncPreview();
+      return;
+    }
+    applyLipSyncMouthShape("closed", 1);
+    return;
+  }
+  const span = Math.max(0.001, active.end - active.start);
+  const local = (elapsed - active.start) / span;
+  const envelope = Math.sin(Math.PI * clamp01(local));
+  applyLipSyncMouthShape(active.shape, envelope);
+}
+
+function stopLipSyncPreview() {
+  state.lipSyncPreview.playing = false;
+  state.lipSyncPreview.elapsed = 0;
+  state.lipSyncPreview.activeShape = "";
+  applyMouthInfluenceValues(state.lipSyncPreview.restoreValues ?? {});
+}
+
+function applyLipSyncMouthShape(shape, value) {
+  const targets = collectMouthShapeKeyNames();
+  const next = {};
+  for (const name of targets.all) next[name] = 0;
+  const targetName = targets.byShape[shape];
+  if (targetName) next[targetName] = clampEmotionValue(value);
+  applyMouthInfluenceValues(next);
+}
+
+function collectMouthShapeKeyNames() {
+  const all = new Set();
+  const byShape = {};
+  const shapePatterns = {
+    A: /(?:^|[_-])(?:MTH|LIP_SYNC)[_-]?A$/i,
+    I: /(?:^|[_-])(?:MTH|LIP_SYNC)[_-]?I$/i,
+    U: /(?:^|[_-])(?:MTH|LIP_SYNC)[_-]?U$/i,
+    E: /(?:^|[_-])(?:MTH|LIP_SYNC)[_-]?E$/i,
+    O: /(?:^|[_-])(?:MTH|LIP_SYNC)[_-]?O$/i,
+  };
+  currentVrm?.scene?.traverse((object) => {
+    if (!object.isMesh || !object.morphTargetDictionary) return;
+    for (const name of Object.keys(object.morphTargetDictionary)) {
+      if (!/(?:MTH|LIP_SYNC)/i.test(name)) continue;
+      all.add(name);
+      for (const [shape, pattern] of Object.entries(shapePatterns)) {
+        if (!byShape[shape] && pattern.test(name)) byShape[shape] = name;
+      }
+    }
+  });
+  return { all: [...all], byShape };
+}
+
+function readMouthInfluenceValues() {
+  const next = {};
+  const names = collectMouthShapeKeyNames().all;
+  currentVrm?.scene?.traverse((object) => {
+    if (!object.isMesh || !object.morphTargetDictionary || !Array.isArray(object.morphTargetInfluences)) return;
+    for (const name of names) {
+      const index = object.morphTargetDictionary[name];
+      if (index == null || next[name] != null) continue;
+      next[name] = clampEmotionValue(object.morphTargetInfluences[index] ?? 0);
+    }
+  });
+  return next;
+}
+
+function applyMouthInfluenceValues(values) {
+  if (!currentVrm) return;
+  const names = Object.keys(values ?? {});
+  currentVrm.scene.traverse((object) => {
+    if (!object.isMesh || !object.morphTargetDictionary || !Array.isArray(object.morphTargetInfluences)) return;
+    for (const name of names) {
+      const index = object.morphTargetDictionary[name];
+      if (index == null) continue;
+      object.morphTargetInfluences[index] = clampEmotionValue(values[name] ?? 0);
+    }
+  });
+}
+
+function updateRandomBlink(delta) {
+  if (!currentVrm || shouldDisableRandomBlink()) {
+    state.blink.elapsed = 0;
+    state.blink.closing = false;
+    return;
+  }
+  const blinkTargets = collectBlinkShapeKeyNames();
+  if (!blinkTargets.length) return;
+  state.blink.elapsed += delta;
+  if (!state.blink.closing && state.blink.elapsed >= state.blink.nextDelay) {
+    state.blink.elapsed = 0;
+    state.blink.closing = true;
+    state.blink.duration = 0.12 + Math.random() * 0.08;
+  }
+  if (!state.blink.closing) return;
+  const t = Math.min(1, state.blink.elapsed / Math.max(state.blink.duration, 0.001));
+  const blinkValue = Math.sin(t * Math.PI);
+  applyBlinkInfluence(blinkTargets, blinkValue);
+  if (t >= 1) {
+    state.blink.elapsed = 0;
+    state.blink.closing = false;
+    state.blink.nextDelay = 0.5 + Math.random() * 4.5;
+  }
+}
+
+function shouldDisableRandomBlink() {
+  if (state.mode === "expression") return true;
+  const selected = getSelectedEmotionPreset();
+  return Boolean(selected?.isDisableBlink && (selected.value ?? 0) > 0.001);
+}
+
+function collectBlinkShapeKeyNames() {
+  const names = state.rorrParameters.map((parameter) => parameter.id);
+  const preferred = [
+    "Fcl_Eye_Close",
+    "Fcl_EYE_Close",
+    "EYE_Close_All",
+    "EYE_Close",
+    "Blink",
+    "blink",
+  ];
+  const exact = preferred.filter((name) => names.includes(name));
+  if (exact.length) return exact;
+  return names.filter((name) => /eye/i.test(name) && /close|blink/i.test(name));
+}
+
+function applyBlinkInfluence(names, value) {
+  const clamped = clampEmotionValue(value);
+  currentVrm.scene.traverse((object) => {
+    if (!object.isMesh || !object.morphTargetDictionary || !Array.isArray(object.morphTargetInfluences)) return;
+    for (const name of names) {
+      const index = object.morphTargetDictionary[name];
+      if (index == null) continue;
+      object.morphTargetInfluences[index] = Math.max(object.morphTargetInfluences[index] ?? 0, clamped);
     }
   });
 }
@@ -5092,6 +5840,15 @@ function createEmptyCorrection() {
       rotationOrder: "XYZ",
     },
     animations: {},
+    extraBoneFollowSettings: [],
+  materialSettings: {
+    outline: {
+      materials: {},
+      showAll: false,
+      hiddenMaterials: [],
+      includedMaterials: [],
+    },
+  },
     blush: null,
     expressionPresets: createDefaultEmotionPresets().map(({ id, name, locked, isDisableBlink, rangeSlots }) => ({ id, name, locked, isDisableBlink, rangeSlots })),
   };
@@ -5163,7 +5920,7 @@ function formatTransitionLinkerOptionLabel(animationName) {
 }
 
 function isAnimationLoop(animationName) {
-  return Boolean(getAnimationMetaEntry(animationName).loop);
+  return Boolean(state.animationCatalog?.[animationName]?.loop);
 }
 
 function isAnimationRecommendedForTransitionKind(kind, animationName) {
@@ -5180,12 +5937,145 @@ function getSelectedAnimationEntry() {
 function getAnimationMetaEntry(animationName) {
   if (!animationName) return {};
   const entry = state.correction.animations?.[animationName];
-  return normalizeAnimationCorrectionEntry(entry ?? {});
+  const next = normalizeAnimationCorrectionEntry(entry ?? {});
+  next.loop = Boolean(state.animationCatalog?.[animationName]?.loop);
+  return next;
+}
+
+function collectExtraBoneOptions() {
+  if (!currentVrm?.scene) return [];
+  const humanoidObjects = new Set(HUMAN_BONES.map((boneName) => getRawBoneNode(boneName)).filter(Boolean));
+  const names = new Set();
+  currentVrm.scene.traverse((object) => {
+    if (!object?.isBone || !object.name || humanoidObjects.has(object)) return;
+    names.add(object.name);
+  });
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+
+function collectAvailableHumanoidBoneOptions() {
+  return HUMAN_BONES.filter((boneName) => getRawBoneNode(boneName));
+}
+
+function addExtraBoneFollowSetting() {
+  const settings = normalizeExtraBoneFollowSettings(state.correction.extraBoneFollowSettings);
+  const targetBone = collectExtraBoneOptions().find((boneName) => !settings.some((setting) => setting.targetBone === boneName)) ?? "";
+  const sourceBone = collectAvailableHumanoidBoneOptions()[0] ?? "";
+  const tailDirectionBone = getDefaultTailDirectionBone(sourceBone);
+  const id = `extra-bone-${Date.now()}-${settings.length}`;
+  settings.push(createExtraBoneFollowSetting({ id, targetBone, sourceBone, tailDirectionBone }));
+  state.correction.extraBoneFollowSettings = settings;
+  state.selectedExtraBoneFollowId = id;
+  state.correctionDirty = true;
+  applyExtraBoneFollowPreview();
+  syncSaveMetaButton();
+  renderPreservingScrollableUi();
+}
+
+function updateExtraBoneFollowSetting(id, patch) {
+  state.correction.extraBoneFollowSettings = normalizeExtraBoneFollowSettings(state.correction.extraBoneFollowSettings).map((setting) =>
+    setting.id === id ? createExtraBoneFollowSetting({ ...setting, ...patch }) : setting,
+  );
+  state.selectedExtraBoneFollowId = id;
+  state.correctionDirty = true;
+  applyExtraBoneFollowPreview();
+  syncSaveMetaButton();
+  renderPreservingScrollableUi();
+}
+
+function updateExtraBoneFollowAxis(id, axis, patch) {
+  if (!["x", "y", "z"].includes(axis)) return;
+  state.correction.extraBoneFollowSettings = normalizeExtraBoneFollowSettings(state.correction.extraBoneFollowSettings).map((setting) => {
+    if (setting.id !== id) return setting;
+    return createExtraBoneFollowSetting({
+      ...setting,
+      axes: {
+        ...setting.axes,
+        [axis]: {
+          ...normalizeExtraBoneAxisSetting(setting.axes?.[axis]),
+          ...patch,
+        },
+      },
+    });
+  });
+  state.selectedExtraBoneFollowId = id;
+  state.correctionDirty = true;
+  applyExtraBoneFollowPreview();
+  syncSaveMetaButton();
+}
+
+function updateExtraBoneFollowFactor(id, factorKey, value) {
+  if (!["swing", "twist"].includes(factorKey) || !Number.isFinite(value)) return;
+  const patch = factorKey === "swing" ? { swingFactor: value } : { twistFactor: value };
+  state.correction.extraBoneFollowSettings = normalizeExtraBoneFollowSettings(state.correction.extraBoneFollowSettings).map((setting) =>
+    setting.id === id ? createExtraBoneFollowSetting({ ...setting, ...patch }) : setting,
+  );
+  state.selectedExtraBoneFollowId = id;
+  state.correctionDirty = true;
+  applyExtraBoneFollowPreview();
+  syncSaveMetaButton();
+}
+
+function deleteExtraBoneFollowSetting(id) {
+  clearExtraBoneFollowPreview();
+  state.correction.extraBoneFollowSettings = normalizeExtraBoneFollowSettings(state.correction.extraBoneFollowSettings).filter((setting) => setting.id !== id);
+  if (state.selectedExtraBoneFollowId === id) state.selectedExtraBoneFollowId = null;
+  state.correctionDirty = true;
+  applyExtraBoneFollowPreview();
+  syncSaveMetaButton();
+  renderPreservingScrollableUi();
+}
+
+function createExtraBoneFollowSetting(setting = {}) {
+  const legacy = normalizeLegacyExtraBoneFactors(setting);
+  return {
+    id: String(setting.id ?? `extra-bone-${Date.now()}`),
+    targetBone: String(setting.targetBone ?? ""),
+    sourceBone: String(setting.sourceBone ?? ""),
+    tailDirectionBone: String(setting.tailDirectionBone ?? ""),
+    swingFactor: normalizeExtraBoneFactor(setting.swingFactor, legacy.swingFactor),
+    twistFactor: normalizeExtraBoneFactor(setting.twistFactor, legacy.twistFactor),
+  };
+}
+
+function getDefaultTailDirectionBone(sourceBoneName) {
+  const source = getRawBoneNode(sourceBoneName);
+  if (!source) return "";
+  for (const boneName of HUMAN_BONES) {
+    const bone = getRawBoneNode(boneName);
+    if (!bone || bone === source) continue;
+    if (findNearestMappedBoneAncestor(bone, new Map([[source, sourceBoneName]])) === source) return boneName;
+  }
+  return "";
+}
+
+function normalizeExtraBoneRotationOrder(order) {
+  const value = String(order ?? "YXZ").toUpperCase();
+  return ["YXZ", "YZX", "XYZ", "XZY", "ZXY", "ZYX"].includes(value) ? value : "YXZ";
+}
+
+function normalizeExtraBoneFactor(value, fallback = 1) {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : fallback;
+}
+
+function normalizeLegacyExtraBoneFactors(setting) {
+  const axes = setting?.axes;
+  if (!axes || typeof axes !== "object") return { swingFactor: 1, twistFactor: 0 };
+  const x = normalizeExtraBoneAxisSetting(axes.x);
+  const y = normalizeExtraBoneAxisSetting(axes.y);
+  const z = normalizeExtraBoneAxisSetting(axes.z);
+  const swingValues = [x, z].filter((axis) => !axis.ignore).map((axis) => axis.factor);
+  return {
+    swingFactor: swingValues.length ? swingValues.reduce((sum, value) => sum + value, 0) / swingValues.length : 1,
+    twistFactor: y.ignore ? 0 : y.factor,
+  };
 }
 
 function ensureAnimationMetaEntry(animationName) {
   if (!animationName || !state.animationCatalog?.[animationName]) return null;
   state.correction.animations[animationName] = normalizeAnimationCorrectionEntry(state.correction.animations[animationName] ?? {});
+  state.correction.animations[animationName].loop = Boolean(state.animationCatalog?.[animationName]?.loop);
   return state.correction.animations[animationName];
 }
 
@@ -5368,6 +6258,7 @@ async function saveCorrection() {
   const modeBeforeSave = state.mode;
   const emotionLinkerScrollTop = document.querySelector(".emotion-linker-panel")?.scrollTop ?? 0;
   const correctionScrollTop = document.querySelector(".correction-panel")?.scrollTop ?? 0;
+  const extraBoneScrollTop = document.querySelector(".extra-bone-panel")?.scrollTop ?? 0;
   const payload = JSON.stringify(serializeCorrection(), null, 2);
   const result = await window.vrmFiles.saveMeta(state.correctionPath, payload);
   if (!result) return;
@@ -5384,6 +6275,10 @@ async function saveCorrection() {
   if (modeBeforeSave === "correction") {
     const nextScroller = document.querySelector(".correction-panel");
     if (nextScroller) nextScroller.scrollTop = correctionScrollTop;
+  }
+  if (modeBeforeSave === "extraBone") {
+    const nextScroller = document.querySelector(".extra-bone-panel");
+    if (nextScroller) nextScroller.scrollTop = extraBoneScrollTop;
   }
 }
 
@@ -5430,6 +6325,7 @@ async function refreshAnimationCatalog() {
       mustWatchFull: Boolean(animation.mustWatchFull),
       duration: normalizeFiniteNumber(animation.duration, 0),
       isFirst: Boolean(animation.isFirst),
+      loop: Boolean(animation.loop),
     };
   }
 }
@@ -5443,6 +6339,7 @@ async function migrateAnimationInfoFromCharacterMeta(meta) {
     const patch = {};
     if (!catalogEntry.description && animation.description) patch.description = String(animation.description);
     if (!catalogEntry.mustWatchFull && animation.mustWatchFull) patch.mustWatchFull = true;
+    if (!catalogEntry.loop && animation.loop) patch.loop = true;
     if (!Object.keys(patch).length) continue;
     const updated = await window.vrmFiles.updateAnimationInfo(fileName, patch);
     state.animationCatalog[fileName] = {
@@ -5451,6 +6348,7 @@ async function migrateAnimationInfoFromCharacterMeta(meta) {
       mustWatchFull: Boolean(updated.mustWatchFull),
       duration: normalizeFiniteNumber(updated.duration, catalogEntry.duration ?? 0),
       isFirst: Boolean(updated.isFirst),
+      loop: Boolean(updated.loop),
     };
     changed = true;
   }
@@ -5477,8 +6375,54 @@ function normalizeCorrectionJson(json) {
     ? json.expressionPresets.find((preset) => preset?.blush?.image)?.blush
     : null;
   next.blush = normalizeBlushSettings(json.blush ?? legacyBlush);
+  next.extraBoneFollowSettings = normalizeExtraBoneFollowSettings(json.extraBoneFollowSettings);
+  next.materialSettings = normalizeMaterialSettings(json.materialSettings);
   next.expressionPresets = normalizeExpressionPresets(json.expressionPresets);
   return next;
+}
+
+function normalizeMaterialSettings(settings) {
+  const next = {
+    outline: {
+      materials: {},
+      showAll: Boolean(settings?.outline?.showAll),
+      hiddenMaterials: normalizeStringList(settings?.outline?.hiddenMaterials),
+      includedMaterials: normalizeStringList(settings?.outline?.includedMaterials),
+    },
+  };
+  const materials = settings?.outline?.materials;
+  if (!materials || typeof materials !== "object") return next;
+  for (const [name, value] of Object.entries(materials)) {
+    const color = normalizeHexColor(typeof value === "string" ? value : value?.color);
+    if (!name || !color) continue;
+    next.outline.materials[String(name)] = { color };
+  }
+  return next;
+}
+
+function normalizeStringList(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => String(item ?? "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+function normalizeExtraBoneFollowSettings(settings) {
+  if (!Array.isArray(settings)) return [];
+  return settings
+    .slice(0, 32)
+    .map((setting, index) =>
+      createExtraBoneFollowSetting({
+        ...setting,
+        id: String(setting?.id ?? `extra-bone-${index}`),
+      }),
+    )
+    .filter((setting) => setting.id);
+}
+
+function normalizeExtraBoneAxisSetting(setting) {
+  return {
+    factor: Number.isFinite(Number(setting?.factor)) ? Number(setting.factor) : 1,
+    ignore: Boolean(setting?.ignore),
+  };
 }
 
 function normalizeExpressionPresets(presets) {
@@ -5666,6 +6610,8 @@ function serializeCorrection() {
     }
   }
   next.blush = normalizeBlushSettings(state.correction.blush);
+  next.extraBoneFollowSettings = normalizeExtraBoneFollowSettings(state.correction.extraBoneFollowSettings);
+  next.materialSettings = normalizeMaterialSettings(state.correction.materialSettings);
   next.expressionPresets = normalizeExpressionPresets(state.expressionPresets).map(({ id, name, locked, isDisableBlink, parameters, rangeSlots, blush }) => ({
     id,
     name,
@@ -5691,6 +6637,7 @@ function pruneCorrectionObject(corrections, boneName) {
 function captureBoneRestTransforms() {
   state.boneRestTransforms = new Map();
   lastCorrectionBases = new Map();
+  lastExtraBoneFollowBases = new Map();
   for (const boneName of HUMAN_BONES) {
     const bone = getRawBoneNode(boneName);
     if (!bone) continue;
@@ -5700,6 +6647,92 @@ function captureBoneRestTransforms() {
       scale: bone.scale.clone(),
     });
   }
+}
+
+function findBoneByName(name) {
+  if (!currentVrm?.scene || !name) return null;
+  let found = null;
+  currentVrm.scene.traverse((object) => {
+    if (!found && object?.isBone && object.name === name) found = object;
+  });
+  return found;
+}
+
+function applyExtraBoneFollowPreview() {
+  if (!currentVrm) return;
+  clearExtraBoneFollowPreview();
+  const settings = normalizeExtraBoneFollowSettings(state.correction.extraBoneFollowSettings);
+  if (!settings.length) return;
+  const sourceWorldQuaternion = new THREE.Quaternion();
+  const parentWorldQuaternion = new THREE.Quaternion();
+  const localQuaternion = new THREE.Quaternion();
+  const tailAxis = new THREE.Vector3(0, 1, 0);
+  for (const setting of settings) {
+    if (!setting.targetBone || !setting.sourceBone) continue;
+    const target = findBoneByName(setting.targetBone);
+    const source = getRawBoneNode(setting.sourceBone);
+    if (!target || !source) continue;
+    lastExtraBoneFollowBases.set(setting.id, {
+      bone: target,
+      quaternion: target.quaternion.clone(),
+    });
+    source.getWorldQuaternion(sourceWorldQuaternion);
+    if (target.parent) {
+      target.parent.getWorldQuaternion(parentWorldQuaternion);
+      localQuaternion.copy(parentWorldQuaternion).invert().multiply(sourceWorldQuaternion);
+    } else {
+      localQuaternion.copy(sourceWorldQuaternion);
+    }
+    target.quaternion.copy(getSwingTwistScaledQuaternion(localQuaternion, tailAxis, setting.swingFactor, setting.twistFactor));
+    alignExtraBoneTailDirection(target, getRawBoneNode(setting.tailDirectionBone));
+  }
+  currentVrm.scene.updateMatrixWorld(true);
+}
+
+function getSwingTwistScaledQuaternion(quaternion, twistAxis, swingFactor = 1, twistFactor = 0) {
+  const normalizedAxis = twistAxis.clone().normalize();
+  const vector = new THREE.Vector3(quaternion.x, quaternion.y, quaternion.z);
+  const projected = normalizedAxis.multiplyScalar(vector.dot(normalizedAxis));
+  const twist = new THREE.Quaternion(projected.x, projected.y, projected.z, quaternion.w).normalize();
+  if (!Number.isFinite(twist.x + twist.y + twist.z + twist.w)) twist.identity();
+  const swing = quaternion.clone().multiply(twist.clone().invert()).normalize();
+  const scaledSwing = new THREE.Quaternion().identity().slerp(swing, normalizeExtraBoneFactor(swingFactor, 1));
+  const scaledTwist = new THREE.Quaternion().identity().slerp(twist, normalizeExtraBoneFactor(twistFactor, 0));
+  return scaledSwing.multiply(scaledTwist).normalize();
+}
+
+function alignExtraBoneTailDirection(target, tailTarget) {
+  if (!target || !tailTarget) return;
+  currentVrm.scene.updateMatrixWorld(true);
+  const targetPosition = target.getWorldPosition(new THREE.Vector3());
+  const tailPosition = tailTarget.getWorldPosition(new THREE.Vector3());
+  const desiredDirection = tailPosition.sub(targetPosition);
+  if (desiredDirection.lengthSq() < 0.0000001) return;
+  desiredDirection.normalize();
+
+  const targetWorldQuaternion = target.getWorldQuaternion(new THREE.Quaternion());
+  const currentDirection = new THREE.Vector3(0, 1, 0).applyQuaternion(targetWorldQuaternion).normalize();
+  if (currentDirection.lengthSq() < 0.0000001) return;
+
+  const alignWorldQuaternion = new THREE.Quaternion().setFromUnitVectors(currentDirection, desiredDirection);
+  const nextWorldQuaternion = alignWorldQuaternion.multiply(targetWorldQuaternion);
+  if (target.parent) {
+    const parentWorldQuaternion = target.parent.getWorldQuaternion(new THREE.Quaternion()).invert();
+    target.quaternion.copy(parentWorldQuaternion.multiply(nextWorldQuaternion));
+  } else {
+    target.quaternion.copy(nextWorldQuaternion);
+  }
+  target.updateMatrixWorld(true);
+}
+
+function clearExtraBoneFollowPreview() {
+  if (!currentVrm || !lastExtraBoneFollowBases.size) return;
+  for (const base of lastExtraBoneFollowBases.values()) {
+    if (!base.bone) continue;
+    base.bone.quaternion.copy(base.quaternion);
+  }
+  lastExtraBoneFollowBases = new Map();
+  currentVrm.scene.updateMatrixWorld(true);
 }
 
 function applyMotionCorrectionPreview() {
@@ -6519,6 +7552,8 @@ function formatModeName(value) {
   if (value === "correction") return "Motion Correction";
   if (value === "expression") return "Expression Editor";
   if (value === "linker") return "Emotion Linker";
+  if (value === "extraBone") return "Extra Bone Follow";
+  if (value === "transitionViewer") return "Transition Viewer";
   return "Viewer";
 }
 
@@ -6590,12 +7625,17 @@ function tick() {
     updateActiveLinkTimeline();
     updateAnimationControls();
   }
+  currentVrm?.update?.(delta);
   updateExpressionDecay(delta);
   updateExpressionTransition(delta);
-  currentVrm?.update?.(delta);
+  reapplyActiveRorrInfluences();
+  updateRandomBlink(delta);
+  updateLipSyncPreview(delta);
   applyMotionCorrectionPreview();
+  applyExtraBoneFollowPreview();
   applyEditDraftMorphPreview();
   renderer.render(scene, camera);
+  updateExtraBoneGizmoOverlay();
 }
 
 render();

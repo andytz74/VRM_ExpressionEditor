@@ -38,7 +38,7 @@
       "fileName": "a0_standSlantedL.vrma",
       "description": "대기 - 손 앞에 모은",
       "mustWatchFull": true,
-      "duration": 4.958,
+      "duration": 5.042,
       "isFirst": false,
       "loop": true
     },
@@ -110,7 +110,7 @@
       "fileName": "SA0.vrma",
       "description": "소셜 - 인사",
       "mustWatchFull": false,
-      "duration": 3.292,
+      "duration": 3.333,
       "isFirst": false,
       "loop": false
     },
