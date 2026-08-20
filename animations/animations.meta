@@ -8,7 +8,8 @@
       "mustWatchFull": true,
       "duration": 9.958,
       "isFirst": false,
-      "loop": true
+      "loop": true,
+      "lookAtCamera": false
     },
     "a0_1.vrma": {
       "fileName": "a0_1.vrma",
@@ -16,7 +17,8 @@
       "mustWatchFull": true,
       "duration": 4.958,
       "isFirst": true,
-      "loop": true
+      "loop": true,
+      "lookAtCamera": false
     },
     "a0_2.vrma": {
       "fileName": "a0_2.vrma",
@@ -24,7 +26,8 @@
       "mustWatchFull": true,
       "duration": 4.958,
       "isFirst": false,
-      "loop": true
+      "loop": true,
+      "lookAtCamera": false
     },
     "a0_3.vrma": {
       "fileName": "a0_3.vrma",
@@ -32,7 +35,8 @@
       "mustWatchFull": false,
       "duration": 4.958,
       "isFirst": false,
-      "loop": true
+      "loop": true,
+      "lookAtCamera": false
     },
     "a0_standSlantedL.vrma": {
       "fileName": "a0_standSlantedL.vrma",
@@ -40,15 +44,8 @@
       "mustWatchFull": true,
       "duration": 4.958,
       "isFirst": false,
-      "loop": true
-    },
-    "a0_standSlantedR.vrma": {
-      "fileName": "a0_standSlantedR.vrma",
-      "description": "대기 - 두손뒤로 안 삐딱",
-      "mustWatchFull": false,
-      "duration": 4.958,
-      "isFirst": false,
-      "loop": true
+      "loop": true,
+      "lookAtCamera": false
     },
     "a1.vrma": {
       "fileName": "a1.vrma",
@@ -56,7 +53,8 @@
       "mustWatchFull": false,
       "duration": 3.917,
       "isFirst": false,
-      "loop": true
+      "loop": true,
+      "lookAtCamera": false
     },
     "a2.vrma": {
       "fileName": "a2.vrma",
@@ -64,7 +62,8 @@
       "mustWatchFull": false,
       "duration": 4.958,
       "isFirst": false,
-      "loop": true
+      "loop": true,
+      "lookAtCamera": false
     },
     "a3.vrma": {
       "fileName": "a3.vrma",
@@ -72,7 +71,8 @@
       "mustWatchFull": false,
       "duration": 2.458,
       "isFirst": false,
-      "loop": false
+      "loop": false,
+      "lookAtCamera": false
     },
     "a3_1.vrma": {
       "fileName": "a3_1.vrma",
@@ -80,7 +80,8 @@
       "mustWatchFull": false,
       "duration": 2.458,
       "isFirst": false,
-      "loop": false
+      "loop": false,
+      "lookAtCamera": false
     },
     "a4.vrma": {
       "fileName": "a4.vrma",
@@ -88,7 +89,8 @@
       "mustWatchFull": true,
       "duration": 3.708,
       "isFirst": false,
-      "loop": false
+      "loop": false,
+      "lookAtCamera": false
     },
     "a5.vrma": {
       "fileName": "a5.vrma",
@@ -96,7 +98,8 @@
       "mustWatchFull": false,
       "duration": 2.458,
       "isFirst": false,
-      "loop": false
+      "loop": false,
+      "lookAtCamera": false
     },
     "a6.vrma": {
       "fileName": "a6.vrma",
@@ -104,7 +107,8 @@
       "mustWatchFull": true,
       "duration": 2.458,
       "isFirst": false,
-      "loop": false
+      "loop": false,
+      "lookAtCamera": false
     },
     "SA0.vrma": {
       "fileName": "SA0.vrma",
@@ -112,7 +116,8 @@
       "mustWatchFull": false,
       "duration": 3.292,
       "isFirst": false,
-      "loop": false
+      "loop": false,
+      "lookAtCamera": false
     },
     "SA1.vrma": {
       "fileName": "SA1.vrma",
@@ -120,7 +125,8 @@
       "mustWatchFull": false,
       "duration": 4.958,
       "isFirst": false,
-      "loop": true
+      "loop": true,
+      "lookAtCamera": true
     },
     "SA1_1.vrma": {
       "fileName": "SA1_1.vrma",
@@ -128,7 +134,8 @@
       "mustWatchFull": true,
       "duration": 4.958,
       "isFirst": false,
-      "loop": true
+      "loop": true,
+      "lookAtCamera": true
     },
     "SA2.vrma": {
       "fileName": "SA2.vrma",
@@ -136,7 +143,8 @@
       "mustWatchFull": true,
       "duration": 4.958,
       "isFirst": false,
-      "loop": true
+      "loop": true,
+      "lookAtCamera": false
     },
     "SA3.vrma": {
       "fileName": "SA3.vrma",
@@ -144,7 +152,8 @@
       "mustWatchFull": false,
       "duration": 2.458,
       "isFirst": false,
-      "loop": false
+      "loop": false,
+      "lookAtCamera": false
     },
     "TransitionSubKey.vrma": {
       "fileName": "TransitionSubKey.vrma",
@@ -152,7 +161,8 @@
       "mustWatchFull": false,
       "duration": 1.208,
       "isFirst": false,
-      "loop": false
+      "loop": false,
+      "lookAtCamera": false
     },
     "VRMA_hello.vrma": {
       "fileName": "VRMA_hello.vrma",
@@ -160,7 +170,8 @@
       "mustWatchFull": false,
       "duration": 4.125,
       "isFirst": false,
-      "loop": false
+      "loop": false,
+      "lookAtCamera": false
     },
     "VRMA_twoHandsUp.vrma": {
       "fileName": "VRMA_twoHandsUp.vrma",
@@ -168,7 +179,8 @@
       "mustWatchFull": false,
       "duration": 4.958,
       "isFirst": false,
-      "loop": false
+      "loop": false,
+      "lookAtCamera": false
     }
   }
 }

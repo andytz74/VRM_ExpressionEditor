@@ -232,6 +232,10 @@ async function readAnimationCatalog() {
       entry.loop = Boolean(entry.loop);
       changed = true;
     }
+    if (typeof entry.lookAtCamera !== "boolean") {
+      entry.lookAtCamera = Boolean(entry.lookAtCamera);
+      changed = true;
+    }
     if (entry.duration !== normalizedDuration) {
       entry.duration = normalizedDuration;
       changed = true;
@@ -268,6 +272,7 @@ function createAnimationCatalogEntry(fileName, existing = {}) {
     duration: Number(existing.duration) || 0,
     isFirst: Boolean(existing.isFirst),
     loop: Boolean(existing.loop),
+    lookAtCamera: Boolean(existing.lookAtCamera),
   };
 }
 
@@ -418,6 +423,7 @@ ipcMain.handle("animation:updateInfo", async (_event, fileName, patch) => {
     if (Object.hasOwn(patch, "description")) catalog.animations[safeName].description = String(patch.description ?? "");
     if (Object.hasOwn(patch, "mustWatchFull")) catalog.animations[safeName].mustWatchFull = Boolean(patch.mustWatchFull);
     if (Object.hasOwn(patch, "loop")) catalog.animations[safeName].loop = Boolean(patch.loop);
+    if (Object.hasOwn(patch, "lookAtCamera")) catalog.animations[safeName].lookAtCamera = Boolean(patch.lookAtCamera);
     if (Object.hasOwn(patch, "isFirst")) {
       const enabled = Boolean(patch.isFirst);
       for (const animation of Object.values(catalog.animations)) animation.isFirst = false;

@@ -2,13 +2,13 @@ import "./styles.css";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from "@pixiv/three-vrm-animation";
 import {
   ArrowLeft,
   Camera,
   Download,
-  EyeClosed,
   FolderOpen,
   GitCompare,
   Lock,
@@ -97,6 +97,8 @@ const MIRROR_AXIS_SIGNS = {
 };
 
 const DEFAULT_EMOTION_PRESET_NAMES = ["Neutral", "Focus", "Tension", "Surprise", "Joy", "Relief", "Disappointed", "Warm Smile", "Joy"];
+const EMOTION_GRAPH_WIDTH = 280;
+const EMOTION_GRAPH_HEIGHT = 148;
 
 const state = {
   mode: "expression",
@@ -114,6 +116,10 @@ const state = {
   linkerTransitionSeconds: 0.2,
   activeLinkTimeline: null,
   blushPanelMinimized: false,
+  emotionImagePanelMinimized: false,
+  selectedEmotionImageGraph: { graph: "scaleGraph", index: 0 },
+  emotionImageAnimation: null,
+  emotionImagePivotPicking: false,
   screenshot: {
     selecting: false,
     message: "",
@@ -176,6 +182,7 @@ const state = {
     duration: 0.16,
     closing: false,
   },
+  lookAtCameraActive: false,
   expressionDirty: false,
   draggingEmotionPresetId: null,
   editing: null,
@@ -244,6 +251,13 @@ let animationAction = null;
 let lastCorrectionBases = new Map();
 let lastExtraBoneFollowBases = new Map();
 let blushOverlay = null;
+let emotionImageOverlay = null;
+let emotionImageTransformControls = null;
+let emotionImageTransformDragging = false;
+const emotionImageRollAxis = new THREE.Vector3(0, 0, 1);
+const emotionImageRollQuat = new THREE.Quaternion();
+const emotionImageRaycaster = new THREE.Raycaster();
+const emotionImagePointer = new THREE.Vector2();
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -258,6 +272,7 @@ function createDefaultEmotionPresets() {
     isDisableBlink: false,
     parameters: {},
     rangeSlots: [],
+    emotionImage: null,
   }));
 }
 
@@ -506,6 +521,45 @@ function dottedArrowSvg(size = 22) {
   </svg>`;
 }
 
+function blushIconSvg(size = 20) {
+  return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="8.1" />
+    <path d="M8.4 14.1l2.1-3.1" />
+    <path d="M11.8 14.1l2.1-3.1" />
+    <path d="M15.2 14.1l2.1-3.1" />
+  </svg>`;
+}
+
+function blinkDisabledSvg(size = 20) {
+  return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.8 12.4c2.2 2.5 4.6 3.8 7.2 3.8" />
+    <path d="M14 16.2c2.8 0 5.2-1.3 7.2-3.8" />
+    <path d="M5.1 14.6l-1.7 2" />
+    <path d="M9.2 16l-.8 2.2" />
+    <path d="M15 16l.8 2.2" />
+    <path d="M19 14.6l1.7 2" />
+    <path d="M4.3 21.2L19.7 2.8" />
+  </svg>`;
+}
+
+function emotionImageIconSvg(size = 20) {
+  return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M8.7 9.1v2" />
+    <path d="M15.3 9.1v2" />
+    <path d="M8.5 15.2c1.8 1.7 5.2 1.7 7 0" />
+  </svg>`;
+}
+
+function pivotIconSvg(size = 18) {
+  return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="4" y="4" width="16" height="16" rx="2" />
+    <path d="M12 7v10" />
+    <path d="M7 12h10" />
+    <circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none" />
+  </svg>`;
+}
+
 function crossedDriversSvg(size = 22) {
   return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
     <path d="M5 3l16 16" />
@@ -581,6 +635,7 @@ function render() {
         ${renderEmotionLinkerTransitionControl()}
         ${renderLipSyncPreviewOverlay()}
         ${renderBlushOverlayPanel()}
+        ${renderEmotionImageOverlayPanel()}
         ${renderMetaImportOverlay()}
         ${state.mode === "transitionViewer" && state.transitionViewer.trayMode !== "sequence" ? renderTransitionTimelineOverlay() : ""}
       </section>
@@ -1009,6 +1064,143 @@ function renderBlushOverlayPanel() {
   `;
 }
 
+function renderEmotionImageOverlayPanel() {
+  if (state.mode !== "expression" || state.editing) return "";
+  const selected = getSelectedEmotionPreset();
+  const settings = getActiveEmotionImageSettings();
+  if (!selected || !selected.emotionImage || !settings?.image) return "";
+  if (state.emotionImagePanelMinimized) {
+    const stacked = Boolean(selected.blush && getActiveBlushSettings()?.image);
+    return `
+      <button class="emotion-image-mini-button ${stacked ? "stacked" : ""}" id="restoreEmotionImagePanel" title="Emotion image">
+        ${emotionImageIconSvg(24)}
+      </button>
+    `;
+  }
+  const stacked = Boolean(selected.blush && getActiveBlushSettings()?.image);
+  return `
+    <section class="emotion-image-overlay-panel ${stacked ? "stacked" : ""}">
+      <div class="blush-overlay-head">
+        <div>
+          <strong>Emotion Image</strong>
+          <span>${escapeHtml(settings.image)}</span>
+        </div>
+        <button class="blush-minimize-button" id="minimizeEmotionImagePanel" title="Minimize">_</button>
+        <button class="blush-remove-button" data-emotion-image-remove="${escapeHtml(selected.id)}" ${selected.locked ? "disabled" : ""} title="Remove emotion image">${iconSvg(X, 18)}</button>
+      </div>
+      <div class="emotion-image-position-grid">
+        ${renderEmotionImagePositionValue("X", settings.x)}
+        ${renderEmotionImagePositionValue("Y", settings.y)}
+        ${renderEmotionImagePositionValue("Z", settings.z)}
+      </div>
+      ${renderEmotionImageRotationControl(settings.rotation, selected.locked)}
+      ${renderEmotionImageScaleControl(settings.scale, selected.locked)}
+      <div class="blush-overlay-actions">
+        <button class="secondary-button" data-emotion-image="${escapeHtml(selected.id)}" ${selected.locked ? "disabled" : ""}>Change Image</button>
+      </div>
+      ${renderEmotionImageGraphEditor(settings, selected.locked)}
+    </section>
+  `;
+}
+
+function renderEmotionImagePositionValue(label, value) {
+  return `
+    <label class="emotion-image-position-value">
+      <span>${escapeHtml(label)}</span>
+      <input type="number" value="${roundForInput(value)}" readonly data-emotion-image-position="${escapeHtml(label.toLowerCase())}" />
+    </label>
+  `;
+}
+
+function renderEmotionImageRotationControl(value, disabled = false) {
+  const normalized = normalizeDegrees(Number(value ?? 0));
+  return `
+    <label class="blush-control-row emotion-image-rotation-control">
+      <span>Rotation</span>
+      <input type="range" min="-180" max="180" step="1" value="${roundForInput(normalized)}" data-emotion-image-control="rotation" ${disabled ? "disabled" : ""} />
+      <input type="number" min="-180" max="180" step="1" value="${roundForInput(normalized)}" data-emotion-image-number="rotation" ${disabled ? "disabled" : ""} />
+      <button class="mini-icon-button" id="resetEmotionImageRotation" ${disabled ? "disabled" : ""} title="Reset rotation">${iconSvg(RotateCcw, 14)}</button>
+    </label>
+  `;
+}
+
+function renderEmotionImageScaleControl(value, disabled = false) {
+  return `
+    <label class="blush-control-row emotion-image-scale-control">
+      <span>Scale</span>
+      <input type="range" min="0" max="3" step="0.001" value="${roundForInput(value)}" data-emotion-image-control="scale" ${disabled ? "disabled" : ""} />
+      <input type="number" min="0" max="3" step="0.001" value="${roundForInput(value)}" data-emotion-image-number="scale" ${disabled ? "disabled" : ""} />
+      <button class="mini-icon-button ${state.emotionImagePivotPicking ? "active" : ""}" type="button" data-emotion-image-pivot ${disabled ? "disabled" : ""} title="Set scale pivot">${pivotIconSvg(14)}</button>
+    </label>
+  `;
+}
+
+function renderEmotionImageGraphEditor(settings, disabled = false) {
+  const duration = normalizeEmotionImageDuration(settings.animationDuration);
+  return `
+    <div class="emotion-image-graph-editor">
+      <label class="emotion-image-duration-row">
+        <span>Time</span>
+        <input type="number" min="0.1" max="30" step="0.1" value="${roundForInput(duration)}" data-emotion-image-number="animationDuration" ${disabled ? "disabled" : ""} />
+      </label>
+      ${renderEmotionImageGraph("scaleGraph", "Scale", settings.scaleGraph, 2, disabled)}
+      ${renderEmotionImageGraph("opacityGraph", "Opacity", settings.opacityGraph, 1, disabled)}
+      ${renderEmotionImageCurveButtons(settings, disabled)}
+    </div>
+  `;
+}
+
+function renderEmotionImageGraph(graphKey, label, graph, maxValue, disabled = false) {
+  const points = normalizeEmotionImageGraph(graph, maxValue);
+  const selected = state.selectedEmotionImageGraph?.graph === graphKey ? state.selectedEmotionImageGraph.index : -1;
+  const pointMarkup = points
+    .map((point, index) => {
+      const y = emotionGraphY(point.value, maxValue);
+      return `<button class="emotion-graph-point ${index === selected ? "selected" : ""}" style="left:${(point.time * 100).toFixed(3)}%;top:${((y / EMOTION_GRAPH_HEIGHT) * 100).toFixed(3)}%" data-emotion-graph-point="${graphKey}:${index}" ${disabled ? "disabled" : ""} title="${roundForInput(point.time)} / ${roundForInput(point.value)}"></button>`;
+    })
+    .join("");
+  return `
+    <div class="emotion-image-graph-block">
+      <div class="emotion-image-graph-label">
+        <span>${escapeHtml(label)}</span>
+        <strong>${maxValue.toFixed(1)}</strong>
+      </div>
+      <div class="emotion-graph-surface" data-emotion-graph="${graphKey}" data-emotion-graph-max="${maxValue}" ${disabled ? "data-disabled=\"true\"" : ""}>
+        <svg viewBox="0 0 ${EMOTION_GRAPH_WIDTH} ${EMOTION_GRAPH_HEIGHT}" preserveAspectRatio="none" aria-hidden="true">
+          <path class="emotion-graph-grid" d="M0 ${EMOTION_GRAPH_HEIGHT / 2}H${EMOTION_GRAPH_WIDTH}" />
+          <path class="emotion-graph-line" d="${escapeHtml(buildEmotionGraphPath(points, maxValue))}" />
+        </svg>
+        ${pointMarkup}
+      </div>
+    </div>
+  `;
+}
+
+function renderEmotionImageCurveButtons(settings, disabled = false) {
+  const selected = getSelectedEmotionImageGraphPoint(settings);
+  const curve = selected?.curve ?? "linear";
+  const canDelete = selected && selected.index > 0 && selected.index < selected.points.length - 1;
+  const buttons = [
+    ["linear", "M4 20L20 4"],
+    ["easeOut", "M4 20C5 8 12 4 20 4"],
+    ["easeIn", "M4 20C13 20 18 12 20 4"],
+    ["easeInOut", "M4 19C8 19 8 5 12 12C16 19 16 5 20 5"],
+    ["step", "M5 19H13V5H20"],
+  ]
+    .map(
+      ([type, path]) =>
+        `<button class="emotion-curve-button ${curve === type ? "active" : ""}" data-emotion-curve="${type}" ${disabled || !selected ? "disabled" : ""} title="${type}"><svg viewBox="0 0 24 24"><path d="${path}" /></svg></button>`,
+    )
+    .join("");
+  return `
+    <div class="emotion-curve-buttons">
+      ${buttons}
+      <button class="emotion-curve-button danger" data-emotion-curve-delete ${disabled || !canDelete ? "disabled" : ""} title="Delete"><svg viewBox="0 0 24 24"><path d="M6 6L18 18M18 6L6 18" /></svg></button>
+      <button class="emotion-curve-button play" data-emotion-graph-preview ${disabled ? "disabled" : ""} title="Preview">${iconSvg(Play, 18)}</button>
+    </div>
+  `;
+}
+
 function renderEmotionLinkerTransitionControl() {
   if (state.mode !== "linker") return "";
   const value = clampNumber(Number(state.linkerTransitionSeconds), 0, 1, 0.2);
@@ -1416,10 +1608,13 @@ function renderEmotionPresetCard(preset) {
             ? `<div class="emotion-name-readonly">${escapeHtml(preset.name)}</div>`
             : `<input class="emotion-name-input" type="text" value="${escapeHtml(preset.name)}" data-emotion-name="${preset.id}" />`
         }
-        <button class="blink-emotion-button ${preset.isDisableBlink ? "active" : ""}" data-emotion-blink="${preset.id}" title="Disable blink">${iconSvg(EyeClosed, 16)}</button>
-        <button class="blush-emotion-button ${preset.blush ? "active" : ""}" data-emotion-blush="${preset.id}" title="Blush image"><span></span></button>
-        <button class="duplicate-emotion-button" data-emotion-duplicate="${preset.id}" title="Duplicate">${iconSvg(Copy, 16)}</button>
-        ${preset.locked ? `<span class="delete-emotion-placeholder"></span>` : `<button class="delete-emotion-button" data-emotion-delete="${preset.id}" title="Delete">${iconSvg(X, 18)}</button>`}
+        <div class="emotion-card-actions">
+          <button class="blink-emotion-button ${preset.isDisableBlink ? "active" : ""}" data-emotion-blink="${preset.id}" title="Disable blink">${blinkDisabledSvg(18)}</button>
+          <button class="blush-emotion-button ${preset.blush ? "active" : ""}" data-emotion-blush="${preset.id}" title="Blush image">${blushIconSvg(18)}</button>
+          <button class="emotion-image-button ${preset.emotionImage ? "active" : ""}" data-emotion-image="${preset.id}" title="Emotion image">${emotionImageIconSvg(18)}</button>
+          <button class="duplicate-emotion-button" data-emotion-duplicate="${preset.id}" title="Duplicate">${iconSvg(Copy, 15)}</button>
+          ${preset.locked ? `<span class="delete-emotion-placeholder"></span>` : `<button class="delete-emotion-button" data-emotion-delete="${preset.id}" title="Delete">${iconSvg(X, 16)}</button>`}
+        </div>
       </div>
       <div class="emotion-card-controls">
         <div class="emotion-slider-wrap">
@@ -1678,10 +1873,16 @@ function renderMotionCorrectionPanel() {
           <input type="checkbox" id="toggleFirstAnimation" ${selectedAnimation?.isFirst ? "checked" : ""} ${selectedAnimation ? "" : "disabled"} />
         </label>
         </div>
-        <label class="animation-check-row animation-loop-row">
-          <input type="checkbox" id="toggleSelectedAnimationLoop" ${selectedAnimationMeta.loop ? "checked" : ""} ${selectedAnimation ? "" : "disabled"} />
-          <span>Loop</span>
-        </label>
+        <div class="animation-option-row">
+          <label class="animation-check-row animation-loop-row">
+            <input type="checkbox" id="toggleSelectedAnimationLoop" ${selectedAnimationMeta.loop ? "checked" : ""} ${selectedAnimation ? "" : "disabled"} />
+            <span>Loop</span>
+          </label>
+          <label class="animation-check-row animation-look-row">
+            <input type="checkbox" id="toggleSelectedAnimationLookAt" ${selectedAnimationMeta.lookAtCamera ? "checked" : ""} ${selectedAnimation ? "" : "disabled"} />
+            <span>정면시선</span>
+          </label>
+        </div>
         <div class="animation-description-line">
           <label>
             설명
@@ -2380,6 +2581,23 @@ function bindUi() {
     state.blushPanelMinimized = false;
     render();
   });
+  document.querySelector("#minimizeEmotionImagePanel")?.addEventListener("click", () => {
+    state.emotionImagePanelMinimized = true;
+    detachEmotionImageTransformControls();
+    renderPreservingExpressionEditorScrolls();
+  });
+  document.querySelector("#restoreEmotionImagePanel")?.addEventListener("click", () => {
+    state.emotionImagePanelMinimized = false;
+    renderPreservingExpressionEditorScrolls();
+    attachEmotionImageTransformControls();
+  });
+  document.querySelector("#resetEmotionImageRotation")?.addEventListener("click", () => {
+    resetEmotionImageRotation();
+  });
+  document.querySelector("[data-emotion-image-pivot]")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    beginEmotionImagePivotPicking();
+  });
   document.querySelector("[data-linker-transition]")?.addEventListener("input", (event) =>
     updateLinkerTransitionSeconds(Number(event.target.value)),
   );
@@ -2413,6 +2631,9 @@ function bindUi() {
   document.querySelector("#toggleFirstAnimation")?.addEventListener("change", (event) => toggleSelectedAnimationFirst(event.target.checked));
   document.querySelector("#toggleSelectedAnimationLoop")?.addEventListener("change", (event) =>
     updateAnimationLoop(state.selectedAnimationName, event.target.checked),
+  );
+  document.querySelector("#toggleSelectedAnimationLookAt")?.addEventListener("change", (event) =>
+    updateAnimationLookAtCamera(state.selectedAnimationName, event.target.checked),
   );
   document.querySelector("#toggleAnimation")?.addEventListener("click", toggleAnimationPlayback);
   document.querySelector("#restartAnimation")?.addEventListener("click", restartAnimation);
@@ -2683,6 +2904,10 @@ function bindUi() {
       state.mode = button.dataset.mode;
       state.editing = null;
       state.confirmBack = false;
+      if (state.mode !== "expression") {
+        clearBlushOverlay();
+        clearEmotionImageOverlay();
+      }
       applyCameraPresetForMode(state.mode);
       render();
     });
@@ -2721,10 +2946,27 @@ function bindUi() {
     });
   }
 
+  for (const button of document.querySelectorAll("[data-emotion-image]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      state.emotionImagePanelMinimized = false;
+      addOrChangeEmotionImage(button.dataset.emotionImage, {
+        pickImage: Boolean(button.closest(".emotion-image-overlay-panel")),
+      });
+    });
+  }
+
   for (const button of document.querySelectorAll("[data-emotion-blush-remove]")) {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       removeEmotionBlush(button.dataset.emotionBlushRemove);
+    });
+  }
+
+  for (const button of document.querySelectorAll("[data-emotion-image-remove]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      removeEmotionImage(button.dataset.emotionImageRemove);
     });
   }
 
@@ -2735,6 +2977,26 @@ function bindUi() {
   for (const input of document.querySelectorAll("[data-blush-number]")) {
     input.addEventListener("input", () => updateSelectedBlushValue(input.dataset.blushNumber, Number(input.value), input));
   }
+
+  for (const input of document.querySelectorAll("[data-emotion-image-control]")) {
+    input.addEventListener("input", () => updateSelectedEmotionImageValue(input.dataset.emotionImageControl, Number(input.value), input));
+  }
+
+  for (const input of document.querySelectorAll("[data-emotion-image-number]")) {
+    input.addEventListener("input", () => updateSelectedEmotionImageValue(input.dataset.emotionImageNumber, Number(input.value), input));
+  }
+
+  for (const surface of document.querySelectorAll("[data-emotion-graph]")) {
+    surface.addEventListener("pointerdown", (event) => handleEmotionGraphPointerDown(event, surface));
+    surface.addEventListener("contextmenu", (event) => event.preventDefault());
+  }
+
+  for (const button of document.querySelectorAll("[data-emotion-curve]")) {
+    button.addEventListener("click", () => updateSelectedEmotionImageCurve(button.dataset.emotionCurve));
+  }
+
+  document.querySelector("[data-emotion-curve-delete]")?.addEventListener("click", () => deleteSelectedEmotionImageGraphPoint());
+  document.querySelector("[data-emotion-graph-preview]")?.addEventListener("click", () => startEmotionImageGraphAnimationForSelected(true));
 
   for (const card of document.querySelectorAll("[data-emotion-select]")) {
     card.addEventListener("click", () => selectEmotionPreset(card.dataset.emotionSelect));
@@ -3002,6 +3264,7 @@ function addEmotionPreset() {
     locked: false,
     isDisableBlink: false,
     parameters: {},
+    emotionImage: null,
   });
   for (const preset of state.expressionPresets) {
     preset.value = preset.id === id ? 1 : 0;
@@ -3026,6 +3289,7 @@ function duplicateEmotionPreset(id) {
     isDisableBlink: Boolean(source.isDisableBlink),
     parameters: normalizeExpressionParameterValues(source.parameters),
     blush: source.blush ? normalizePresetBlush(source.blush) : null,
+    emotionImage: source.emotionImage ? normalizePresetEmotionImage(source.emotionImage) : null,
     rangeSlots: normalizeExpressionRangeSlots(source.rangeSlots).map((slot, index) => ({
       id: `range-${Date.now()}-${index}`,
       threshold: slot.threshold,
@@ -3039,7 +3303,7 @@ function duplicateEmotionPreset(id) {
 
 async function addOrChangeEmotionBlush(id, options = {}) {
   const preset = state.expressionPresets.find((item) => item.id === id);
-  if (!preset || preset.locked) return;
+  if (!preset) return;
   if (preset.blush && !options.pickImage) {
     state.selectedExpressionPresetId = id;
     state.selectedExpressionRangeId = null;
@@ -3047,6 +3311,8 @@ async function addOrChangeEmotionBlush(id, options = {}) {
     renderPreservingExpressionScroll();
     return;
   }
+  if (preset.locked) return;
+  if (!preset.blush && !window.confirm("홍조를 추가할까요?")) return;
   const shouldPickImage = options.pickImage || !state.correction.blush?.image;
   if (shouldPickImage) {
     const result = await window.vrmFiles.storeImage();
@@ -3067,6 +3333,7 @@ async function addOrChangeEmotionBlush(id, options = {}) {
 function removeEmotionBlush(id) {
   const preset = state.expressionPresets.find((item) => item.id === id);
   if (!preset || preset.locked) return;
+  if (!window.confirm("홍조를 제거할까요?")) return;
   preset.blush = null;
   preset.rangeSlots = normalizeExpressionRangeSlots(preset.rangeSlots).map((slot) => {
     const next = { ...slot };
@@ -3092,6 +3359,287 @@ function updateSelectedBlushValue(key, value, source) {
   syncBlushControls(key, key === "opacity" ? getSelectedBlushOpacity() : state.correction.blush?.[key], source);
   markExpressionMetaDirty();
   updateBlushOverlayForSelected();
+}
+
+async function addOrChangeEmotionImage(id, options = {}) {
+  const preset = state.expressionPresets.find((item) => item.id === id);
+  if (!preset) return;
+  if (preset.emotionImage && !options.pickImage) {
+    state.selectedExpressionPresetId = id;
+    state.selectedExpressionRangeId = null;
+    updateEmotionImageOverlayForSelected();
+    renderPreservingExpressionScroll();
+    return;
+  }
+  if (preset.locked) return;
+  if (!preset.emotionImage && !window.confirm("이미지를 추가할까요?")) return;
+  const shouldPickImage = options.pickImage || !state.correction.emotionImage?.image;
+  if (shouldPickImage) {
+    const result = await window.vrmFiles.storeImage();
+    if (!result) return;
+    state.correction.emotionImage = normalizeEmotionImageSettings({
+      ...(state.correction.emotionImage ?? {}),
+      image: result.name,
+    });
+  }
+  preset.emotionImage = normalizePresetEmotionImage(preset.emotionImage);
+  state.selectedExpressionPresetId = id;
+  state.selectedExpressionRangeId = null;
+  markExpressionMetaDirty();
+  updateEmotionImageOverlayForSelected();
+  renderPreservingExpressionScroll();
+}
+
+function removeEmotionImage(id) {
+  const preset = state.expressionPresets.find((item) => item.id === id);
+  if (!preset || preset.locked) return;
+  if (!window.confirm("이미지를 제거할까요?")) return;
+  preset.emotionImage = null;
+  markExpressionMetaDirty();
+  updateEmotionImageOverlayForSelected();
+  renderPreservingExpressionScroll();
+}
+
+function updateSelectedEmotionImageValue(key, value, source) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected || !selected.emotionImage || selected.locked || !Number.isFinite(value)) return;
+  if (!["scale", "rotation", "animationDuration"].includes(key)) return;
+  state.correction.emotionImage = normalizeEmotionImageSettings({
+    ...(state.correction.emotionImage ?? {}),
+    [key]: value,
+  });
+  syncEmotionImageControls(key, state.correction.emotionImage?.[key], source);
+  markExpressionMetaDirty();
+  updateEmotionImageOverlayForSelected();
+}
+
+function beginEmotionImagePivotPicking() {
+  const selected = getSelectedEmotionPreset();
+  if (!selected?.emotionImage || selected.locked || !emotionImageOverlay?.mesh) return;
+  state.emotionImagePivotPicking = !state.emotionImagePivotPicking;
+  if (state.emotionImagePivotPicking) {
+    detachEmotionImageTransformControls();
+    setScreenshotMessage("감정 이미지에서 스케일 피벗 위치를 클릭하세요.");
+  } else {
+    attachEmotionImageTransformControls();
+    setScreenshotMessage("");
+  }
+  renderPreservingExpressionScroll();
+}
+
+function handleEmotionImagePivotPointerDown(event) {
+  if (!state.emotionImagePivotPicking) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const selected = getSelectedEmotionPreset();
+  if (!selected?.emotionImage || selected.locked || !emotionImageOverlay?.mesh) {
+    state.emotionImagePivotPicking = false;
+    return;
+  }
+  const rect = renderer.domElement.getBoundingClientRect();
+  emotionImagePointer.set(
+    ((event.clientX - rect.left) / Math.max(rect.width, 1)) * 2 - 1,
+    -(((event.clientY - rect.top) / Math.max(rect.height, 1)) * 2 - 1),
+  );
+  emotionImageRaycaster.setFromCamera(emotionImagePointer, camera);
+  const hit = emotionImageRaycaster.intersectObject(emotionImageOverlay.mesh, false)[0];
+  if (!hit?.uv) {
+    setScreenshotMessage("감정 이미지 위를 클릭하세요.");
+    return;
+  }
+  state.correction.emotionImage = normalizeEmotionImageSettings({
+    ...(state.correction.emotionImage ?? {}),
+    pivotX: hit.uv.x,
+    pivotY: hit.uv.y,
+  });
+  state.emotionImagePivotPicking = false;
+  markExpressionMetaDirty();
+  applyEmotionImageOverlaySettings(state.correction.emotionImage);
+  attachEmotionImageTransformControls();
+  setScreenshotMessage("감정 이미지 스케일 피벗을 저장했습니다.");
+  renderPreservingExpressionScroll();
+}
+
+function resetEmotionImageRotation() {
+  const selected = getSelectedEmotionPreset();
+  if (!selected || !selected.emotionImage || selected.locked) return;
+  state.correction.emotionImage = normalizeEmotionImageSettings({
+    ...(state.correction.emotionImage ?? {}),
+    rotation: 0,
+  });
+  syncEmotionImageControls("rotation", 0);
+  markExpressionMetaDirty();
+  updateEmotionImageOverlayForSelected();
+}
+
+function syncEmotionImageControls(key, value, source = null) {
+  const formatted = roundForInput(value);
+  for (const input of document.querySelectorAll(`[data-emotion-image-control="${key}"], [data-emotion-image-number="${key}"]`)) {
+    if (input === source) continue;
+    input.value = formatted;
+  }
+}
+
+function syncEmotionImagePositionControls(settings = getActiveEmotionImageSettings()) {
+  if (!settings) return;
+  for (const axis of ["x", "y", "z"]) {
+    const input = document.querySelector(`[data-emotion-image-position="${axis}"]`);
+    if (input) input.value = roundForInput(settings[axis]);
+  }
+}
+
+function handleEmotionGraphPointerDown(event, surface) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected?.emotionImage || selected.locked || surface.dataset.disabled === "true") return;
+  const graphKey = surface.dataset.emotionGraph;
+  const maxValue = Number(surface.dataset.emotionGraphMax);
+  if (!["scaleGraph", "opacityGraph"].includes(graphKey) || !Number.isFinite(maxValue)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const pointButton = event.target.closest?.("[data-emotion-graph-point]");
+  if (event.button === 2) {
+    if (pointButton) {
+      const pointIndex = Number(String(pointButton.dataset.emotionGraphPoint ?? "").split(":")[1]);
+      deleteEmotionImageGraphPoint(graphKey, pointIndex);
+    }
+    return;
+  }
+  if (event.button != null && event.button !== 0) return;
+  let pointIndex = -1;
+  if (pointButton) {
+    pointIndex = Number(String(pointButton.dataset.emotionGraphPoint ?? "").split(":")[1]);
+  } else {
+    pointIndex = addEmotionImageGraphPointAtEvent(graphKey, maxValue, event, surface);
+  }
+  if (pointIndex < 0) return;
+  state.selectedEmotionImageGraph = { graph: graphKey, index: pointIndex };
+  renderPreservingExpressionScroll();
+  const nextSurface = document.querySelector(`[data-emotion-graph="${graphKey}"]`);
+  beginEmotionImageGraphPointDrag(event, nextSurface, graphKey, maxValue, pointIndex);
+}
+
+function addEmotionImageGraphPointAtEvent(graphKey, maxValue, event, surface) {
+  const point = getEmotionGraphPointFromEvent(event, surface, maxValue);
+  const settings = getActiveEmotionImageSettings();
+  const graph = normalizeEmotionImageGraph(settings?.[graphKey], maxValue);
+  graph.push({ time: point.time, value: point.value, curve: "linear" });
+  graph.sort((a, b) => a.time - b.time);
+  const index = graph.findIndex((item) => Math.abs(item.time - point.time) < 0.0001 && Math.abs(item.value - point.value) < 0.0001);
+  updateEmotionImageGraph(graphKey, graph);
+  return Math.max(0, index);
+}
+
+function beginEmotionImageGraphPointDrag(event, surface, graphKey, maxValue, pointIndex) {
+  if (!surface) return;
+  const move = (moveEvent) => {
+    moveEvent.preventDefault();
+    moveEmotionImageGraphPoint(graphKey, maxValue, moveEvent, surface, pointIndex);
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    renderPreservingExpressionScroll();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up, { once: true });
+}
+
+function moveEmotionImageGraphPoint(graphKey, maxValue, event, surface, pointIndex) {
+  const settings = getActiveEmotionImageSettings();
+  const graph = normalizeEmotionImageGraph(settings?.[graphKey], maxValue);
+  const current = graph[pointIndex];
+  if (!current) return;
+  const point = getEmotionGraphPointFromEvent(event, surface, maxValue);
+  const isFirst = pointIndex === 0;
+  const isLast = pointIndex === graph.length - 1;
+  const minTime = isFirst ? 0 : graph[pointIndex - 1].time + 0.01;
+  const maxTime = isLast ? 1 : graph[pointIndex + 1].time - 0.01;
+  graph[pointIndex] = {
+    ...current,
+    time: isFirst ? 0 : isLast ? 1 : clampNumber(point.time, minTime, maxTime, current.time),
+    value: clampNumber(point.value, 0, maxValue, current.value),
+  };
+  state.selectedEmotionImageGraph = { graph: graphKey, index: pointIndex };
+  updateEmotionImageGraph(graphKey, graph, { render: false });
+  updateEmotionImageGraphDom(graphKey, graph, maxValue);
+}
+
+function getEmotionGraphPointFromEvent(event, surface, maxValue) {
+  const rect = surface.getBoundingClientRect();
+  const x = clampNumber((event.clientX - rect.left) / Math.max(rect.width, 1), 0, 1, 0);
+  const y = clampNumber((event.clientY - rect.top) / Math.max(rect.height, 1), 0, 1, 0);
+  return {
+    time: Math.round(x * 10) / 10,
+    value: Math.round((maxValue * (1 - y)) * 10) / 10,
+  };
+}
+
+function updateEmotionImageGraphDom(graphKey, graph, maxValue) {
+  const surface = document.querySelector(`[data-emotion-graph="${graphKey}"]`);
+  if (!surface) return;
+  const path = surface.querySelector(".emotion-graph-line");
+  if (path) path.setAttribute("d", buildEmotionGraphPath(graph, maxValue));
+  for (const button of surface.querySelectorAll("[data-emotion-graph-point]")) {
+    const index = Number(String(button.dataset.emotionGraphPoint ?? "").split(":")[1]);
+    const point = graph[index];
+    if (!point) continue;
+    button.style.left = `${(point.time * 100).toFixed(3)}%`;
+    button.style.top = `${((emotionGraphY(point.value, maxValue) / EMOTION_GRAPH_HEIGHT) * 100).toFixed(3)}%`;
+  }
+}
+
+function updateSelectedEmotionImageCurve(curve) {
+  const selected = getSelectedEmotionPreset();
+  const graphKey = state.selectedEmotionImageGraph?.graph;
+  const pointIndex = state.selectedEmotionImageGraph?.index ?? -1;
+  if (
+    !selected?.emotionImage ||
+    selected.locked ||
+    !["scaleGraph", "opacityGraph"].includes(graphKey) ||
+    !["linear", "easeOut", "easeIn", "easeInOut", "step"].includes(curve)
+  ) {
+    return;
+  }
+  const maxValue = graphKey === "scaleGraph" ? 2 : 1;
+  const settings = getActiveEmotionImageSettings();
+  const graph = normalizeEmotionImageGraph(settings?.[graphKey], maxValue);
+  if (!graph[pointIndex]) return;
+  graph[pointIndex] = { ...graph[pointIndex], curve };
+  updateEmotionImageGraph(graphKey, graph);
+}
+
+function deleteSelectedEmotionImageGraphPoint() {
+  const selected = getSelectedEmotionPreset();
+  const graphKey = state.selectedEmotionImageGraph?.graph;
+  const pointIndex = state.selectedEmotionImageGraph?.index ?? -1;
+  if (!selected?.emotionImage || selected.locked || !["scaleGraph", "opacityGraph"].includes(graphKey)) return;
+  const maxValue = graphKey === "scaleGraph" ? 2 : 1;
+  const settings = getActiveEmotionImageSettings();
+  const graph = normalizeEmotionImageGraph(settings?.[graphKey], maxValue);
+  if (pointIndex <= 0 || pointIndex >= graph.length - 1) return;
+  deleteEmotionImageGraphPoint(graphKey, pointIndex);
+}
+
+function deleteEmotionImageGraphPoint(graphKey, pointIndex) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected?.emotionImage || selected.locked || !["scaleGraph", "opacityGraph"].includes(graphKey)) return;
+  const maxValue = graphKey === "scaleGraph" ? 2 : 1;
+  const settings = getActiveEmotionImageSettings();
+  const graph = normalizeEmotionImageGraph(settings?.[graphKey], maxValue);
+  if (pointIndex <= 0 || pointIndex >= graph.length - 1) return;
+  graph.splice(pointIndex, 1);
+  state.selectedEmotionImageGraph = { graph: graphKey, index: Math.max(0, pointIndex - 1) };
+  updateEmotionImageGraph(graphKey, graph);
+}
+
+function updateEmotionImageGraph(graphKey, graph, options = {}) {
+  state.correction.emotionImage = normalizeEmotionImageSettings({
+    ...(state.correction.emotionImage ?? {}),
+    [graphKey]: graph,
+  });
+  markExpressionMetaDirty();
+  updateEmotionImageOverlayForSelected();
+  if (options.render !== false) renderPreservingExpressionScroll();
 }
 
 function syncBlushControls(key, value, source) {
@@ -3249,7 +3797,7 @@ function toggleEmotionPresetLock(id) {
 
 function toggleEmotionPresetBlink(id) {
   const preset = state.expressionPresets.find((item) => item.id === id);
-  if (!preset) return;
+  if (!preset || preset.locked) return;
   preset.isDisableBlink = !preset.isDisableBlink;
   markExpressionMetaDirty();
   renderPreservingExpressionScroll();
@@ -3516,6 +4064,8 @@ function applySelectedEmotionPreset() {
   state.expressionDecay = null;
   applyRorrParameterValues(getExpressionParametersAtValue(selected, selected.value, true), 1);
   updateBlushOverlayForSelected();
+  updateEmotionImageOverlayForSelected();
+  startEmotionImageGraphAnimationForSelected();
 }
 
 function updateBlushOverlayForSelected() {
@@ -3593,6 +4143,237 @@ function clearBlushOverlay() {
   blushOverlay = null;
 }
 
+function updateEmotionImageOverlayForSelected() {
+  const selected = getSelectedEmotionPreset();
+  const settings = selected?.emotionImage ? getActiveEmotionImageSettings() : null;
+  if (!currentVrm || !settings?.image) {
+    clearEmotionImageOverlay();
+    return;
+  }
+  void ensureEmotionImageOverlay(settings).then(() => applyEmotionImageOverlaySettings(settings));
+}
+
+function ensureEmotionImageTransformControls() {
+  if (emotionImageTransformControls) return emotionImageTransformControls;
+  emotionImageTransformControls = new TransformControls(camera, renderer.domElement);
+  emotionImageTransformControls.setMode("translate");
+  emotionImageTransformControls.setSize(0.75);
+  const helper = emotionImageTransformControls.getHelper();
+  helper.name = "ExpressionEditor_EmotionImageTransformControls";
+  scene.add(helper);
+  emotionImageTransformControls.addEventListener("dragging-changed", (event) => {
+    emotionImageTransformDragging = Boolean(event.value);
+    controls.enabled = !event.value;
+  });
+  emotionImageTransformControls.addEventListener("objectChange", () => {
+    updateEmotionImagePositionFromGizmo();
+  });
+  return emotionImageTransformControls;
+}
+
+function attachEmotionImageTransformControls() {
+  const selected = getSelectedEmotionPreset();
+  if (
+    !emotionImageOverlay?.group ||
+    !selected?.emotionImage ||
+    selected.locked ||
+    state.mode !== "expression" ||
+    state.editing ||
+    state.emotionImagePanelMinimized ||
+    state.emotionImagePivotPicking
+  ) {
+    detachEmotionImageTransformControls();
+    return;
+  }
+  const transform = ensureEmotionImageTransformControls();
+  transform.setMode("translate");
+  if (transform.object !== emotionImageOverlay.group) transform.attach(emotionImageOverlay.group);
+}
+
+function detachEmotionImageTransformControls() {
+  if (!emotionImageTransformControls) return;
+  emotionImageTransformDragging = false;
+  emotionImageTransformControls.detach();
+  controls.enabled = true;
+}
+
+function updateEmotionImagePositionFromGizmo() {
+  const selected = getSelectedEmotionPreset();
+  if (!selected?.emotionImage || selected.locked || !emotionImageOverlay?.group) return;
+  const position = emotionImageOverlay.group.position;
+  state.correction.emotionImage = normalizeEmotionImageSettings({
+    ...(state.correction.emotionImage ?? {}),
+    x: position.x,
+    y: position.y,
+    z: position.z,
+  });
+  emotionImageOverlay.group.position.set(
+    state.correction.emotionImage.x,
+    state.correction.emotionImage.y,
+    state.correction.emotionImage.z,
+  );
+  syncEmotionImagePositionControls(state.correction.emotionImage);
+  markExpressionMetaDirty();
+}
+
+async function ensureEmotionImageOverlay(settings) {
+  if (emotionImageOverlay?.image === settings.image && emotionImageOverlay.group?.parent === scene) return;
+  clearEmotionImageOverlay();
+  let result;
+  try {
+    result = await window.vrmFiles.openStoredImage(settings.image);
+  } catch {
+    clearEmotionImageOverlay();
+    return;
+  }
+  if (!result || getActiveEmotionImageSettings()?.image !== settings.image || !getSelectedEmotionPreset()?.emotionImage) return;
+  const url = URL.createObjectURL(new Blob([new Uint8Array(result.data)], { type: getImageMimeType(result.name) }));
+  let texture;
+  try {
+    texture = await new THREE.TextureLoader().loadAsync(url);
+  } catch {
+    URL.revokeObjectURL(url);
+    clearEmotionImageOverlay();
+    return;
+  }
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const imageWidth = texture.image?.width || 1;
+  const imageHeight = texture.image?.height || 1;
+  const aspect = imageWidth / Math.max(imageHeight, 1);
+  const width = aspect * 0.45;
+  const height = 0.45;
+  const geometry = new THREE.PlaneGeometry(width, height);
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    opacity: 1,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = "ExpressionEditor_EmotionImageBillboard";
+  mesh.renderOrder = 1000;
+  const group = new THREE.Group();
+  group.name = "ExpressionEditor_EmotionImagePivot";
+  group.add(mesh);
+  scene.add(group);
+  emotionImageOverlay = { group, mesh, material, texture, geometry, url, image: settings.image, width, height };
+  attachEmotionImageTransformControls();
+}
+
+function applyEmotionImageOverlaySettings(settings) {
+  if (!emotionImageOverlay?.group || !emotionImageOverlay?.mesh) return;
+  const normalized = normalizeEmotionImageSettings(settings);
+  if (!normalized) return;
+  emotionImageOverlay.group.position.set(normalized.x, normalized.y, normalized.z);
+  applyEmotionImagePivotOffset(normalized);
+  applyEmotionImageBillboardQuaternion(normalized);
+  applyEmotionImageAnimatedValues(normalized);
+  emotionImageOverlay.group.visible = true;
+  emotionImageOverlay.mesh.visible = true;
+  attachEmotionImageTransformControls();
+}
+
+function updateEmotionImageBillboard() {
+  if (!emotionImageOverlay?.group?.visible) return;
+  applyEmotionImageBillboardQuaternion(getActiveEmotionImageSettings());
+  applyEmotionImageAnimatedValues(getActiveEmotionImageSettings());
+}
+
+function applyEmotionImageBillboardQuaternion(settings = getActiveEmotionImageSettings()) {
+  if (!emotionImageOverlay?.group) return;
+  const rotation = normalizeEmotionImageSettings(settings)?.rotation ?? 0;
+  emotionImageRollQuat.setFromAxisAngle(emotionImageRollAxis, THREE.MathUtils.degToRad(rotation));
+  emotionImageOverlay.group.quaternion.copy(camera.quaternion).multiply(emotionImageRollQuat);
+}
+
+function applyEmotionImagePivotOffset(settings = getActiveEmotionImageSettings()) {
+  if (!emotionImageOverlay?.mesh) return;
+  const normalized = normalizeEmotionImageSettings(settings);
+  const width = emotionImageOverlay.width ?? 0.45;
+  const height = emotionImageOverlay.height ?? 0.45;
+  emotionImageOverlay.mesh.position.set(
+    (0.5 - (normalized?.pivotX ?? 0.5)) * width,
+    (0.5 - (normalized?.pivotY ?? 0.5)) * height,
+    0,
+  );
+}
+
+function startEmotionImageGraphAnimationForSelected(force = false) {
+  const selected = getSelectedEmotionPreset();
+  const settings = selected?.emotionImage ? getActiveEmotionImageSettings() : null;
+  if (!settings?.image || (!force && !isEmotionImageGraphAnimated(settings))) {
+    state.emotionImageAnimation = null;
+    return;
+  }
+  state.emotionImageAnimation = {
+    elapsed: 0,
+    duration: normalizeEmotionImageDuration(settings.animationDuration),
+  };
+}
+
+function updateEmotionImageAnimation(delta) {
+  if (!state.emotionImageAnimation) return;
+  state.emotionImageAnimation.elapsed += delta;
+  if (state.emotionImageAnimation.elapsed >= state.emotionImageAnimation.duration) {
+    state.emotionImageAnimation.elapsed = state.emotionImageAnimation.duration;
+    state.emotionImageAnimation.done = true;
+  }
+}
+
+function getEmotionImageAnimationProgress(settings = getActiveEmotionImageSettings()) {
+  if (!settings || !state.emotionImageAnimation) return 1;
+  const duration = Math.max(normalizeEmotionImageDuration(settings.animationDuration), 0.001);
+  return clampNumber(state.emotionImageAnimation.elapsed / duration, 0, 1, 1);
+}
+
+function applyEmotionImageAnimatedValues(settings = getActiveEmotionImageSettings()) {
+  if (!emotionImageOverlay?.group || !emotionImageOverlay?.material || !settings) return;
+  const progress = getEmotionImageAnimationProgress(settings);
+  const scaleMultiplier = evaluateEmotionImageGraph(settings.scaleGraph, progress, 2);
+  const opacityMultiplier = evaluateEmotionImageGraph(settings.opacityGraph, progress, 1);
+  emotionImageOverlay.group.scale.setScalar(settings.scale * scaleMultiplier);
+  emotionImageOverlay.material.opacity = clampNumber(settings.opacity * opacityMultiplier, 0, 1, 1);
+}
+
+function evaluateEmotionImageGraph(graph, time, maxValue = 1) {
+  const points = normalizeEmotionImageGraph(graph, maxValue);
+  const t = clampNumber(Number(time), 0, 1, 1);
+  if (t <= points[0].time) return points[0].value;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    if (t > next.time) continue;
+    const span = Math.max(next.time - current.time, 0.001);
+    const local = clampNumber((t - current.time) / span, 0, 1, 0);
+    if (current.curve === "step") return local < 1 ? current.value : next.value;
+    const eased = evaluateEmotionImageCurve(current.curve, local);
+    return current.value + (next.value - current.value) * eased;
+  }
+  return points.at(-1).value;
+}
+
+function evaluateEmotionImageCurve(curve, value) {
+  const t = clampNumber(Number(value), 0, 1, 0);
+  if (curve === "easeOut") return 1 - (1 - t) ** 3;
+  if (curve === "easeIn") return t ** 3;
+  if (curve === "easeInOut") return t * t * (3 - 2 * t);
+  return t;
+}
+
+function clearEmotionImageOverlay() {
+  state.emotionImageAnimation = null;
+  state.emotionImagePivotPicking = false;
+  if (!emotionImageOverlay) return;
+  detachEmotionImageTransformControls();
+  emotionImageOverlay.group?.parent?.remove(emotionImageOverlay.group);
+  emotionImageOverlay.geometry?.dispose?.();
+  emotionImageOverlay.material?.dispose?.();
+  emotionImageOverlay.texture?.dispose?.();
+  if (emotionImageOverlay.url) URL.revokeObjectURL(emotionImageOverlay.url);
+  emotionImageOverlay = null;
+}
+
 function getImageMimeType(fileName) {
   const lower = String(fileName ?? "").toLowerCase();
   if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
@@ -3605,10 +4386,13 @@ function transitionToSelectedEmotionPreset(duration = 0.2) {
   if (!selected) {
     startExpressionTransition({}, 0, duration);
     clearBlushOverlay();
+    clearEmotionImageOverlay();
     return;
   }
   startExpressionTransition(getExpressionParametersAtValue(selected, selected.value, true), 1, duration);
   updateBlushOverlayForSelected();
+  updateEmotionImageOverlayForSelected();
+  startEmotionImageGraphAnimationForSelected();
 }
 
 function getExpressionParametersAtValue(preset, value, includeDraft = false, excludeRangeSlotId = null, easeSegment = false) {
@@ -3663,6 +4447,14 @@ function clampEmotionValue(value) {
 function clampNumber(value, min, max, fallback) {
   if (!Number.isFinite(value)) return fallback;
   return Math.min(max, Math.max(min, value));
+}
+
+function normalizeDegrees(value) {
+  if (!Number.isFinite(value)) return 0;
+  let next = value % 360;
+  if (next > 180) next -= 360;
+  if (next < -180) next += 360;
+  return Math.round(next * 1000) / 1000;
 }
 
 function normalizeDecaySeconds(value) {
@@ -3825,6 +4617,7 @@ function importExpressionMeta(source) {
     return { summary: "가져올 표정 프리셋이 없습니다.", messages, applied: false };
   }
   if (source.blush?.image) state.correction.blush = normalizeBlushSettings(source.blush);
+  if (source.emotionImage?.image) state.correction.emotionImage = normalizeEmotionImageSettings(source.emotionImage);
   state.expressionPresets = imported.map((preset) => {
     const next = cloneJson(preset);
     next.value = 0;
@@ -4638,6 +5431,17 @@ function updateAnimationLoop(animationName, checked) {
   syncSaveMetaButton();
 }
 
+function updateAnimationLookAtCamera(animationName, checked) {
+  if (!animationName || !state.animationCatalog?.[animationName]) return;
+  const lookAtCamera = Boolean(checked);
+  state.animationCatalog[animationName].lookAtCamera = lookAtCamera;
+  const entry = state.correction.animations?.[animationName];
+  if (entry) entry.lookAtCamera = lookAtCamera;
+  window.vrmFiles.updateAnimationInfo(animationName, { lookAtCamera }).catch(() => {});
+  applyLookAtCameraOverride();
+  syncSaveMetaButton();
+}
+
 function getAnimationPreviewDecaySeconds(animationName) {
   return normalizeDecaySeconds(state.decayPreviewSeconds?.[animationName]);
 }
@@ -4864,6 +5668,31 @@ function updateActiveLinkTimeline() {
   active.previousTime = currentTime;
 }
 
+function shouldUseLookAtCameraOverride() {
+  if (!currentVrm?.lookAt || !state.selectedAnimationName) return false;
+  if (state.mode === "expression") return false;
+  return Boolean(state.animationCatalog?.[state.selectedAnimationName]?.lookAtCamera);
+}
+
+function applyLookAtCameraOverride() {
+  const lookAt = currentVrm?.lookAt;
+  if (!lookAt) {
+    state.lookAtCameraActive = false;
+    return;
+  }
+  if (shouldUseLookAtCameraOverride()) {
+    lookAt.target = camera;
+    lookAt.autoUpdate = true;
+    state.lookAtCameraActive = true;
+    return;
+  }
+  if (state.lookAtCameraActive && lookAt.target === camera) {
+    lookAt.target = null;
+    lookAt.reset?.();
+  }
+  state.lookAtCameraActive = false;
+}
+
 function applyTimelineExpressionSlot(slot, fallbackTransitionSeconds = 0.2) {
   const preset = findMatchingExpressionPreset(slot.expressionPresetId, slot.expressionPresetName);
   if (!preset) return;
@@ -4878,6 +5707,8 @@ function applyTimelineExpressionSlot(slot, fallbackTransitionSeconds = 0.2) {
     clampTimelineTransitionSeconds(slot.transitionSeconds ?? fallbackTransitionSeconds),
   );
   updateBlushOverlayForSelected();
+  updateEmotionImageOverlayForSelected();
+  startEmotionImageGraphAnimationForSelected();
 }
 
 function getTimelineExpressionRangeSlot(slot, preset) {
@@ -4912,6 +5743,8 @@ function startLinkedExpressionDecay(presetId, duration) {
   };
   applyRorrParameterValues(getExpressionParametersAtValue(preset, 1, false, null, true), 1);
   updateBlushOverlayForSelected();
+  updateEmotionImageOverlayForSelected();
+  startEmotionImageGraphAnimationForSelected();
 }
 
 function applyLinkedExpressionPreset(presetId, duration = 0.2) {
@@ -4926,6 +5759,7 @@ function applyLinkedExpressionPreset(presetId, duration = 0.2) {
   state.selectedExpressionPresetId = preset.id;
   loadSelectedExpressionParameterDraft();
   transitionToSelectedEmotionPreset(duration);
+  startEmotionImageGraphAnimationForSelected();
 }
 
 function clearReferenceAnimation() {
@@ -5130,6 +5964,7 @@ async function loadVrm(bytes) {
   clearReferenceAnimation();
   resetAnimationState("기준 애니메이션을 불러오세요.");
   clearBlushOverlay();
+  clearEmotionImageOverlay();
   if (currentVrm) {
     scene.remove(currentVrm.scene);
     VRMUtils.deepDispose(currentVrm.scene);
@@ -5841,16 +6676,24 @@ function createEmptyCorrection() {
     },
     animations: {},
     extraBoneFollowSettings: [],
-  materialSettings: {
-    outline: {
-      materials: {},
-      showAll: false,
-      hiddenMaterials: [],
-      includedMaterials: [],
+    materialSettings: {
+      outline: {
+        materials: {},
+        showAll: false,
+        hiddenMaterials: [],
+        includedMaterials: [],
+      },
     },
-  },
     blush: null,
-    expressionPresets: createDefaultEmotionPresets().map(({ id, name, locked, isDisableBlink, rangeSlots }) => ({ id, name, locked, isDisableBlink, rangeSlots })),
+    emotionImage: null,
+    expressionPresets: createDefaultEmotionPresets().map(({ id, name, locked, isDisableBlink, rangeSlots, emotionImage }) => ({
+      id,
+      name,
+      locked,
+      isDisableBlink,
+      rangeSlots,
+      emotionImage,
+    })),
   };
 }
 
@@ -5939,6 +6782,7 @@ function getAnimationMetaEntry(animationName) {
   const entry = state.correction.animations?.[animationName];
   const next = normalizeAnimationCorrectionEntry(entry ?? {});
   next.loop = Boolean(state.animationCatalog?.[animationName]?.loop);
+  next.lookAtCamera = Boolean(state.animationCatalog?.[animationName]?.lookAtCamera);
   return next;
 }
 
@@ -6255,10 +7099,6 @@ function pruneDefaultCorrection(boneName) {
 }
 
 async function saveCorrection() {
-  const modeBeforeSave = state.mode;
-  const emotionLinkerScrollTop = document.querySelector(".emotion-linker-panel")?.scrollTop ?? 0;
-  const correctionScrollTop = document.querySelector(".correction-panel")?.scrollTop ?? 0;
-  const extraBoneScrollTop = document.querySelector(".extra-bone-panel")?.scrollTop ?? 0;
   const payload = JSON.stringify(serializeCorrection(), null, 2);
   const result = await window.vrmFiles.saveMeta(state.correctionPath, payload);
   if (!result) return;
@@ -6267,19 +7107,7 @@ async function saveCorrection() {
   state.correctionDirty = false;
   state.expressionDirty = false;
   syncSaveMetaButton();
-  render();
-  if (modeBeforeSave === "linker") {
-    const nextScroller = document.querySelector(".emotion-linker-panel");
-    if (nextScroller) nextScroller.scrollTop = emotionLinkerScrollTop;
-  }
-  if (modeBeforeSave === "correction") {
-    const nextScroller = document.querySelector(".correction-panel");
-    if (nextScroller) nextScroller.scrollTop = correctionScrollTop;
-  }
-  if (modeBeforeSave === "extraBone") {
-    const nextScroller = document.querySelector(".extra-bone-panel");
-    if (nextScroller) nextScroller.scrollTop = extraBoneScrollTop;
-  }
+  renderPreservingScrollableUi();
 }
 
 async function loadOrCreateVrmMeta(vrmPath, vrmName) {
@@ -6326,6 +7154,7 @@ async function refreshAnimationCatalog() {
       duration: normalizeFiniteNumber(animation.duration, 0),
       isFirst: Boolean(animation.isFirst),
       loop: Boolean(animation.loop),
+      lookAtCamera: Boolean(animation.lookAtCamera),
     };
   }
 }
@@ -6340,6 +7169,7 @@ async function migrateAnimationInfoFromCharacterMeta(meta) {
     if (!catalogEntry.description && animation.description) patch.description = String(animation.description);
     if (!catalogEntry.mustWatchFull && animation.mustWatchFull) patch.mustWatchFull = true;
     if (!catalogEntry.loop && animation.loop) patch.loop = true;
+    if (!catalogEntry.lookAtCamera && animation.lookAtCamera) patch.lookAtCamera = true;
     if (!Object.keys(patch).length) continue;
     const updated = await window.vrmFiles.updateAnimationInfo(fileName, patch);
     state.animationCatalog[fileName] = {
@@ -6349,6 +7179,7 @@ async function migrateAnimationInfoFromCharacterMeta(meta) {
       duration: normalizeFiniteNumber(updated.duration, catalogEntry.duration ?? 0),
       isFirst: Boolean(updated.isFirst),
       loop: Boolean(updated.loop),
+      lookAtCamera: Boolean(updated.lookAtCamera),
     };
     changed = true;
   }
@@ -6375,6 +7206,7 @@ function normalizeCorrectionJson(json) {
     ? json.expressionPresets.find((preset) => preset?.blush?.image)?.blush
     : null;
   next.blush = normalizeBlushSettings(json.blush ?? legacyBlush);
+  next.emotionImage = normalizeEmotionImageSettings(json.emotionImage);
   next.extraBoneFollowSettings = normalizeExtraBoneFollowSettings(json.extraBoneFollowSettings);
   next.materialSettings = normalizeMaterialSettings(json.materialSettings);
   next.expressionPresets = normalizeExpressionPresets(json.expressionPresets);
@@ -6435,6 +7267,7 @@ function normalizeExpressionPresets(presets) {
     isDisableBlink: Boolean(preset.isDisableBlink),
     parameters: normalizeExpressionParameterValues(preset.parameters),
     blush: preset.blush ? normalizePresetBlush(preset.blush) : null,
+    emotionImage: preset.emotionImage ? normalizePresetEmotionImage(preset.emotionImage) : null,
     rangeSlots: normalizeExpressionRangeSlots(preset.rangeSlots),
   }));
 }
@@ -6456,8 +7289,112 @@ function normalizePresetBlush(blush) {
   };
 }
 
+function normalizeEmotionImageSettings(settings) {
+  if (!settings || !settings.image) return null;
+  return {
+    image: fileNameFromPath(settings.image),
+    x: clampNumber(Number(settings.x), -2, 2, 0),
+    y: clampNumber(Number(settings.y), -1, 3, 1.5),
+    z: clampNumber(Number(settings.z), -2, 2, 0),
+    scale: clampNumber(Number(settings.scale), 0, 3, 1),
+    opacity: clampNumber(Number(settings.opacity), 0, 1, 1),
+    rotation: normalizeDegrees(Number(settings.rotation ?? 0)),
+    pivotX: clampNumber(Number(settings.pivotX), 0, 1, 0.5),
+    pivotY: clampNumber(Number(settings.pivotY), 0, 1, 0.5),
+    animationDuration: normalizeEmotionImageDuration(settings.animationDuration),
+    scaleGraph: normalizeEmotionImageGraph(settings.scaleGraph, 2),
+    opacityGraph: normalizeEmotionImageGraph(settings.opacityGraph, 1),
+  };
+}
+
+function normalizeEmotionImageDuration(value) {
+  return Math.round(clampNumber(Number(value), 0.1, 30, 1) * 10) / 10;
+}
+
+function normalizeEmotionImageGraph(graph, maxValue = 1) {
+  const source = Array.isArray(graph) && graph.length ? graph : [];
+  const points = source
+    .map((point) => ({
+      time: clampNumber(Number(point?.time), 0, 1, 0),
+      value: Math.round(clampNumber(Number(point?.value), 0, maxValue, 1) * 100) / 100,
+      curve: ["linear", "easeOut", "easeIn", "easeInOut", "step"].includes(point?.curve) ? point.curve : "linear",
+    }))
+    .sort((a, b) => a.time - b.time);
+  if (!points.length || points[0].time > 0.001) points.unshift({ time: 0, value: 1, curve: "linear" });
+  points[0] = { ...points[0], time: 0 };
+  if (points.at(-1).time < 0.999) points.push({ time: 1, value: 1, curve: "linear" });
+  points[points.length - 1] = { ...points.at(-1), time: 1, curve: "linear" };
+  const deduped = [];
+  for (const point of points.slice(0, 12)) {
+    if (deduped.length && Math.abs(deduped.at(-1).time - point.time) < 0.001) {
+      deduped[deduped.length - 1] = point;
+    } else {
+      deduped.push(point);
+    }
+  }
+  return deduped;
+}
+
+function isEmotionImageGraphAnimated(settings = getActiveEmotionImageSettings()) {
+  if (!settings) return false;
+  return [settings.scaleGraph, settings.opacityGraph].some((graph) =>
+    graph.some((point) => Math.abs(point.value - 1) > 0.001 || point.curve !== "linear"),
+  );
+}
+
+function emotionGraphX(time) {
+  return Math.round(clampNumber(Number(time), 0, 1, 0) * EMOTION_GRAPH_WIDTH);
+}
+
+function emotionGraphY(value, maxValue) {
+  return Math.round((1 - clampNumber(Number(value), 0, maxValue, 1) / Math.max(maxValue, 0.001)) * EMOTION_GRAPH_HEIGHT);
+}
+
+function buildEmotionGraphPath(points, maxValue) {
+  const normalized = normalizeEmotionImageGraph(points, maxValue);
+  if (!normalized.length) return "";
+  let path = `M${emotionGraphX(normalized[0].time)} ${emotionGraphY(normalized[0].value, maxValue)}`;
+  for (let index = 0; index < normalized.length - 1; index += 1) {
+    const current = normalized[index];
+    const next = normalized[index + 1];
+    const x1 = emotionGraphX(current.time);
+    const y1 = emotionGraphY(current.value, maxValue);
+    const x2 = emotionGraphX(next.time);
+    const y2 = emotionGraphY(next.value, maxValue);
+    if (current.curve === "step") {
+      path += ` L${x2} ${y1} L${x2} ${y2}`;
+    } else if (current.curve === "easeOut") {
+      path += ` C${x1 + (x2 - x1) * 0.16} ${y2} ${x1 + (x2 - x1) * 0.44} ${y2} ${x2} ${y2}`;
+    } else if (current.curve === "easeIn") {
+      path += ` C${x1 + (x2 - x1) * 0.56} ${y1} ${x1 + (x2 - x1) * 0.84} ${y1} ${x2} ${y2}`;
+    } else if (current.curve === "easeInOut") {
+      path += ` C${x1 + (x2 - x1) * 0.42} ${y1} ${x1 + (x2 - x1) * 0.58} ${y2} ${x2} ${y2}`;
+    } else {
+      path += ` L${x2} ${y2}`;
+    }
+  }
+  return path;
+}
+
+function getSelectedEmotionImageGraphPoint(settings = getActiveEmotionImageSettings()) {
+  const graphKey = state.selectedEmotionImageGraph?.graph;
+  if (!settings || !["scaleGraph", "opacityGraph"].includes(graphKey)) return null;
+  const maxValue = graphKey === "scaleGraph" ? 2 : 1;
+  const points = normalizeEmotionImageGraph(settings[graphKey], maxValue);
+  const index = clampNumber(Number(state.selectedEmotionImageGraph?.index), 0, points.length - 1, 0);
+  return { graphKey, points, index, ...points[index] };
+}
+
+function normalizePresetEmotionImage(settings) {
+  return settings ? {} : {};
+}
+
 function getActiveBlushSettings() {
   return normalizeBlushSettings(state.correction.blush);
+}
+
+function getActiveEmotionImageSettings() {
+  return normalizeEmotionImageSettings(state.correction.emotionImage);
 }
 
 function getSelectedBlushOpacity() {
@@ -6610,9 +7547,10 @@ function serializeCorrection() {
     }
   }
   next.blush = normalizeBlushSettings(state.correction.blush);
+  next.emotionImage = normalizeEmotionImageSettings(state.correction.emotionImage);
   next.extraBoneFollowSettings = normalizeExtraBoneFollowSettings(state.correction.extraBoneFollowSettings);
   next.materialSettings = normalizeMaterialSettings(state.correction.materialSettings);
-  next.expressionPresets = normalizeExpressionPresets(state.expressionPresets).map(({ id, name, locked, isDisableBlink, parameters, rangeSlots, blush }) => ({
+  next.expressionPresets = normalizeExpressionPresets(state.expressionPresets).map(({ id, name, locked, isDisableBlink, parameters, rangeSlots, blush, emotionImage }) => ({
     id,
     name,
     locked,
@@ -6620,6 +7558,7 @@ function serializeCorrection() {
     parameters,
     rangeSlots,
     blush,
+    emotionImage,
   }));
   return next;
 }
@@ -7602,6 +8541,7 @@ function resize() {
 controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.screenSpacePanning = true;
+renderer.domElement.addEventListener("pointerdown", handleEmotionImagePivotPointerDown, true);
 
 function tick() {
   requestAnimationFrame(tick);
@@ -7625,15 +8565,18 @@ function tick() {
     updateActiveLinkTimeline();
     updateAnimationControls();
   }
+  applyLookAtCameraOverride();
   currentVrm?.update?.(delta);
   updateExpressionDecay(delta);
   updateExpressionTransition(delta);
   reapplyActiveRorrInfluences();
   updateRandomBlink(delta);
   updateLipSyncPreview(delta);
+  updateEmotionImageAnimation(delta);
   applyMotionCorrectionPreview();
   applyExtraBoneFollowPreview();
   applyEditDraftMorphPreview();
+  updateEmotionImageBillboard();
   renderer.render(scene, camera);
   updateExtraBoneGizmoOverlay();
 }

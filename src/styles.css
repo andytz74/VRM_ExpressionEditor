@@ -1311,14 +1311,23 @@ input[type="range"] {
 
 .emotion-card-top {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) 34px 34px 34px 36px;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
   gap: 7px;
+}
+
+.emotion-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  justify-self: end;
+  gap: 5px;
 }
 
 .lock-button,
 .blink-emotion-button,
 .blush-emotion-button,
+.emotion-image-button,
 .duplicate-emotion-button,
 .delete-emotion-button {
   display: inline-flex;
@@ -1332,39 +1341,46 @@ input[type="range"] {
 
 .blink-emotion-button,
 .blush-emotion-button,
+.emotion-image-button,
 .duplicate-emotion-button {
-  width: 34px;
-  height: 32px;
+  width: 23px;
+  height: 22px;
+  min-width: 23px;
+  min-height: 22px;
   color: #d8e1ea;
   background: #303741;
 }
 
 .blink-emotion-button:hover,
 .blush-emotion-button:hover,
+.emotion-image-button:hover,
 .duplicate-emotion-button:hover {
   background: #3b4652;
 }
 
 .blink-emotion-button.active,
-.blush-emotion-button.active {
+.blush-emotion-button.active,
+.emotion-image-button.active {
   color: #eaf6ff;
   background: #236ea8;
 }
 
-.blush-emotion-button span {
-  width: 15px;
-  height: 15px;
-  border-radius: 999px;
-  background:
-    radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.9) 0 12%, transparent 14%),
-    radial-gradient(circle at 50% 52%, #ff7888 0, #e63449 48%, #8d1024 100%);
-  box-shadow: 0 0 8px rgba(255, 82, 104, 0.5);
+.blush-emotion-button svg {
+  color: #f5f8fb;
+  filter: drop-shadow(0 0 4px rgba(255, 82, 104, 0.45));
 }
 
-.blush-emotion-button.active span {
-  box-shadow:
-    0 0 0 2px rgba(255, 230, 235, 0.42),
-    0 0 10px rgba(255, 82, 104, 0.75);
+.blush-emotion-button.active svg {
+  color: #ffd7df;
+  filter: drop-shadow(0 0 6px rgba(255, 82, 104, 0.85));
+}
+
+.emotion-image-button svg {
+  color: #f5f8fb;
+}
+
+.emotion-image-button.active svg {
+  color: #dff2ff;
 }
 
 .lock-button {
@@ -1384,10 +1400,18 @@ input[type="range"] {
 }
 
 .delete-emotion-button {
-  width: 36px;
-  height: 32px;
+  width: 24px;
+  height: 22px;
+  min-width: 24px;
+  min-height: 22px;
   color: #ff2222;
   background: #4a4a4a;
+}
+
+.delete-emotion-placeholder {
+  width: 24px;
+  height: 22px;
+  min-width: 24px;
 }
 
 .emotion-name-input,
@@ -1857,9 +1881,22 @@ input[type="range"] {
   white-space: nowrap;
 }
 
+.animation-option-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 2px 0 8px;
+}
+
 .animation-loop-row {
   width: max-content;
-  margin: 2px 0 8px;
+  margin: 0;
+}
+
+.animation-look-row {
+  width: max-content;
+  margin: 0;
+  white-space: nowrap;
 }
 
 .animation-action-button {
@@ -2279,7 +2316,8 @@ canvas {
   background: #313946;
 }
 
-.blush-overlay-panel {
+.blush-overlay-panel,
+.emotion-image-overlay-panel {
   position: absolute;
   left: 18px;
   bottom: 18px;
@@ -2293,6 +2331,14 @@ canvas {
   color: #e7edf4;
   background: rgba(27, 31, 37, 0.94);
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
+}
+
+.emotion-image-overlay-panel {
+  bottom: 18px;
+}
+
+.emotion-image-overlay-panel.stacked {
+  bottom: 84px;
 }
 
 .blush-overlay-head {
@@ -2339,6 +2385,214 @@ canvas {
   text-align: right;
 }
 
+.emotion-image-position-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.emotion-image-position-value {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: #c8d0da;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.emotion-image-position-value input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  min-height: 30px;
+  border: 1px solid #343b45;
+  border-radius: 6px;
+  padding: 0 6px;
+  color: #f1f4f7;
+  background: #171b21;
+  text-align: right;
+}
+
+.emotion-image-position-value input[readonly] {
+  color: #b7c1cc;
+  background: #15191f;
+}
+
+.emotion-image-rotation-control {
+  grid-template-columns: 54px minmax(0, 1fr) 64px 32px;
+}
+
+.emotion-image-scale-control {
+  grid-template-columns: 54px minmax(0, 1fr) 64px 32px;
+}
+
+.mini-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid #38414d;
+  border-radius: 7px;
+  color: #dce5ef;
+  background: #252b33;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.mini-icon-button.active {
+  border-color: rgba(58, 185, 139, 0.8);
+  background: rgba(42, 124, 93, 0.95);
+}
+
+.mini-icon-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.emotion-image-graph-editor {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.emotion-image-duration-row {
+  display: grid;
+  grid-template-columns: 54px 82px;
+  align-items: center;
+  gap: 8px;
+  color: #c8d0da;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.emotion-image-duration-row input {
+  min-height: 30px;
+  border: 1px solid #343b45;
+  border-radius: 6px;
+  padding: 0 6px;
+  color: #f1f4f7;
+  background: #171b21;
+  text-align: right;
+}
+
+.emotion-image-graph-block {
+  display: grid;
+  gap: 4px;
+}
+
+.emotion-image-graph-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #c8d0da;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.emotion-image-graph-label strong {
+  color: #f1f4f7;
+  font-size: 12px;
+}
+
+.emotion-graph-surface {
+  position: relative;
+  height: 148px;
+  overflow: hidden;
+  border: 1px solid #303946;
+  border-radius: 7px;
+  background: #11161c;
+  cursor: crosshair;
+}
+
+.emotion-graph-surface svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.emotion-graph-grid {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.11);
+  stroke-width: 1;
+}
+
+.emotion-graph-line {
+  fill: none;
+  stroke: #41b884;
+  stroke-width: 2.4;
+}
+
+.emotion-graph-point {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #f4f8fc;
+  transform: translate(-50%, -50%);
+  cursor: grab;
+}
+
+.emotion-graph-point.selected {
+  border: 2px solid #ffffff;
+  background: #51b7ff;
+  box-shadow: 0 0 0 3px rgba(81, 183, 255, 0.22);
+}
+
+.emotion-curve-buttons {
+  display: grid;
+  grid-template-columns: repeat(6, 34px) 1fr;
+  gap: 7px;
+}
+
+.emotion-curve-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 32px;
+  border: 1px solid #38414d;
+  border-radius: 6px;
+  color: #f1f4f7;
+  background: #252b33;
+  cursor: pointer;
+}
+
+.emotion-curve-button svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.emotion-curve-button.active {
+  border-color: rgba(58, 185, 139, 0.85);
+  background: rgba(42, 124, 93, 0.95);
+}
+
+.emotion-curve-button.danger {
+  color: #ff4048;
+}
+
+.emotion-curve-button.play {
+  justify-self: end;
+  color: #ff4048;
+}
+
+.emotion-curve-button:disabled,
+.emotion-graph-point:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .blush-overlay-actions {
   display: grid;
   grid-template-columns: 1fr;
@@ -2377,7 +2631,15 @@ canvas {
   background: rgba(112, 50, 55, 0.96);
 }
 
-.blush-mini-button {
+.blush-minimize-button:disabled,
+.blush-remove-button:disabled,
+.emotion-image-overlay-panel .secondary-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.blush-mini-button,
+.emotion-image-mini-button {
   position: absolute;
   left: 18px;
   bottom: 18px;
@@ -2392,6 +2654,21 @@ canvas {
   background: rgba(31, 26, 29, 0.94);
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.32);
   cursor: pointer;
+}
+
+.emotion-image-mini-button {
+  bottom: 18px;
+  border-color: #46688f;
+  color: #eaf6ff;
+  background: rgba(26, 31, 38, 0.94);
+}
+
+.emotion-image-mini-button.stacked {
+  bottom: 78px;
+}
+
+.emotion-image-mini-button:hover {
+  background: rgba(38, 48, 60, 0.96);
 }
 
 .blush-mini-button span {
