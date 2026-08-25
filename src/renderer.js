@@ -99,6 +99,8 @@ const MIRROR_AXIS_SIGNS = {
 const DEFAULT_EMOTION_PRESET_NAMES = ["Neutral", "Focus", "Tension", "Surprise", "Joy", "Relief", "Disappointed", "Warm Smile", "Joy"];
 const EMOTION_GRAPH_WIDTH = 280;
 const EMOTION_GRAPH_HEIGHT = 148;
+const EMOTION_HEAD_ROTATION_MIN = -10;
+const EMOTION_HEAD_ROTATION_MAX = 10;
 
 const state = {
   mode: "expression",
@@ -115,6 +117,11 @@ const state = {
   decayPreviewSeconds: {},
   linkerTransitionSeconds: 0.2,
   activeLinkTimeline: null,
+  selectedMotionSlotId: null,
+  editingMotionSlotTitleId: null,
+  editingMotionSlotTitleValue: "",
+  selectedPropId: null,
+  propTransformMode: "translate",
   blushPanelMinimized: false,
   emotionImagePanelMinimized: false,
   selectedEmotionImageGraph: { graph: "scaleGraph", index: 0 },
@@ -125,6 +132,7 @@ const state = {
     message: "",
     rect: { x: 0.62, y: 0.16, width: 0.28, height: 0.42 },
   },
+  correctionRightTab: "outline",
   transitionViewer: {
     idle: [],
     transition: [],
@@ -218,11 +226,10 @@ const state = {
     message: "기준 애니메이션을 불러오세요.",
   },
   selectedBone: "hips",
+  separateMirrorBoneCorrection: false,
   extraBoneGizmoVisible: false,
   correctionSteps: {
-    positionOffset: 0.01,
     rotationOffset: 0.1,
-    scaleMultiplier: 0.01,
   },
   boneRestTransforms: new Map(),
 };
@@ -254,6 +261,11 @@ let blushOverlay = null;
 let emotionImageOverlay = null;
 let emotionImageTransformControls = null;
 let emotionImageTransformDragging = false;
+let emotionImageHeadRotationOffset = null;
+let propOverlay = null;
+let propTransformControls = null;
+let propTransformDragging = false;
+const propWorldPosition = new THREE.Vector3();
 const emotionImageRollAxis = new THREE.Vector3(0, 0, 1);
 const emotionImageRollQuat = new THREE.Quaternion();
 const emotionImageRaycaster = new THREE.Raycaster();
@@ -374,7 +386,7 @@ function normalizeTransitionSequence(sequence) {
 
 function normalizeCameraPresets(presets) {
   const next = {};
-  for (const mode of ["transfer", "correction", "expression", "linker", "extraBone", "transitionViewer"]) {
+  for (const mode of ["transfer", "correction", "expression", "linker", "linker2", "extraBone", "transitionViewer"]) {
     const preset = presets?.[mode];
     if (!preset || typeof preset !== "object") continue;
     next[mode] = normalizeCameraPreset(preset);
@@ -604,7 +616,7 @@ function render() {
   }
   const isExpressionLayout = state.mode === "expression" && !state.editing;
   const isTransitionLayout = state.mode === "transitionViewer";
-  const hasEmptyRightTray = state.mode === "correction" || state.mode === "linker";
+  const hasEmptyRightTray = state.mode === "correction" || state.mode === "linker" || state.mode === "linker2";
   app.innerHTML = `
     <main class="app ${isExpressionLayout ? "expression-layout" : ""} ${isTransitionLayout ? "transition-layout" : ""} ${hasEmptyRightTray ? "empty-right-layout" : ""}">
       <aside class="sidebar">
@@ -613,6 +625,8 @@ function render() {
             ? renderMotionCorrectionPanel()
             : state.mode === "linker"
             ? renderEmotionLinkerPanel()
+            : state.mode === "linker2"
+            ? renderEmotionLinker2Panel()
             : state.mode === "extraBone"
             ? renderExtraBoneFollowPanel()
             : state.mode === "transitionViewer"
@@ -637,11 +651,12 @@ function render() {
         ${renderBlushOverlayPanel()}
         ${renderEmotionImageOverlayPanel()}
         ${renderMetaImportOverlay()}
+        ${renderMotionSlotTitleOverlay()}
         ${state.mode === "transitionViewer" && state.transitionViewer.trayMode !== "sequence" ? renderTransitionTimelineOverlay() : ""}
       </section>
       ${state.mode === "expression" && !state.editing ? renderEmotionParameterTrayWithSave() : ""}
       ${state.mode === "transitionViewer" ? renderTransitionViewerTray() : ""}
-      ${state.mode === "correction" ? renderMaterialOutlineTray() : state.mode === "linker" ? renderEmptyRightTray() : ""}
+      ${state.mode === "correction" ? renderCorrectionRightTray() : state.mode === "linker" || state.mode === "linker2" ? renderEmptyRightTray() : ""}
     </main>
   `;
 
@@ -669,11 +684,24 @@ function renderEmptyRightTray() {
   return `<aside class="mode-empty-tray" aria-hidden="true"></aside>`;
 }
 
-function renderMaterialOutlineTray() {
+function renderCorrectionRightTray() {
+  const activeTab = state.correctionRightTab === "props" ? "props" : "outline";
+  return `
+    <aside class="material-outline-tray correction-right-tray">
+      <div class="correction-right-tabs">
+        <button class="${activeTab === "outline" ? "active" : ""}" data-correction-right-tab="outline">Outline</button>
+        <button class="${activeTab === "props" ? "active" : ""}" data-correction-right-tab="props">Props</button>
+      </div>
+      ${activeTab === "props" ? renderPropsTrayContent() : renderMaterialOutlineContent()}
+    </aside>
+  `;
+}
+
+function renderMaterialOutlineContent() {
   const outlineSettings = normalizeMaterialSettings(state.correction.materialSettings).outline;
   const materials = collectVisibleOutlineMaterials(outlineSettings.showAll);
   return `
-    <aside class="material-outline-tray">
+    <div class="material-outline-content">
       <div class="material-outline-head">
         <div class="material-outline-title-row">
           <h2>Outline</h2>
@@ -682,7 +710,7 @@ function renderMaterialOutlineTray() {
             Show all
           </label>
         </div>
-        <p>MToon material color</p>
+        <p>MToon material color / width</p>
       </div>
       <div class="material-outline-list">
         ${
@@ -691,12 +719,83 @@ function renderMaterialOutlineTray() {
             : `<div class="material-outline-empty">VRM material 없음</div>`
         }
       </div>
-    </aside>
+    </div>
+  `;
+}
+
+function renderPropsTrayContent() {
+  const props = normalizePropSettings(state.correction.props);
+  const selected = getSelectedPropSetting();
+  return `
+    <div class="props-tray-content">
+      <div class="props-list">
+        ${
+          props.length
+            ? props.map((prop) => renderPropListItem(prop)).join("")
+            : `<div class="material-outline-empty">등록된 GLB prop 없음</div>`
+        }
+        <button class="props-add-button" data-add-prop-glb>+</button>
+      </div>
+      <div class="props-settings-area">
+        ${selected ? renderPropSettingsPanel(selected) : `<div class="material-outline-empty">+ 버튼으로 GLB prop을 등록하세요.</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderPropListItem(prop) {
+  const enabled = isPropEnabledForSelectedAnimation(prop.id);
+  const selected = getSelectedPropSetting()?.id === prop.id;
+  return `
+    <div class="prop-list-item ${selected ? "selected" : ""}" data-prop-select="${escapeHtml(prop.id)}">
+      <button type="button" class="prop-enable-switch ${enabled ? "active" : ""}" data-prop-toggle="${escapeHtml(prop.id)}" ${state.selectedAnimationName ? "" : "disabled"} title="현재 애니메이션에서 사용">
+        <span></span>
+      </button>
+      <div class="prop-list-text">
+        <strong>${escapeHtml(prop.name || getPropDisplayName(prop))}</strong>
+        <small>${escapeHtml(prop.file)}</small>
+      </div>
+      <button class="prop-reload-button" data-prop-reload="${escapeHtml(prop.id)}" title="GLB 다시 불러오기">${iconSvg(RotateCw, 14)}</button>
+    </div>
+  `;
+}
+
+function renderPropSettingsPanel(prop) {
+  return `
+    <div class="prop-settings-panel">
+      <label class="prop-control-full">
+        Prop Name
+        <input type="text" value="${escapeHtml(prop.name || getPropDisplayName(prop))}" data-prop-name="${escapeHtml(prop.id)}" />
+      </label>
+      <label class="prop-control-full">
+        Parent Bone
+        <select id="selectedPropBone">
+          ${renderPropBoneOptions(prop.attachBone)}
+        </select>
+      </label>
+      <div class="prop-gizmo-mode-row">
+        <button class="${state.propTransformMode === "translate" ? "active" : ""}" data-prop-transform-mode="translate">Move</button>
+        <button class="${state.propTransformMode === "rotate" ? "active" : ""}" data-prop-transform-mode="rotate">Rotate</button>
+      </div>
+      <label class="prop-follow-row">
+        <span>Follow Rotation</span>
+        <input type="checkbox" data-prop-follow-rotation="${escapeHtml(prop.id)}" ${prop.followRotation ? "checked" : ""} />
+      </label>
+      ${renderPropVector("positionOffset", "Position", prop.positionOffset, -1, 1, 0.001)}
+      ${renderPropVector("rotationOffset", "Rotation", prop.rotationOffset, -180, 180, 0.1)}
+      <label class="blush-control-row prop-scale-row">
+        <span>Scale</span>
+        <input type="range" min="0.01" max="5" step="0.001" value="${roundForInput(prop.scale)}" data-prop-number="scale" />
+        <input type="number" min="0.01" max="5" step="0.001" value="${roundForInput(prop.scale)}" data-prop-number="scale" />
+      </label>
+      <button class="delete-emotion-button prop-delete-button" id="removeSelectedProp" title="Remove Prop">${iconSvg(X, 18)}</button>
+    </div>
   `;
 }
 
 function renderMaterialOutlineItem(material) {
   const color = getMaterialOutlineColor(material);
+  const width = getMaterialOutlineWidth(material);
   const hidden = isMaterialOutlineHidden(material);
   return `
     <div class="material-outline-item ${hidden ? "is-hidden" : ""}">
@@ -706,6 +805,11 @@ function renderMaterialOutlineItem(material) {
       <div class="material-outline-picker">
         <input type="color" value="${escapeHtml(color)}" data-outline-color="${escapeHtml(material.name)}" />
         <input type="text" value="${escapeHtml(color)}" data-outline-hex="${escapeHtml(material.name)}" />
+      </div>
+      <div class="material-outline-width">
+        <span>Width</span>
+        <input type="range" min="0" max="2" step="0.001" value="${roundForInput(width)}" data-outline-width="${escapeHtml(material.name)}" />
+        <input type="number" min="0" max="2" step="0.001" value="${roundForInput(width)}" data-outline-width-number="${escapeHtml(material.name)}" />
       </div>
     </div>
   `;
@@ -723,6 +827,17 @@ function renderMetaImportOverlay() {
       <p>${escapeHtml(report.summary)}</p>
       ${report.messages?.length ? `<ul>${report.messages.map((message) => `<li>${escapeHtml(message)}</li>`).join("")}</ul>` : ""}
     </aside>
+  `;
+}
+
+function renderMotionSlotTitleOverlay() {
+  if (state.mode !== "linker2" || !state.selectedMotionSlotId) return "";
+  const slot = getMotionSlot(state.selectedMotionSlotId);
+  if (!slot?.title) return "";
+  return `
+    <div class="motion-slot-title-overlay">
+      ${escapeHtml(slot.title)}
+    </div>
   `;
 }
 
@@ -1034,7 +1149,7 @@ function renderBlushOverlayPanel() {
   if (state.mode !== "expression" || state.editing) return "";
   const selected = getSelectedEmotionPreset();
   const blush = getActiveBlushSettings();
-  if (!selected || !selected.blush || !blush?.image) return "";
+  if (!selected || !isPresetBlushEnabled(selected) || !blush?.image) return "";
   if (state.blushPanelMinimized) {
     return `
       <button class="blush-mini-button" id="restoreBlushPanel" title="Blush">
@@ -1070,14 +1185,15 @@ function renderEmotionImageOverlayPanel() {
   const settings = getActiveEmotionImageSettings();
   if (!selected || !selected.emotionImage || !settings?.image) return "";
   if (state.emotionImagePanelMinimized) {
-    const stacked = Boolean(selected.blush && getActiveBlushSettings()?.image);
+    const stacked = Boolean(isPresetBlushEnabled(selected) && getActiveBlushSettings()?.image);
     return `
       <button class="emotion-image-mini-button ${stacked ? "stacked" : ""}" id="restoreEmotionImagePanel" title="Emotion image">
         ${emotionImageIconSvg(24)}
       </button>
     `;
   }
-  const stacked = Boolean(selected.blush && getActiveBlushSettings()?.image);
+  const stacked = Boolean(isPresetBlushEnabled(selected) && getActiveBlushSettings()?.image);
+  const hasRangeOverride = Boolean(getSelectedExpressionRangeSlot());
   return `
     <section class="emotion-image-overlay-panel ${stacked ? "stacked" : ""}">
       <div class="blush-overlay-head">
@@ -1097,6 +1213,11 @@ function renderEmotionImageOverlayPanel() {
       ${renderEmotionImageScaleControl(settings.scale, selected.locked)}
       <div class="blush-overlay-actions">
         <button class="secondary-button" data-emotion-image="${escapeHtml(selected.id)}" ${selected.locked ? "disabled" : ""}>Change Image</button>
+        ${
+          hasRangeOverride
+            ? `<button class="secondary-button" data-emotion-image-range-reset ${selected.locked ? "disabled" : ""}>Reset Range</button>`
+            : ""
+        }
       </div>
       ${renderEmotionImageGraphEditor(settings, selected.locked)}
     </section>
@@ -1139,12 +1260,17 @@ function renderEmotionImageGraphEditor(settings, disabled = false) {
   const duration = normalizeEmotionImageDuration(settings.animationDuration);
   return `
     <div class="emotion-image-graph-editor">
-      <label class="emotion-image-duration-row">
+      <div class="emotion-image-duration-row">
         <span>Time</span>
         <input type="number" min="0.1" max="30" step="0.1" value="${roundForInput(duration)}" data-emotion-image-number="animationDuration" ${disabled ? "disabled" : ""} />
-      </label>
+        <label class="emotion-image-loop-row">
+          <input type="checkbox" data-emotion-image-loop ${settings.loop ? "checked" : ""} ${disabled ? "disabled" : ""} />
+          <span>Loop</span>
+        </label>
+      </div>
       ${renderEmotionImageGraph("scaleGraph", "Scale", settings.scaleGraph, 2, disabled)}
       ${renderEmotionImageGraph("opacityGraph", "Opacity", settings.opacityGraph, 1, disabled)}
+      ${renderEmotionImageHeadRotationGraph(settings, disabled)}
       ${renderEmotionImageCurveButtons(settings, disabled)}
     </div>
   `;
@@ -1153,6 +1279,7 @@ function renderEmotionImageGraphEditor(settings, disabled = false) {
 function renderEmotionImageGraph(graphKey, label, graph, maxValue, disabled = false) {
   const points = normalizeEmotionImageGraph(graph, maxValue);
   const selected = state.selectedEmotionImageGraph?.graph === graphKey ? state.selectedEmotionImageGraph.index : -1;
+  const selectedValue = points[selected]?.value;
   const pointMarkup = points
     .map((point, index) => {
       const y = emotionGraphY(point.value, maxValue);
@@ -1166,12 +1293,93 @@ function renderEmotionImageGraph(graphKey, label, graph, maxValue, disabled = fa
         <strong>${maxValue.toFixed(1)}</strong>
       </div>
       <div class="emotion-graph-surface" data-emotion-graph="${graphKey}" data-emotion-graph-max="${maxValue}" ${disabled ? "data-disabled=\"true\"" : ""}>
+        ${renderEmotionGraphSelectedValue(selectedValue)}
         <svg viewBox="0 0 ${EMOTION_GRAPH_WIDTH} ${EMOTION_GRAPH_HEIGHT}" preserveAspectRatio="none" aria-hidden="true">
           <path class="emotion-graph-grid" d="M0 ${EMOTION_GRAPH_HEIGHT / 2}H${EMOTION_GRAPH_WIDTH}" />
           <path class="emotion-graph-line" d="${escapeHtml(buildEmotionGraphPath(points, maxValue))}" />
         </svg>
         ${pointMarkup}
       </div>
+    </div>
+  `;
+}
+
+function renderEmotionImageHeadRotationGraph(settings, disabled = false) {
+  const axes = normalizeHeadRotationAxes(settings.headRotationAxes);
+  const selectedAxis = getSelectedHeadRotationAxis(settings);
+  const activeGraph = settings.headRotationGraph?.[selectedAxis] ?? [];
+  const selected =
+    state.selectedEmotionImageGraph?.graph === "headRotationGraph" && state.selectedEmotionImageGraph?.axis === selectedAxis
+      ? state.selectedEmotionImageGraph.index
+      : -1;
+  const activePoints = normalizeEmotionImageGraphRange(activeGraph, EMOTION_HEAD_ROTATION_MIN, EMOTION_HEAD_ROTATION_MAX, 0);
+  const selectedValue = axes[selectedAxis] ? activePoints[selected]?.value : null;
+  const axisMarkup = ["x", "y", "z"]
+    .filter((axis) => axes[axis])
+    .map((axis) => {
+      const points = normalizeEmotionImageGraphRange(settings.headRotationGraph?.[axis], EMOTION_HEAD_ROTATION_MIN, EMOTION_HEAD_ROTATION_MAX, 0);
+      return `<path class="emotion-graph-line emotion-graph-axis-${axis}" d="${escapeHtml(buildEmotionGraphPathRange(points, EMOTION_HEAD_ROTATION_MIN, EMOTION_HEAD_ROTATION_MAX))}" />`;
+    })
+    .join("");
+  const pointMarkup = axes[selectedAxis]
+    ? activePoints
+        .map((point, index) => {
+          const y = emotionGraphYRange(point.value, EMOTION_HEAD_ROTATION_MIN, EMOTION_HEAD_ROTATION_MAX);
+          return `<button class="emotion-graph-point ${index === selected ? "selected" : ""} emotion-graph-axis-${selectedAxis}" style="left:${(point.time * 100).toFixed(3)}%;top:${((y / EMOTION_GRAPH_HEIGHT) * 100).toFixed(3)}%" data-emotion-graph-point="headRotationGraph:${index}" ${disabled ? "disabled" : ""} title="${roundForInput(point.time)} / ${roundForInput(point.value)}"></button>`;
+        })
+        .join("")
+    : "";
+  return `
+    <div class="emotion-image-graph-block">
+      <div class="emotion-image-graph-label">
+        <span>Head Rotation</span>
+        <strong>-10 / 10</strong>
+      </div>
+      <div class="emotion-graph-surface emotion-head-rotation-surface" data-emotion-graph="headRotationGraph" data-emotion-graph-min="${EMOTION_HEAD_ROTATION_MIN}" data-emotion-graph-max="${EMOTION_HEAD_ROTATION_MAX}" ${disabled || !axes[selectedAxis] ? "data-disabled=\"true\"" : ""}>
+        ${renderEmotionGraphSelectedValue(selectedValue)}
+        <svg viewBox="0 0 ${EMOTION_GRAPH_WIDTH} ${EMOTION_GRAPH_HEIGHT}" preserveAspectRatio="none" aria-hidden="true">
+          <path class="emotion-graph-grid" d="M0 ${EMOTION_GRAPH_HEIGHT / 2}H${EMOTION_GRAPH_WIDTH}" />
+          ${axisMarkup}
+        </svg>
+        ${pointMarkup}
+      </div>
+      <div class="emotion-head-axis-buttons">
+        ${["x", "y", "z"]
+          .map(
+            (axis) =>
+              `<button class="emotion-head-axis-button ${axes[axis] ? "active" : ""} ${selectedAxis === axis ? "selected" : ""} axis-${axis}" data-emotion-head-axis="${axis}" ${disabled ? "disabled" : ""}>${axis.toUpperCase()}</button>`,
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderEmotionGraphSelectedValue(value) {
+  return `<span class="emotion-graph-selected-value">${Number.isFinite(value) ? Number(value).toFixed(1) : ""}</span>`;
+}
+
+function renderPropBoneOptions(selectedBone) {
+  return HUMAN_BONES.map(
+    (boneName) =>
+      `<option value="${escapeHtml(boneName)}" ${boneName === selectedBone ? "selected" : ""}>${escapeHtml(formatBoneName(boneName))}</option>`,
+  ).join("");
+}
+
+function renderPropVector(key, label, values, min, max, step) {
+  return `
+    <div class="prop-vector-block">
+      <strong>${escapeHtml(label)}</strong>
+      ${["X", "Y", "Z"]
+        .map(
+          (axisLabel, index) => `
+            <label class="prop-vector-row">
+              <span>${axisLabel}</span>
+              <input type="number" min="${min}" max="${max}" step="${step}" value="${roundForInput(values[index])}" data-prop-vector="${escapeHtml(key)}" data-axis="${index}" />
+            </label>
+          `,
+        )
+        .join("")}
     </div>
   `;
 }
@@ -1524,6 +1732,7 @@ function renderModeBar(active) {
     ["correction", "Motion Correction", SlidersHorizontal],
     ["expression", "Expression Editor", SlidersHorizontal],
     ["linker", "Emotion Linker", GitCompare],
+    ["linker2", "Emotion Linker 2", GitCompare],
     ["extraBone", "Extra Bone Follow Setting", GitCompare],
     ["transitionViewer", "Transition Viewer", GitCompare],
   ];
@@ -1599,6 +1808,7 @@ function renderEmotionExpressionPanel() {
 function renderEmotionPresetCard(preset) {
   const selected = preset.id === state.selectedExpressionPresetId;
   const slots = normalizeExpressionRangeSlots(preset.rangeSlots);
+  const blushEnabled = isPresetBlushEnabled(preset);
   return `
     <div class="emotion-card ${preset.locked ? "locked" : "unlocked"} ${selected ? "selected" : ""}" data-emotion-select="${preset.id}" data-emotion-drop="${preset.id}">
       <div class="emotion-card-top">
@@ -1610,7 +1820,7 @@ function renderEmotionPresetCard(preset) {
         }
         <div class="emotion-card-actions">
           <button class="blink-emotion-button ${preset.isDisableBlink ? "active" : ""}" data-emotion-blink="${preset.id}" title="Disable blink">${blinkDisabledSvg(18)}</button>
-          <button class="blush-emotion-button ${preset.blush ? "active" : ""}" data-emotion-blush="${preset.id}" title="Blush image">${blushIconSvg(18)}</button>
+          <button class="blush-emotion-button ${blushEnabled ? "active" : ""}" data-emotion-blush="${preset.id}" title="Blush image">${blushIconSvg(18)}</button>
           <button class="emotion-image-button ${preset.emotionImage ? "active" : ""}" data-emotion-image="${preset.id}" title="Emotion image">${emotionImageIconSvg(18)}</button>
           <button class="duplicate-emotion-button" data-emotion-duplicate="${preset.id}" title="Duplicate">${iconSvg(Copy, 15)}</button>
           ${preset.locked ? `<span class="delete-emotion-placeholder"></span>` : `<button class="delete-emotion-button" data-emotion-delete="${preset.id}" title="Delete">${iconSvg(X, 16)}</button>`}
@@ -1882,6 +2092,7 @@ function renderMotionCorrectionPanel() {
             <input type="checkbox" id="toggleSelectedAnimationLookAt" ${selectedAnimationMeta.lookAtCamera ? "checked" : ""} ${selectedAnimation ? "" : "disabled"} />
             <span>정면시선</span>
           </label>
+          <button class="prop-load-button" data-add-prop-glb ${currentVrm ? "" : "disabled"} title="GLB Prop 불러오기">GLB</button>
         </div>
         <div class="animation-description-line">
           <label>
@@ -1904,14 +2115,17 @@ function renderMotionCorrectionPanel() {
             <div class="correction-card">
               <div class="row-top">
                 <div class="name">Target Bone</div>
-                <button class="mini-button" id="resetBoneCorrection">Reset</button>
+                <div class="target-bone-tools">
+                  <button class="mirror-split-button ${state.separateMirrorBoneCorrection ? "active" : ""}" id="toggleMirrorBoneCorrection" title="좌우 본을 따로 보정">
+                    <span>L</span><span>R</span>
+                  </button>
+                  <button class="mini-button" id="resetBoneCorrection">Reset</button>
+                </div>
               </div>
               <select id="selectedBone">${renderBoneOptions()}</select>
-              <p class="parameter-meta">${getBoneAvailabilityText(state.selectedBone)}</p>
+              <p class="parameter-meta">${getBoneAvailabilityText(state.selectedBone)} ${getMirrorBoneName(state.selectedBone) ? (state.separateMirrorBoneCorrection ? "좌우를 따로 보정합니다." : "좌우를 대칭으로 함께 보정합니다.") : ""}</p>
             </div>
-            ${renderCorrectionVector("positionOffset", "Position Offset", selected.positionOffset, -0.5, 0.5, 0.001, "m")}
             ${renderCorrectionVector("rotationOffset", "Rotation Offset", selected.rotationOffset, -45, 45, 0.1, "deg")}
-            ${renderCorrectionVector("scaleMultiplier", "Scale Multiplier", selected.scaleMultiplier, 0.5, 1.5, 0.001, "x")}
           `
           : `<div class="correction-card"><p class="parameter-meta">${selectedAnimation ? "VRM을 열면 이 애니메이션의 관절 보정을 편집할 수 있습니다." : "New Ani로 검수할 애니메이션을 먼저 등록하세요."}</p></div>`
       }
@@ -1966,6 +2180,142 @@ function renderEmotionLinkerPanel() {
     </div>
     <div class="correction-footer">
       <button class="primary-button" id="saveCorrection" ${state.correctionPath && state.correctionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
+    </div>
+  `;
+}
+
+function renderEmotionLinker2Panel() {
+  const slots = normalizeMotionSlots(state.correction.motionSlots);
+  state.correction.motionSlots = slots;
+  return `
+    <div class="panel-header">
+      <div class="title-block">
+        <h1>Emotion Linker 2</h1>
+        <p>${state.correctionPath ? escapeHtml(fileNameFromPath(state.correctionPath)) : "모션 슬롯을 만들어 애니메이션과 표정을 연결합니다"}</p>
+      </div>
+      <button class="icon-button" id="openFile" title="VRM 열기">${iconSvg(FolderOpen)}</button>
+    </div>
+    ${renderModeBar("linker2")}
+      <div class="emotion-linker-panel motion-linker-panel">
+      ${
+        slots.length
+          ? slots.map((slot, index) => renderMotionSlotCard(slot, index, slots.length)).join("")
+          : `<div class="correction-card"><p class="parameter-meta">+ 버튼으로 모션 슬롯을 추가하세요.</p></div>`
+      }
+      <button class="emotion-link-add-point motion-slot-add" id="addMotionSlot">+</button>
+    </div>
+    <div class="correction-footer">
+      <button class="primary-button" id="saveCorrection" ${state.correctionPath && state.correctionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
+    </div>
+  `;
+}
+
+function renderMotionSlotCard(slot, index = 0, total = 1) {
+  const animationNames = getAnimationNames();
+  const linkedPreset = state.expressionPresets.find((preset) => preset.id === slot.expressionPresetId);
+  const duration = getAnimationDuration(slot.animationFile, 2);
+  const selected = state.selectedMotionSlotId === slot.id;
+  const titleValue =
+    state.editingMotionSlotTitleId === slot.id ? state.editingMotionSlotTitleValue : slot.title;
+  return `
+    <div class="emotion-link-card motion-slot-card ${selected ? "selected" : ""}">
+      <div class="motion-slot-top">
+        <input class="motion-slot-title" type="text" value="${escapeHtml(titleValue)}" placeholder="input title" data-motion-slot-title="${escapeHtml(slot.id)}" />
+        <div class="motion-slot-order-buttons">
+          <button class="mini-icon-button" data-motion-slot-move="${escapeHtml(slot.id)}" data-direction="-1" ${index <= 0 ? "disabled" : ""} title="Move up">▲</button>
+          <button class="mini-icon-button" data-motion-slot-move="${escapeHtml(slot.id)}" data-direction="1" ${index >= total - 1 ? "disabled" : ""} title="Move down">▼</button>
+        </div>
+        <button class="delete-emotion-button compact-delete" data-motion-slot-delete="${escapeHtml(slot.id)}" title="Delete">${iconSvg(X, 16)}</button>
+      </div>
+      <select class="emotion-link-select" data-motion-slot-animation="${escapeHtml(slot.id)}">
+        <option value="">애니메이션 선택</option>
+        ${animationNames
+          .map((name) => `<option value="${escapeHtml(name)}" ${name === slot.animationFile ? "selected" : ""}>${escapeHtml(formatAnimationOptionLabel(name))}</option>`)
+          .join("")}
+      </select>
+      <select class="emotion-link-select" data-motion-slot-expression="${escapeHtml(slot.id)}">
+        <option value="">표정 프리셋 이름</option>
+        ${state.expressionPresets
+          .map((preset) => `<option value="${escapeHtml(preset.id)}" ${preset.id === slot.expressionPresetId ? "selected" : ""}>${escapeHtml(preset.name)}</option>`)
+          .join("")}
+      </select>
+      <div class="emotion-link-actions">
+        <label class="emotion-link-loop">
+          <input type="checkbox" data-motion-slot-loop="${escapeHtml(slot.id)}" ${slot.loop ? "checked" : ""} />
+          Loop
+        </label>
+        <div class="motion-slot-transition-control" title="Start transition">
+          <span>${clampTimelineTransitionSeconds(slot.transitionSeconds).toFixed(1)}</span>
+          <div>
+            <button type="button" data-motion-slot-transition="${escapeHtml(slot.id)}" data-direction="1">▲</button>
+            <button type="button" data-motion-slot-transition="${escapeHtml(slot.id)}" data-direction="-1">▼</button>
+          </div>
+        </div>
+        <button class="icon-button emotion-link-play" data-motion-slot-play="${escapeHtml(slot.id)}" ${currentVrm && slot.animationFile ? "" : "disabled"} title="Play">${iconSvg(Play, 24)}</button>
+      </div>
+      ${renderMotionSlotTimeline(slot, duration, linkedPreset)}
+    </div>
+  `;
+}
+
+function renderMotionSlotTimeline(slot, duration, linkedPreset) {
+  const timeline = normalizeExpressionTimeline(slot.expressionTimeline);
+  const progress =
+    state.selectedMotionSlotId === slot.id && state.animation.duration
+      ? Math.min(100, Math.max(0, (state.animation.time / Math.max(state.animation.duration, 0.001)) * 100))
+      : 0;
+  return `
+    <div class="emotion-link-timeline">
+      <div class="emotion-link-progress">
+        <div class="emotion-link-progress-track">
+          <span class="emotion-link-progress-cursor" data-motion-slot-progress="${escapeHtml(slot.id)}" style="left: ${progress}%;"></span>
+          ${timeline.map((timelineSlot, index) => renderMotionSlotTimelineMarker(slot.id, timelineSlot, index, duration)).join("")}
+        </div>
+      </div>
+      <div class="emotion-link-timeline-slots">
+        ${timeline.map((timelineSlot, index) => renderMotionSlotTimelineSlot(slot.id, timelineSlot, index, duration)).join("")}
+        <button class="emotion-link-add-point" data-motion-slot-timeline-add="${escapeHtml(slot.id)}">+</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderMotionSlotTimelineMarker(slotId, slot, index, duration) {
+  const left = Math.min(100, Math.max(0, (slot.time / Math.max(duration, 0.001)) * 100));
+  return `
+    <button class="emotion-link-marker" style="left: ${left}%;" data-motion-slot-timeline-jump="${escapeHtml(slotId)}" data-slot-id="${escapeHtml(slot.id)}" title="${slot.time.toFixed(1)}">
+      <span></span>
+      <em>${index + 1}</em>
+    </button>
+  `;
+}
+
+function renderMotionSlotTimelineSlot(slotId, slot, index, duration) {
+  const preset = findMatchingExpressionPreset(slot.expressionPresetId, slot.expressionPresetName);
+  const ranges = normalizeExpressionRangeSlots(preset?.rangeSlots);
+  const hasRanges = ranges.length > 0;
+  return `
+    <div class="emotion-link-timeline-slot">
+      <button class="emotion-range-number" data-motion-slot-timeline-jump="${escapeHtml(slotId)}" data-slot-id="${escapeHtml(slot.id)}">${index + 1}</button>
+      <div class="emotion-link-time-value" data-motion-slot-timeline-drag="${escapeHtml(slotId)}" data-slot-id="${escapeHtml(slot.id)}">${slot.time.toFixed(1)}</div>
+      <select data-motion-slot-timeline-expression="${escapeHtml(slotId)}" data-slot-id="${escapeHtml(slot.id)}">
+        <option value="">F</option>
+        ${state.expressionPresets
+          .map((item) => `<option value="${escapeHtml(item.id)}" ${preset?.id === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`)
+          .join("")}
+      </select>
+      <select class="emotion-link-range-select" data-motion-slot-timeline-range="${escapeHtml(slotId)}" data-slot-id="${escapeHtml(slot.id)}" ${hasRanges ? "" : "disabled"}>
+        <option value="">-</option>
+        ${ranges.map((range, rangeIndex) => `<option value="${escapeHtml(range.id)}" ${range.id === slot.expressionRangeId ? "selected" : ""}>${rangeIndex + 1}</option>`).join("")}
+      </select>
+      <div class="timeline-transition-stepper">
+        <strong>${clampTimelineTransitionSeconds(slot.transitionSeconds).toFixed(1)}</strong>
+        <div class="timeline-transition-buttons">
+          <button data-motion-slot-timeline-transition="${escapeHtml(slotId)}" data-slot-id="${escapeHtml(slot.id)}" data-direction="1">+</button>
+          <button data-motion-slot-timeline-transition="${escapeHtml(slotId)}" data-slot-id="${escapeHtml(slot.id)}" data-direction="-1">-</button>
+        </div>
+      </div>
+      <button class="delete-emotion-button compact-delete" data-motion-slot-timeline-delete="${escapeHtml(slotId)}" data-slot-id="${escapeHtml(slot.id)}">${iconSvg(X, 16)}</button>
     </div>
   `;
 }
@@ -2627,6 +2977,37 @@ function bindUi() {
   document.querySelector("#prevAnimation")?.addEventListener("click", () => stepSelectedAnimation(-1));
   document.querySelector("#nextAnimation")?.addEventListener("click", () => stepSelectedAnimation(1));
   document.querySelector("#deleteAnimation")?.addEventListener("click", deleteSelectedAnimation);
+  for (const button of document.querySelectorAll("[data-add-prop-glb]")) {
+    button.addEventListener("click", addPropGlb);
+  }
+  document.querySelector("#removeSelectedProp")?.addEventListener("click", removeSelectedProp);
+  for (const button of document.querySelectorAll("[data-correction-right-tab]")) {
+    button.addEventListener("click", () => {
+      state.correctionRightTab = button.dataset.correctionRightTab === "props" ? "props" : "outline";
+      renderPreservingScrollableUi();
+    });
+  }
+  for (const button of document.querySelectorAll("[data-prop-select]")) {
+    button.addEventListener("click", (event) => {
+      if (event.target.closest("[data-prop-toggle], [data-prop-reload]")) return;
+      selectProp(button.dataset.propSelect);
+    });
+  }
+  for (const button of document.querySelectorAll("[data-prop-toggle]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      togglePropForSelectedAnimation(button.dataset.propToggle, !button.classList.contains("active"));
+    });
+  }
+  for (const button of document.querySelectorAll("[data-prop-reload]")) {
+    button.addEventListener("click", () => reloadPropGlb(button.dataset.propReload));
+  }
+  for (const input of document.querySelectorAll("[data-prop-name]")) {
+    input.addEventListener("input", () => updatePropName(input.dataset.propName, input.value));
+  }
+  for (const input of document.querySelectorAll("[data-prop-follow-rotation]")) {
+    input.addEventListener("change", () => updateSelectedProp({ followRotation: input.checked }));
+  }
   document.querySelector("#toggleMustWatch")?.addEventListener("click", toggleSelectedAnimationMustWatch);
   document.querySelector("#toggleFirstAnimation")?.addEventListener("change", (event) => toggleSelectedAnimationFirst(event.target.checked));
   document.querySelector("#toggleSelectedAnimationLoop")?.addEventListener("change", (event) =>
@@ -2679,6 +3060,67 @@ function bindUi() {
     button.addEventListener("click", () =>
       nudgeAnimationDecaySeconds(button.dataset.linkDecayNudge, Number(button.dataset.direction)),
     );
+  }
+
+  document.querySelector("#addMotionSlot")?.addEventListener("click", addMotionSlot);
+  for (const input of document.querySelectorAll("[data-motion-slot-title]")) {
+    input.addEventListener("pointerdown", (event) => event.stopPropagation());
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("focus", () => beginMotionSlotTitleEdit(input.dataset.motionSlotTitle, input.value));
+    input.addEventListener("input", () => updateMotionSlotTitle(input.dataset.motionSlotTitle, input.value));
+    input.addEventListener("blur", () => finishMotionSlotTitleEdit(input.dataset.motionSlotTitle, input.value));
+  }
+  for (const select of document.querySelectorAll("[data-motion-slot-animation]")) {
+    select.addEventListener("change", () => updateMotionSlot(select.dataset.motionSlotAnimation, { animationFile: select.value }));
+  }
+  for (const select of document.querySelectorAll("[data-motion-slot-expression]")) {
+    select.addEventListener("change", () => updateMotionSlotExpression(select.dataset.motionSlotExpression, select.value));
+  }
+  for (const input of document.querySelectorAll("[data-motion-slot-loop]")) {
+    input.addEventListener("change", () => updateMotionSlot(input.dataset.motionSlotLoop, { loop: input.checked }));
+  }
+  for (const button of document.querySelectorAll("[data-motion-slot-transition]")) {
+    button.addEventListener("click", () =>
+      nudgeMotionSlotTransition(button.dataset.motionSlotTransition, Number(button.dataset.direction)),
+    );
+  }
+  for (const button of document.querySelectorAll("[data-motion-slot-delete]")) {
+    button.addEventListener("click", () => deleteMotionSlot(button.dataset.motionSlotDelete));
+  }
+  for (const button of document.querySelectorAll("[data-motion-slot-move]")) {
+    button.addEventListener("click", () => moveMotionSlot(button.dataset.motionSlotMove, Number(button.dataset.direction)));
+  }
+  for (const button of document.querySelectorAll("[data-motion-slot-play]")) {
+    button.addEventListener("click", () => playMotionSlot(button.dataset.motionSlotPlay));
+  }
+  for (const button of document.querySelectorAll("[data-motion-slot-timeline-add]")) {
+    button.addEventListener("click", () => addMotionSlotTimelineSlot(button.dataset.motionSlotTimelineAdd));
+  }
+  for (const button of document.querySelectorAll("[data-motion-slot-timeline-delete]")) {
+    button.addEventListener("click", () => deleteMotionSlotTimelineSlot(button.dataset.motionSlotTimelineDelete, button.dataset.slotId));
+  }
+  for (const select of document.querySelectorAll("[data-motion-slot-timeline-expression]")) {
+    select.addEventListener("change", () =>
+      updateMotionSlotTimelineExpression(select.dataset.motionSlotTimelineExpression, select.dataset.slotId, select.value),
+    );
+  }
+  for (const select of document.querySelectorAll("[data-motion-slot-timeline-range]")) {
+    select.addEventListener("change", () =>
+      updateMotionSlotTimelineRange(select.dataset.motionSlotTimelineRange, select.dataset.slotId, select.value),
+    );
+  }
+  for (const button of document.querySelectorAll("[data-motion-slot-timeline-transition]")) {
+    button.addEventListener("click", () =>
+      nudgeMotionSlotTimelineTransition(button.dataset.motionSlotTimelineTransition, button.dataset.slotId, Number(button.dataset.direction)),
+    );
+  }
+  for (const node of document.querySelectorAll("[data-motion-slot-timeline-drag]")) {
+    node.addEventListener("pointerdown", (event) =>
+      beginMotionSlotTimelineDrag(event, node.dataset.motionSlotTimelineDrag, node.dataset.slotId),
+    );
+  }
+  for (const button of document.querySelectorAll("[data-motion-slot-timeline-jump]")) {
+    button.addEventListener("click", () => jumpMotionSlotTimeline(button.dataset.motionSlotTimelineJump, button.dataset.slotId));
   }
 
   for (const button of document.querySelectorAll("[data-link-timeline-add]")) {
@@ -2793,6 +3235,11 @@ function bindUi() {
     state.selectedBone = event.target.value;
     render();
   });
+  document.querySelector("#toggleMirrorBoneCorrection")?.addEventListener("click", () => {
+    state.separateMirrorBoneCorrection = !state.separateMirrorBoneCorrection;
+    renderPreservingScrollableUi();
+  });
+  document.querySelector("#selectedPropBone")?.addEventListener("change", (event) => updateSelectedProp({ attachBone: event.target.value }));
 
   for (const input of document.querySelectorAll("[data-correction-meta]")) {
     input.addEventListener("input", () => updateCorrectionMeta(input.dataset.correctionMeta, input.value));
@@ -2822,6 +3269,14 @@ function bindUi() {
         input.blur();
       }
     });
+  }
+
+  for (const input of document.querySelectorAll("[data-outline-width]")) {
+    input.addEventListener("input", () => updateMaterialOutlineWidth(input.dataset.outlineWidth, Number(input.value), input));
+  }
+
+  for (const input of document.querySelectorAll("[data-outline-width-number]")) {
+    input.addEventListener("input", () => updateMaterialOutlineWidth(input.dataset.outlineWidthNumber, Number(input.value), input));
   }
 
   for (const select of document.querySelectorAll("[data-extra-bone-target]")) {
@@ -2881,6 +3336,18 @@ function bindUi() {
     input.addEventListener("input", () => updateCorrectionValue(input.dataset.correctionNumber, Number(input.dataset.axis), Number(input.value)));
   }
 
+  for (const input of document.querySelectorAll("[data-prop-vector]")) {
+    input.addEventListener("input", () => updateSelectedPropVector(input.dataset.propVector, Number(input.dataset.axis), Number(input.value)));
+  }
+
+  for (const input of document.querySelectorAll("[data-prop-number]")) {
+    input.addEventListener("input", () => updateSelectedPropNumber(input.dataset.propNumber, Number(input.value)));
+  }
+
+  for (const button of document.querySelectorAll("[data-prop-transform-mode]")) {
+    button.addEventListener("click", () => updatePropTransformMode(button.dataset.propTransformMode));
+  }
+
   for (const input of document.querySelectorAll("[data-correction-step]")) {
     input.addEventListener("click", () => updateCorrectionStep(input.dataset.correctionStep, Number(input.dataset.step)));
   }
@@ -2907,6 +3374,11 @@ function bindUi() {
       if (state.mode !== "expression") {
         clearBlushOverlay();
         clearEmotionImageOverlay();
+      }
+      if (state.mode !== "correction") {
+        clearPropOverlay();
+      } else {
+        updateVisiblePropsForSelectedAnimation();
       }
       applyCameraPresetForMode(state.mode);
       render();
@@ -2986,9 +3458,15 @@ function bindUi() {
     input.addEventListener("input", () => updateSelectedEmotionImageValue(input.dataset.emotionImageNumber, Number(input.value), input));
   }
 
+  document.querySelector("[data-emotion-image-loop]")?.addEventListener("change", (event) => updateSelectedEmotionImageLoop(event.target.checked));
+
   for (const surface of document.querySelectorAll("[data-emotion-graph]")) {
     surface.addEventListener("pointerdown", (event) => handleEmotionGraphPointerDown(event, surface));
     surface.addEventListener("contextmenu", (event) => event.preventDefault());
+  }
+
+  for (const button of document.querySelectorAll("[data-emotion-head-axis]")) {
+    button.addEventListener("click", () => toggleEmotionHeadRotationAxis(button.dataset.emotionHeadAxis));
   }
 
   for (const button of document.querySelectorAll("[data-emotion-curve]")) {
@@ -2997,6 +3475,7 @@ function bindUi() {
 
   document.querySelector("[data-emotion-curve-delete]")?.addEventListener("click", () => deleteSelectedEmotionImageGraphPoint());
   document.querySelector("[data-emotion-graph-preview]")?.addEventListener("click", () => startEmotionImageGraphAnimationForSelected(true));
+  document.querySelector("[data-emotion-image-range-reset]")?.addEventListener("click", resetSelectedEmotionImageRangeSettings);
 
   for (const card of document.querySelectorAll("[data-emotion-select]")) {
     card.addEventListener("click", () => selectEmotionPreset(card.dataset.emotionSelect));
@@ -3179,7 +3658,7 @@ function bindUi() {
     });
   }
 
-  for (const scroller of document.querySelectorAll(".expression-list, .parameter-list, .transfer-panel, .correction-panel, .expression-editor-panel, .emotion-linker-panel, .material-outline-list, .extra-bone-panel, .transition-viewer-panel, .transition-preview-tray")) {
+  for (const scroller of document.querySelectorAll(".expression-list, .parameter-list, .transfer-panel, .correction-panel, .expression-editor-panel, .emotion-linker-panel, .material-outline-list, .props-list, .props-settings-area, .extra-bone-panel, .transition-viewer-panel, .transition-preview-tray")) {
     bindPanelWheel(scroller, scroller);
   }
 
@@ -3200,6 +3679,21 @@ function bindUi() {
           : ".expression-editor-panel",
   );
   if (sidebar && activeScroller) bindPanelWheel(sidebar, activeScroller);
+  bindEditableEventGuards();
+}
+
+function bindEditableEventGuards() {
+  for (const element of document.querySelectorAll("input, textarea, select, [contenteditable='true']")) {
+    element.addEventListener("pointerdown", (event) => event.stopPropagation());
+    element.addEventListener("mousedown", (event) => event.stopPropagation());
+    element.addEventListener("click", (event) => event.stopPropagation());
+    element.addEventListener("dblclick", (event) => event.stopPropagation());
+    element.addEventListener("keydown", (event) => event.stopPropagation());
+    element.addEventListener("dragstart", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+  }
 }
 
 function getSelectedEmotionPreset() {
@@ -3220,6 +3714,17 @@ function getSelectedExpressionRangeSlot() {
   const selected = getSelectedEmotionPreset();
   if (!selected || !state.selectedExpressionRangeId) return null;
   return normalizeExpressionRangeSlots(selected.rangeSlots).find((slot) => slot.id === state.selectedExpressionRangeId) ?? null;
+}
+
+function updateSelectedExpressionRangeSlot(updater) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected || !state.selectedExpressionRangeId) return null;
+  const slots = normalizeExpressionRangeSlots(selected.rangeSlots);
+  const index = slots.findIndex((slot) => slot.id === state.selectedExpressionRangeId);
+  if (index < 0) return null;
+  slots[index] = updater(slots[index], slots) ?? slots[index];
+  selected.rangeSlots = slots.sort((a, b) => a.threshold - b.threshold);
+  return selected.rangeSlots.find((slot) => slot.id === state.selectedExpressionRangeId) ?? null;
 }
 
 function getSelectedExpressionEditLabel() {
@@ -3264,6 +3769,7 @@ function addEmotionPreset() {
     locked: false,
     isDisableBlink: false,
     parameters: {},
+    blush: createDisabledPresetBlush(),
     emotionImage: null,
   });
   for (const preset of state.expressionPresets) {
@@ -3288,12 +3794,14 @@ function duplicateEmotionPreset(id) {
     locked: false,
     isDisableBlink: Boolean(source.isDisableBlink),
     parameters: normalizeExpressionParameterValues(source.parameters),
-    blush: source.blush ? normalizePresetBlush(source.blush) : null,
+    blush: normalizePresetBlush(source.blush),
     emotionImage: source.emotionImage ? normalizePresetEmotionImage(source.emotionImage) : null,
     rangeSlots: normalizeExpressionRangeSlots(source.rangeSlots).map((slot, index) => ({
       id: `range-${Date.now()}-${index}`,
       threshold: slot.threshold,
       parameters: normalizeExpressionParameterValues(slot.parameters),
+      ...(slot.blushOpacity != null ? { blushOpacity: slot.blushOpacity } : {}),
+      ...(slot.emotionImage ? { emotionImage: normalizePresetEmotionImage(slot.emotionImage) } : {}),
     })),
   };
   state.expressionPresets.splice(sourceIndex + 1, 0, copy);
@@ -3304,7 +3812,7 @@ function duplicateEmotionPreset(id) {
 async function addOrChangeEmotionBlush(id, options = {}) {
   const preset = state.expressionPresets.find((item) => item.id === id);
   if (!preset) return;
-  if (preset.blush && !options.pickImage) {
+  if (isPresetBlushEnabled(preset) && !options.pickImage) {
     state.selectedExpressionPresetId = id;
     state.selectedExpressionRangeId = null;
     updateBlushOverlayForSelected();
@@ -3312,7 +3820,7 @@ async function addOrChangeEmotionBlush(id, options = {}) {
     return;
   }
   if (preset.locked) return;
-  if (!preset.blush && !window.confirm("홍조를 추가할까요?")) return;
+  if (!isPresetBlushEnabled(preset) && !window.confirm("홍조를 추가할까요?")) return;
   const shouldPickImage = options.pickImage || !state.correction.blush?.image;
   if (shouldPickImage) {
     const result = await window.vrmFiles.storeImage();
@@ -3322,7 +3830,7 @@ async function addOrChangeEmotionBlush(id, options = {}) {
       image: result.name,
     });
   }
-  preset.blush = normalizePresetBlush(preset.blush);
+  preset.blush = { ...normalizePresetBlush(preset.blush), enabled: true };
   state.selectedExpressionPresetId = id;
   state.selectedExpressionRangeId = null;
   markExpressionMetaDirty();
@@ -3334,11 +3842,9 @@ function removeEmotionBlush(id) {
   const preset = state.expressionPresets.find((item) => item.id === id);
   if (!preset || preset.locked) return;
   if (!window.confirm("홍조를 제거할까요?")) return;
-  preset.blush = null;
+  preset.blush = createDisabledPresetBlush();
   preset.rangeSlots = normalizeExpressionRangeSlots(preset.rangeSlots).map((slot) => {
-    const next = { ...slot };
-    delete next.blushOpacity;
-    return next;
+    return { ...slot, blushOpacity: 0 };
   });
   markExpressionMetaDirty();
   updateBlushOverlayForSelected();
@@ -3347,7 +3853,7 @@ function removeEmotionBlush(id) {
 
 function updateSelectedBlushValue(key, value, source) {
   const selected = getSelectedEmotionPreset();
-  if (!selected || !selected.blush || selected.locked || !Number.isFinite(value)) return;
+  if (!selected || !isPresetBlushEnabled(selected) || selected.locked || !Number.isFinite(value)) return;
   if (key === "opacity") {
     setSelectedBlushOpacity(value);
   } else {
@@ -3373,16 +3879,19 @@ async function addOrChangeEmotionImage(id, options = {}) {
   }
   if (preset.locked) return;
   if (!preset.emotionImage && !window.confirm("이미지를 추가할까요?")) return;
-  const shouldPickImage = options.pickImage || !state.correction.emotionImage?.image;
+  const shouldPickImage = options.pickImage || !preset.emotionImage?.image;
   if (shouldPickImage) {
     const result = await window.vrmFiles.storeImage();
     if (!result) return;
-    state.correction.emotionImage = normalizeEmotionImageSettings({
-      ...(state.correction.emotionImage ?? {}),
+    preset.emotionImage = normalizePresetEmotionImage({
+      ...(preset.emotionImage ?? {}),
       image: result.name,
     });
+    setEmotionImageFileForAllRangeSlots(preset, result.name);
+  } else {
+    preset.emotionImage = normalizePresetEmotionImage(preset.emotionImage);
   }
-  preset.emotionImage = normalizePresetEmotionImage(preset.emotionImage);
+  seedEmotionImageToAllRangeSlots(preset, preset.emotionImage);
   state.selectedExpressionPresetId = id;
   state.selectedExpressionRangeId = null;
   markExpressionMetaDirty();
@@ -3395,6 +3904,11 @@ function removeEmotionImage(id) {
   if (!preset || preset.locked) return;
   if (!window.confirm("이미지를 제거할까요?")) return;
   preset.emotionImage = null;
+  preset.rangeSlots = normalizeExpressionRangeSlots(preset.rangeSlots).map((slot) => {
+    const next = { ...slot };
+    delete next.emotionImage;
+    return next;
+  });
   markExpressionMetaDirty();
   updateEmotionImageOverlayForSelected();
   renderPreservingExpressionScroll();
@@ -3404,13 +3918,20 @@ function updateSelectedEmotionImageValue(key, value, source) {
   const selected = getSelectedEmotionPreset();
   if (!selected || !selected.emotionImage || selected.locked || !Number.isFinite(value)) return;
   if (!["scale", "rotation", "animationDuration"].includes(key)) return;
-  state.correction.emotionImage = normalizeEmotionImageSettings({
-    ...(state.correction.emotionImage ?? {}),
-    [key]: value,
-  });
-  syncEmotionImageControls(key, state.correction.emotionImage?.[key], source);
+  const next = updateSelectedEmotionImageSettings({ [key]: value });
+  syncEmotionImageControls(key, next?.[key], source);
   markExpressionMetaDirty();
   updateEmotionImageOverlayForSelected();
+}
+
+function updateSelectedEmotionImageLoop(loop) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected || !selected.emotionImage || selected.locked) return;
+  const next = updateSelectedEmotionImageSettings({ loop: Boolean(loop) });
+  markExpressionMetaDirty();
+  if (next?.loop && isEmotionImageGraphAnimated(getActiveEmotionImageSettings())) {
+    startEmotionImageGraphAnimationForSelected(true);
+  }
 }
 
 function beginEmotionImagePivotPicking() {
@@ -3447,14 +3968,14 @@ function handleEmotionImagePivotPointerDown(event) {
     setScreenshotMessage("감정 이미지 위를 클릭하세요.");
     return;
   }
-  state.correction.emotionImage = normalizeEmotionImageSettings({
-    ...(state.correction.emotionImage ?? {}),
+  const next = updateSelectedEmotionImageSettings({
     pivotX: hit.uv.x,
     pivotY: hit.uv.y,
   });
+  if (!next) return;
   state.emotionImagePivotPicking = false;
   markExpressionMetaDirty();
-  applyEmotionImageOverlaySettings(state.correction.emotionImage);
+  applyEmotionImageOverlaySettings(next);
   attachEmotionImageTransformControls();
   setScreenshotMessage("감정 이미지 스케일 피벗을 저장했습니다.");
   renderPreservingExpressionScroll();
@@ -3463,13 +3984,27 @@ function handleEmotionImagePivotPointerDown(event) {
 function resetEmotionImageRotation() {
   const selected = getSelectedEmotionPreset();
   if (!selected || !selected.emotionImage || selected.locked) return;
-  state.correction.emotionImage = normalizeEmotionImageSettings({
-    ...(state.correction.emotionImage ?? {}),
-    rotation: 0,
-  });
+  updateSelectedEmotionImageSettings({ rotation: 0 });
   syncEmotionImageControls("rotation", 0);
   markExpressionMetaDirty();
   updateEmotionImageOverlayForSelected();
+}
+
+function resetSelectedEmotionImageRangeSettings() {
+  const selected = getSelectedEmotionPreset();
+  const slot = getSelectedExpressionRangeSlot();
+  if (!selected?.emotionImage || !slot || selected.locked) return;
+  const slots = normalizeExpressionRangeSlots(selected.rangeSlots);
+  const lastSlot = slots.filter((item) => item.emotionImage?.image && item.id !== slot.id).at(-1);
+  const base = lastSlot?.emotionImage ?? normalizePresetEmotionImage(selected.emotionImage);
+  if (!base) return;
+  updateSelectedExpressionRangeSlot((target) => ({
+    ...target,
+    emotionImage: normalizePresetEmotionImage(base),
+  }));
+  markExpressionMetaDirty();
+  updateEmotionImageOverlayForSelected();
+  renderPreservingExpressionScroll();
 }
 
 function syncEmotionImageControls(key, value, source = null) {
@@ -3492,8 +4027,9 @@ function handleEmotionGraphPointerDown(event, surface) {
   const selected = getSelectedEmotionPreset();
   if (!selected?.emotionImage || selected.locked || surface.dataset.disabled === "true") return;
   const graphKey = surface.dataset.emotionGraph;
+  const minValue = Number(surface.dataset.emotionGraphMin ?? 0);
   const maxValue = Number(surface.dataset.emotionGraphMax);
-  if (!["scaleGraph", "opacityGraph"].includes(graphKey) || !Number.isFinite(maxValue)) return;
+  if (!isEmotionImageEditableGraph(graphKey) || !Number.isFinite(minValue) || !Number.isFinite(maxValue)) return;
   event.preventDefault();
   event.stopPropagation();
   const pointButton = event.target.closest?.("[data-emotion-graph-point]");
@@ -3512,16 +4048,20 @@ function handleEmotionGraphPointerDown(event, surface) {
     pointIndex = addEmotionImageGraphPointAtEvent(graphKey, maxValue, event, surface);
   }
   if (pointIndex < 0) return;
-  state.selectedEmotionImageGraph = { graph: graphKey, index: pointIndex };
+  state.selectedEmotionImageGraph =
+    graphKey === "headRotationGraph"
+      ? { graph: graphKey, axis: getSelectedHeadRotationAxis(getActiveEmotionImageSettings()), index: pointIndex }
+      : { graph: graphKey, index: pointIndex };
   renderPreservingExpressionScroll();
   const nextSurface = document.querySelector(`[data-emotion-graph="${graphKey}"]`);
   beginEmotionImageGraphPointDrag(event, nextSurface, graphKey, maxValue, pointIndex);
 }
 
 function addEmotionImageGraphPointAtEvent(graphKey, maxValue, event, surface) {
-  const point = getEmotionGraphPointFromEvent(event, surface, maxValue);
+  const minValue = Number(surface.dataset.emotionGraphMin ?? 0);
+  const point = getEmotionGraphPointFromEvent(event, surface, maxValue, minValue);
   const settings = getActiveEmotionImageSettings();
-  const graph = normalizeEmotionImageGraph(settings?.[graphKey], maxValue);
+  const graph = getEmotionImageGraphForKey(settings, graphKey);
   graph.push({ time: point.time, value: point.value, curve: "linear" });
   graph.sort((a, b) => a.time - b.time);
   const index = graph.findIndex((item) => Math.abs(item.time - point.time) < 0.0001 && Math.abs(item.value - point.value) < 0.0001);
@@ -3546,10 +4086,11 @@ function beginEmotionImageGraphPointDrag(event, surface, graphKey, maxValue, poi
 
 function moveEmotionImageGraphPoint(graphKey, maxValue, event, surface, pointIndex) {
   const settings = getActiveEmotionImageSettings();
-  const graph = normalizeEmotionImageGraph(settings?.[graphKey], maxValue);
+  const minValue = Number(surface.dataset.emotionGraphMin ?? 0);
+  const graph = getEmotionImageGraphForKey(settings, graphKey);
   const current = graph[pointIndex];
   if (!current) return;
-  const point = getEmotionGraphPointFromEvent(event, surface, maxValue);
+  const point = getEmotionGraphPointFromEvent(event, surface, maxValue, minValue);
   const isFirst = pointIndex === 0;
   const isLast = pointIndex === graph.length - 1;
   const minTime = isFirst ? 0 : graph[pointIndex - 1].time + 0.01;
@@ -3557,34 +4098,48 @@ function moveEmotionImageGraphPoint(graphKey, maxValue, event, surface, pointInd
   graph[pointIndex] = {
     ...current,
     time: isFirst ? 0 : isLast ? 1 : clampNumber(point.time, minTime, maxTime, current.time),
-    value: clampNumber(point.value, 0, maxValue, current.value),
+    value: clampNumber(point.value, minValue, maxValue, current.value),
   };
-  state.selectedEmotionImageGraph = { graph: graphKey, index: pointIndex };
+  state.selectedEmotionImageGraph =
+    graphKey === "headRotationGraph"
+      ? { graph: graphKey, axis: getSelectedHeadRotationAxis(getActiveEmotionImageSettings()), index: pointIndex }
+      : { graph: graphKey, index: pointIndex };
   updateEmotionImageGraph(graphKey, graph, { render: false });
   updateEmotionImageGraphDom(graphKey, graph, maxValue);
 }
 
-function getEmotionGraphPointFromEvent(event, surface, maxValue) {
+function getEmotionGraphPointFromEvent(event, surface, maxValue, minValue = 0) {
   const rect = surface.getBoundingClientRect();
   const x = clampNumber((event.clientX - rect.left) / Math.max(rect.width, 1), 0, 1, 0);
   const y = clampNumber((event.clientY - rect.top) / Math.max(rect.height, 1), 0, 1, 0);
   return {
     time: Math.round(x * 10) / 10,
-    value: Math.round((maxValue * (1 - y)) * 10) / 10,
+    value: Math.round((minValue + (maxValue - minValue) * (1 - y)) * 10) / 10,
   };
 }
 
 function updateEmotionImageGraphDom(graphKey, graph, maxValue) {
   const surface = document.querySelector(`[data-emotion-graph="${graphKey}"]`);
   if (!surface) return;
-  const path = surface.querySelector(".emotion-graph-line");
-  if (path) path.setAttribute("d", buildEmotionGraphPath(graph, maxValue));
+  const minValue = Number(surface.dataset.emotionGraphMin ?? 0);
+  const path =
+    graphKey === "headRotationGraph"
+      ? surface.querySelector(`.emotion-graph-axis-${getSelectedHeadRotationAxis(getActiveEmotionImageSettings())}`)
+      : surface.querySelector(".emotion-graph-line");
+  if (path) {
+    path.setAttribute("d", minValue < 0 ? buildEmotionGraphPathRange(graph, minValue, maxValue) : buildEmotionGraphPath(graph, maxValue));
+  }
+  const selectedIndex = state.selectedEmotionImageGraph?.graph === graphKey ? Number(state.selectedEmotionImageGraph.index) : -1;
+  const selectedValue = graph[selectedIndex]?.value;
+  const valueLabel = surface.querySelector(".emotion-graph-selected-value");
+  if (valueLabel) valueLabel.textContent = Number.isFinite(selectedValue) ? Number(selectedValue).toFixed(1) : "";
   for (const button of surface.querySelectorAll("[data-emotion-graph-point]")) {
     const index = Number(String(button.dataset.emotionGraphPoint ?? "").split(":")[1]);
     const point = graph[index];
     if (!point) continue;
     button.style.left = `${(point.time * 100).toFixed(3)}%`;
-    button.style.top = `${((emotionGraphY(point.value, maxValue) / EMOTION_GRAPH_HEIGHT) * 100).toFixed(3)}%`;
+    const y = minValue < 0 ? emotionGraphYRange(point.value, minValue, maxValue) : emotionGraphY(point.value, maxValue);
+    button.style.top = `${((y / EMOTION_GRAPH_HEIGHT) * 100).toFixed(3)}%`;
   }
 }
 
@@ -3595,14 +4150,13 @@ function updateSelectedEmotionImageCurve(curve) {
   if (
     !selected?.emotionImage ||
     selected.locked ||
-    !["scaleGraph", "opacityGraph"].includes(graphKey) ||
+    !isEmotionImageEditableGraph(graphKey) ||
     !["linear", "easeOut", "easeIn", "easeInOut", "step"].includes(curve)
   ) {
     return;
   }
-  const maxValue = graphKey === "scaleGraph" ? 2 : 1;
   const settings = getActiveEmotionImageSettings();
-  const graph = normalizeEmotionImageGraph(settings?.[graphKey], maxValue);
+  const graph = getEmotionImageGraphForKey(settings, graphKey);
   if (!graph[pointIndex]) return;
   graph[pointIndex] = { ...graph[pointIndex], curve };
   updateEmotionImageGraph(graphKey, graph);
@@ -3612,34 +4166,79 @@ function deleteSelectedEmotionImageGraphPoint() {
   const selected = getSelectedEmotionPreset();
   const graphKey = state.selectedEmotionImageGraph?.graph;
   const pointIndex = state.selectedEmotionImageGraph?.index ?? -1;
-  if (!selected?.emotionImage || selected.locked || !["scaleGraph", "opacityGraph"].includes(graphKey)) return;
-  const maxValue = graphKey === "scaleGraph" ? 2 : 1;
-  const settings = getActiveEmotionImageSettings();
-  const graph = normalizeEmotionImageGraph(settings?.[graphKey], maxValue);
+  if (!selected?.emotionImage || selected.locked || !isEmotionImageEditableGraph(graphKey)) return;
+  const graph = getEmotionImageGraphForKey(getActiveEmotionImageSettings(), graphKey);
   if (pointIndex <= 0 || pointIndex >= graph.length - 1) return;
   deleteEmotionImageGraphPoint(graphKey, pointIndex);
 }
 
 function deleteEmotionImageGraphPoint(graphKey, pointIndex) {
   const selected = getSelectedEmotionPreset();
-  if (!selected?.emotionImage || selected.locked || !["scaleGraph", "opacityGraph"].includes(graphKey)) return;
-  const maxValue = graphKey === "scaleGraph" ? 2 : 1;
-  const settings = getActiveEmotionImageSettings();
-  const graph = normalizeEmotionImageGraph(settings?.[graphKey], maxValue);
+  if (!selected?.emotionImage || selected.locked || !isEmotionImageEditableGraph(graphKey)) return;
+  const graph = getEmotionImageGraphForKey(getActiveEmotionImageSettings(), graphKey);
   if (pointIndex <= 0 || pointIndex >= graph.length - 1) return;
   graph.splice(pointIndex, 1);
-  state.selectedEmotionImageGraph = { graph: graphKey, index: Math.max(0, pointIndex - 1) };
+  state.selectedEmotionImageGraph =
+    graphKey === "headRotationGraph"
+      ? { graph: graphKey, axis: getSelectedHeadRotationAxis(getActiveEmotionImageSettings()), index: Math.max(0, pointIndex - 1) }
+      : { graph: graphKey, index: Math.max(0, pointIndex - 1) };
   updateEmotionImageGraph(graphKey, graph);
 }
 
 function updateEmotionImageGraph(graphKey, graph, options = {}) {
-  state.correction.emotionImage = normalizeEmotionImageSettings({
-    ...(state.correction.emotionImage ?? {}),
-    [graphKey]: graph,
-  });
+  const selected = getSelectedEmotionPreset();
+  if (!selected?.emotionImage || selected.locked || !isEmotionImageEditableGraph(graphKey)) return;
+  const settings = getActiveEmotionImageSettings();
+  const patch =
+    graphKey === "headRotationGraph"
+      ? {
+          headRotationGraph: {
+            ...normalizeHeadRotationGraph(settings.headRotationGraph),
+            [getSelectedHeadRotationAxis(settings)]: normalizeEmotionImageGraphRange(
+              graph,
+              EMOTION_HEAD_ROTATION_MIN,
+              EMOTION_HEAD_ROTATION_MAX,
+              0,
+            ),
+          },
+        }
+      : { [graphKey]: graph };
+  updateSelectedEmotionImageSettings(patch);
   markExpressionMetaDirty();
   updateEmotionImageOverlayForSelected();
   if (options.render !== false) renderPreservingExpressionScroll();
+}
+
+function isEmotionImageEditableGraph(graphKey) {
+  return ["scaleGraph", "opacityGraph", "headRotationGraph"].includes(graphKey);
+}
+
+function getEmotionImageGraphForKey(settings, graphKey) {
+  if (graphKey === "scaleGraph") return normalizeEmotionImageGraph(settings?.scaleGraph, 2);
+  if (graphKey === "opacityGraph") return normalizeEmotionImageGraph(settings?.opacityGraph, 1);
+  if (graphKey === "headRotationGraph") {
+    const axis = getSelectedHeadRotationAxis(settings);
+    return normalizeEmotionImageGraphRange(settings?.headRotationGraph?.[axis], EMOTION_HEAD_ROTATION_MIN, EMOTION_HEAD_ROTATION_MAX, 0);
+  }
+  return [];
+}
+
+function toggleEmotionHeadRotationAxis(axis) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected?.emotionImage || selected.locked || !["x", "y", "z"].includes(axis)) return;
+  const settings = getActiveEmotionImageSettings();
+  const axes = normalizeHeadRotationAxes(settings.headRotationAxes);
+  const wasSelected = state.selectedEmotionImageGraph?.graph === "headRotationGraph" && state.selectedEmotionImageGraph?.axis === axis;
+  axes[axis] = wasSelected ? !axes[axis] : true;
+  updateSelectedEmotionImageSettings({
+    ...settings,
+    headRotationAxes: axes,
+    headRotationGraph: normalizeHeadRotationGraph(settings.headRotationGraph),
+  });
+  state.selectedEmotionImageGraph = { graph: "headRotationGraph", axis, index: 0 };
+  markExpressionMetaDirty();
+  startEmotionImageGraphAnimationForSelected(true);
+  renderPreservingExpressionScroll();
 }
 
 function syncBlushControls(key, value, source) {
@@ -3660,6 +4259,7 @@ function addEmotionRangeSlot(presetId) {
     id: `range-${Date.now()}-${slots.length}`,
     threshold,
     parameters: {},
+    ...(preset.emotionImage ? { emotionImage: normalizePresetEmotionImage(getEmotionImageBaseSettings(preset) ?? preset.emotionImage) } : {}),
   };
   preset.rangeSlots = [...slots, slot].sort((a, b) => a.threshold - b.threshold);
   state.selectedExpressionPresetId = preset.id;
@@ -3976,22 +4576,65 @@ function removeMissingParameterFromConfig(parameterId) {
 function renderPreservingParameterFilterScroll() {
   const popup = document.querySelector(".parameter-filter-popup");
   const scrollTop = popup?.scrollTop ?? 0;
+  const editableFocus = captureEditableFocus();
   render();
   const nextPopup = document.querySelector(".parameter-filter-popup");
   if (nextPopup) nextPopup.scrollTop = scrollTop;
+  restoreEditableFocus(editableFocus);
 }
 
 function cssEscape(value) {
   return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
+function isEditableElement(element) {
+  if (!element?.matches) return false;
+  return element.matches("input, textarea, select, [contenteditable='true']");
+}
+
+function getStableElementSelector(element) {
+  if (!element?.attributes) return null;
+  if (element.id) return `[id="${cssEscape(element.id)}"]`;
+  for (const attribute of element.attributes) {
+    if (attribute.name.startsWith("data-") && attribute.value) {
+      return `[${attribute.name}="${cssEscape(attribute.value)}"]`;
+    }
+  }
+  return null;
+}
+
+function captureEditableFocus() {
+  const active = document.activeElement;
+  if (!isEditableElement(active)) return null;
+  const selector = getStableElementSelector(active);
+  if (!selector) return null;
+  return {
+    selector,
+    start: active.selectionStart ?? active.value.length,
+    end: active.selectionEnd ?? active.value.length,
+  };
+}
+
+function restoreEditableFocus(focusState) {
+  if (!focusState?.selector) return;
+  const input = document.querySelector(focusState.selector);
+  if (!isEditableElement(input)) return;
+  input.focus({ preventScroll: true });
+  if (typeof input.setSelectionRange !== "function") return;
+  const end = Math.min(focusState.end, input.value.length);
+  const start = Math.min(focusState.start, end);
+  input.setSelectionRange(start, end);
+}
+
 function renderPreservingExpressionScroll(options = {}) {
   const scroller = document.querySelector(".expression-editor-panel");
   const scrollTop = scroller?.scrollTop ?? 0;
+  const editableFocus = captureEditableFocus();
   render();
   const nextScroller = document.querySelector(".expression-editor-panel");
   if (!nextScroller) return;
   nextScroller.scrollTop = options.scrollToBottom ? nextScroller.scrollHeight : scrollTop;
+  restoreEditableFocus(editableFocus);
 }
 
 function renderPreservingExpressionEditorScrolls() {
@@ -3999,19 +4642,23 @@ function renderPreservingExpressionEditorScrolls() {
   const parameterScroller = document.querySelector(".expression-parameter-tray");
   const expressionScrollTop = expressionScroller?.scrollTop ?? 0;
   const parameterScrollTop = parameterScroller?.scrollTop ?? 0;
+  const editableFocus = captureEditableFocus();
   render();
   const nextExpressionScroller = document.querySelector(".expression-editor-panel");
   const nextParameterScroller = document.querySelector(".expression-parameter-tray");
   if (nextExpressionScroller) nextExpressionScroller.scrollTop = expressionScrollTop;
   if (nextParameterScroller) nextParameterScroller.scrollTop = parameterScrollTop;
+  restoreEditableFocus(editableFocus);
 }
 
 function renderPreservingEmotionLinkerScroll() {
   const scroller = document.querySelector(".emotion-linker-panel");
   const scrollTop = scroller?.scrollTop ?? 0;
+  const editableFocus = captureEditableFocus();
   render();
   const nextScroller = document.querySelector(".emotion-linker-panel");
   if (nextScroller) nextScroller.scrollTop = scrollTop;
+  restoreEditableFocus(editableFocus);
 }
 
 function renderPreservingScrollableUi() {
@@ -4024,6 +4671,8 @@ function renderPreservingScrollableUi() {
     ".expression-parameter-tray",
     ".emotion-linker-panel",
     ".material-outline-list",
+    ".props-list",
+    ".props-settings-area",
     ".extra-bone-panel",
     ".transition-viewer-panel",
     ".transition-preview-tray",
@@ -4033,6 +4682,7 @@ function renderPreservingScrollableUi() {
     const element = document.querySelector(selector);
     return { selector, scrollTop: element?.scrollTop ?? 0, scrollLeft: element?.scrollLeft ?? 0 };
   });
+  const editableFocus = captureEditableFocus();
   render();
   for (const position of positions) {
     const element = document.querySelector(position.selector);
@@ -4040,6 +4690,7 @@ function renderPreservingScrollableUi() {
     element.scrollTop = position.scrollTop;
     element.scrollLeft = position.scrollLeft;
   }
+  restoreEditableFocus(editableFocus);
 }
 
 function syncEmotionValueControls(id, value, source) {
@@ -4070,7 +4721,7 @@ function applySelectedEmotionPreset() {
 
 function updateBlushOverlayForSelected() {
   const selected = getSelectedEmotionPreset();
-  const blush = selected?.blush ? getActiveBlushSettings() : null;
+  const blush = isPresetBlushEnabled(selected) ? getActiveBlushSettings() : null;
   if (!currentVrm || !blush?.image) {
     clearBlushOverlay();
     return;
@@ -4093,7 +4744,7 @@ async function ensureBlushOverlay(blush) {
     clearBlushOverlay();
     return;
   }
-  if (!result || getActiveBlushSettings()?.image !== blush.image || !getSelectedEmotionPreset()?.blush) return;
+  if (!result || getActiveBlushSettings()?.image !== blush.image || !isPresetBlushEnabled(getSelectedEmotionPreset())) return;
   const url = URL.createObjectURL(new Blob([new Uint8Array(result.data)], { type: getImageMimeType(result.name) }));
   let texture;
   try {
@@ -4201,18 +4852,18 @@ function updateEmotionImagePositionFromGizmo() {
   const selected = getSelectedEmotionPreset();
   if (!selected?.emotionImage || selected.locked || !emotionImageOverlay?.group) return;
   const position = emotionImageOverlay.group.position;
-  state.correction.emotionImage = normalizeEmotionImageSettings({
-    ...(state.correction.emotionImage ?? {}),
+  const next = updateSelectedEmotionImageSettings({
     x: position.x,
     y: position.y,
     z: position.z,
   });
+  if (!next) return;
   emotionImageOverlay.group.position.set(
-    state.correction.emotionImage.x,
-    state.correction.emotionImage.y,
-    state.correction.emotionImage.z,
+    next.x,
+    next.y,
+    next.z,
   );
-  syncEmotionImagePositionControls(state.correction.emotionImage);
+  syncEmotionImagePositionControls(next);
   markExpressionMetaDirty();
 }
 
@@ -4314,9 +4965,16 @@ function startEmotionImageGraphAnimationForSelected(force = false) {
 
 function updateEmotionImageAnimation(delta) {
   if (!state.emotionImageAnimation) return;
+  const settings = getActiveEmotionImageSettings();
+  const duration = Math.max(normalizeEmotionImageDuration(settings?.animationDuration), 0.001);
   state.emotionImageAnimation.elapsed += delta;
-  if (state.emotionImageAnimation.elapsed >= state.emotionImageAnimation.duration) {
-    state.emotionImageAnimation.elapsed = state.emotionImageAnimation.duration;
+  if (settings?.loop && state.emotionImageAnimation.elapsed >= duration) {
+    state.emotionImageAnimation.elapsed %= duration;
+    state.emotionImageAnimation.done = false;
+    return;
+  }
+  if (state.emotionImageAnimation.elapsed >= duration) {
+    state.emotionImageAnimation.elapsed = duration;
     state.emotionImageAnimation.done = true;
   }
 }
@@ -4336,8 +4994,43 @@ function applyEmotionImageAnimatedValues(settings = getActiveEmotionImageSetting
   emotionImageOverlay.material.opacity = clampNumber(settings.opacity * opacityMultiplier, 0, 1, 1);
 }
 
-function evaluateEmotionImageGraph(graph, time, maxValue = 1) {
-  const points = normalizeEmotionImageGraph(graph, maxValue);
+function restoreEmotionImageHeadRotationOffset() {
+  if (!emotionImageHeadRotationOffset) return;
+  const head = getRawBoneNode("head");
+  if (head) {
+    head.quaternion.multiply(emotionImageHeadRotationOffset.clone().invert());
+  }
+  emotionImageHeadRotationOffset = null;
+}
+
+function applyEmotionImageHeadRotation(settings = getActiveEmotionImageSettings()) {
+  if (!settings || !state.emotionImageAnimation) return;
+  const axes = normalizeHeadRotationAxes(settings.headRotationAxes);
+  if (!axes.x && !axes.y && !axes.z) return;
+  const head = getRawBoneNode("head");
+  if (!head) return;
+  const progress = getEmotionImageAnimationProgress(settings);
+  const x = axes.x ? evaluateEmotionImageGraph(settings.headRotationGraph?.x, progress, EMOTION_HEAD_ROTATION_MAX, EMOTION_HEAD_ROTATION_MIN) : 0;
+  const y = axes.y ? evaluateEmotionImageGraph(settings.headRotationGraph?.y, progress, EMOTION_HEAD_ROTATION_MAX, EMOTION_HEAD_ROTATION_MIN) : 0;
+  const z = axes.z ? evaluateEmotionImageGraph(settings.headRotationGraph?.z, progress, EMOTION_HEAD_ROTATION_MAX, EMOTION_HEAD_ROTATION_MIN) : 0;
+  if (Math.abs(x) < 0.0001 && Math.abs(y) < 0.0001 && Math.abs(z) < 0.0001) return;
+  const offset = new THREE.Quaternion().setFromEuler(
+    new THREE.Euler(
+      THREE.MathUtils.degToRad(x),
+      THREE.MathUtils.degToRad(y),
+      THREE.MathUtils.degToRad(z),
+      "XYZ",
+    ),
+  );
+  head.quaternion.multiply(offset);
+  emotionImageHeadRotationOffset = offset;
+}
+
+function evaluateEmotionImageGraph(graph, time, maxValue = 1, minValue = 0) {
+  const points =
+    minValue < 0
+      ? normalizeEmotionImageGraphRange(graph, minValue, maxValue, 0)
+      : normalizeEmotionImageGraph(graph, maxValue);
   const t = clampNumber(Number(time), 0, 1, 1);
   if (t <= points[0].time) return points[0].value;
   for (let index = 0; index < points.length - 1; index += 1) {
@@ -4362,6 +5055,7 @@ function evaluateEmotionImageCurve(curve, value) {
 }
 
 function clearEmotionImageOverlay() {
+  restoreEmotionImageHeadRotationOffset();
   state.emotionImageAnimation = null;
   state.emotionImagePivotPicking = false;
   if (!emotionImageOverlay) return;
@@ -4376,6 +5070,7 @@ function clearEmotionImageOverlay() {
 
 function getImageMimeType(fileName) {
   const lower = String(fileName ?? "").toLowerCase();
+  if (lower.endsWith(".svg")) return "image/svg+xml";
   if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
   if (lower.endsWith(".webp")) return "image/webp";
   return "image/png";
@@ -4535,6 +5230,7 @@ async function importMetaSettings() {
     if (state.mode === "expression") state.expressionDirty = true;
     loadSelectedExpressionParameterDraft();
     applySelectedEmotionPreset();
+    applyMaterialOutlineSettings();
     applyMotionCorrectionPreview();
     syncSaveMetaButton();
   }
@@ -4617,7 +5313,6 @@ function importExpressionMeta(source) {
     return { summary: "가져올 표정 프리셋이 없습니다.", messages, applied: false };
   }
   if (source.blush?.image) state.correction.blush = normalizeBlushSettings(source.blush);
-  if (source.emotionImage?.image) state.correction.emotionImage = normalizeEmotionImageSettings(source.emotionImage);
   state.expressionPresets = imported.map((preset) => {
     const next = cloneJson(preset);
     next.value = 0;
@@ -4680,8 +5375,10 @@ async function openFile() {
     state.redoStack = [];
     await loadVrm(bytes);
     await loadOrCreateVrmMeta(result.filePath, result.name);
+    state.selectedPropId = normalizePropSettings(state.correction.props)[0]?.id ?? null;
     applySelectedEmotionPreset();
     await loadSelectedAnimation();
+    updateVisiblePropsForSelectedAnimation();
     render();
   } catch (error) {
     alert(`VRM을 열지 못했습니다.\n${error.message || String(error)}`);
@@ -5279,17 +5976,22 @@ async function loadSelectedAnimation(options = {}) {
   const entry = getSelectedAnimationEntry();
   if (!entry) {
     resetAnimationState(getAnimationNames().length ? "애니메이션을 선택하세요." : "New Ani로 애니메이션을 등록하세요.");
+    updateVisiblePropsForSelectedAnimation();
     return;
   }
   if (!currentVrm) {
     resetAnimationState("VRM을 열면 애니메이션 미리보기가 가능합니다.");
+    updateVisiblePropsForSelectedAnimation();
     return;
   }
   try {
     const result = await window.vrmFiles.openStoredAnimation(entry.fileName);
-    return await loadAnimationResult(result, options);
+    const transition = await loadAnimationResult(result, options);
+    updateVisiblePropsForSelectedAnimation();
+    return transition;
   } catch (error) {
     resetAnimationState(`${entry.fileName} 파일을 animations 폴더에서 찾지 못했습니다.`);
+    updateVisiblePropsForSelectedAnimation();
   }
 }
 
@@ -5449,6 +6151,606 @@ function getAnimationPreviewDecaySeconds(animationName) {
 function updateAnimationDecaySeconds(animationName, value) {
   if (!animationName) return;
   state.decayPreviewSeconds[animationName] = normalizeDecaySeconds(value);
+}
+
+async function addPropGlb() {
+  if (!currentVrm) return;
+  const result = await window.vrmFiles.storeProp?.();
+  if (!result?.name) return;
+  state.correction.props = normalizePropSettings(state.correction.props);
+  const id = `prop-${Date.now()}-${state.correction.props.length}`;
+  const prop = createPropSetting({
+    id,
+    name: getPropDisplayName({ file: result.name }),
+    file: result.name,
+    attachBone: state.selectedBone || "rightHand",
+  });
+  state.correction.props.push(prop);
+  state.selectedPropId = id;
+  state.correctionRightTab = "props";
+  state.correctionDirty = true;
+  updateVisiblePropsForSelectedAnimation();
+  renderPreservingScrollableUi();
+}
+
+function removeSelectedProp() {
+  const prop = getSelectedPropSetting();
+  if (!prop) return;
+  if (!window.confirm("이 GLB prop을 제거할까요?")) return;
+  state.correction.props = normalizePropSettings(state.correction.props).filter((item) => item.id !== prop.id);
+  for (const animation of Object.values(state.correction.animations ?? {})) {
+    if (!Array.isArray(animation.props)) continue;
+    animation.props = animation.props.filter((id) => String(id) !== prop.id);
+    if (!animation.props.length) delete animation.props;
+  }
+  state.selectedPropId = state.correction.props[0]?.id ?? null;
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+  clearPropOverlay();
+  void loadSelectedPropOverlay();
+  renderPreservingScrollableUi();
+}
+
+function selectProp(propId) {
+  if (!normalizePropSettings(state.correction.props).some((prop) => prop.id === propId)) return;
+  state.selectedPropId = propId;
+  void loadSelectedPropOverlay();
+  renderPreservingScrollableUi();
+}
+
+async function reloadPropGlb(propId) {
+  const prop = normalizePropSettings(state.correction.props).find((item) => item.id === propId);
+  if (!prop) return;
+  state.selectedPropId = prop.id;
+  clearPropOverlay();
+  await loadSelectedPropOverlay();
+  renderPreservingScrollableUi();
+}
+
+function updatePropName(propId, name) {
+  state.correction.props = normalizePropSettings(state.correction.props).map((prop) =>
+    prop.id === propId ? createPropSetting({ ...prop, name }) : prop,
+  );
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+}
+
+function updateSelectedProp(patch) {
+  const prop = getSelectedPropSetting();
+  if (!prop) return;
+  state.correction.props = normalizePropSettings(state.correction.props).map((item) =>
+    item.id === prop.id ? createPropSetting({ ...item, ...patch }) : item,
+  );
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+  void loadSelectedPropOverlay();
+  renderPreservingScrollableUi();
+}
+
+function updateSelectedPropVector(key, axis, value) {
+  const prop = getSelectedPropSetting();
+  if (!prop || !["positionOffset", "rotationOffset"].includes(key) || !Number.isFinite(axis) || !Number.isFinite(value)) return;
+  const next = [...prop[key]];
+  next[axis] = value;
+  updateSelectedProp({ [key]: next });
+}
+
+function updateSelectedPropNumber(key, value) {
+  if (key !== "scale" || !Number.isFinite(value)) return;
+  updateSelectedProp({ scale: value });
+}
+
+function getSelectedPropSetting() {
+  const props = normalizePropSettings(state.correction.props);
+  if (!props.length) return null;
+  return props.find((prop) => prop.id === state.selectedPropId) ?? props[0] ?? null;
+}
+
+function getPropDisplayName(prop) {
+  return fileNameFromPath(prop?.file ?? "").replace(/\.[^.]+$/, "") || "prop";
+}
+
+function getAnimationPropIds(animationName = state.selectedAnimationName) {
+  const entry = animationName ? getAnimationMetaEntry(animationName) : null;
+  return Array.isArray(entry?.props) ? entry.props.map(String) : [];
+}
+
+function isPropEnabledForSelectedAnimation(propId) {
+  return getAnimationPropIds().includes(String(propId ?? ""));
+}
+
+function togglePropForSelectedAnimation(propId, enabled) {
+  const entry = state.selectedAnimationName ? ensureAnimationMetaEntry(state.selectedAnimationName) : null;
+  if (!entry || !propId) return;
+  const ids = new Set(Array.isArray(entry.props) ? entry.props.map(String) : []);
+  if (enabled) ids.add(String(propId));
+  else ids.delete(String(propId));
+  entry.props = [...ids].filter((id) => normalizePropSettings(state.correction.props).some((prop) => prop.id === id));
+  if (!entry.props.length) delete entry.props;
+  state.selectedPropId = String(propId);
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+  updateVisiblePropsForSelectedAnimation();
+  renderPreservingScrollableUi();
+}
+
+function updateVisiblePropsForSelectedAnimation() {
+  const prop = getSelectedPropSetting();
+  if (prop && isPropEnabledForSelectedAnimation(prop.id)) {
+    void loadSelectedPropOverlay();
+  } else {
+    clearPropOverlay();
+  }
+}
+
+async function loadSelectedPropOverlay() {
+  const prop = getSelectedPropSetting();
+  if (!currentVrm || !prop?.file || !isPropEnabledForSelectedAnimation(prop.id)) {
+    clearPropOverlay();
+    return;
+  }
+  if (propOverlay?.id === prop.id && propOverlay?.file === prop.file) {
+    applyPropOverlaySettings(prop);
+    return;
+  }
+  clearPropOverlay();
+  let result;
+  try {
+    result = await window.vrmFiles.openStoredProp(prop.file);
+  } catch {
+    setScreenshotMessage(`${prop.file} prop 파일을 props 폴더에서 찾지 못했습니다.`);
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([new Uint8Array(result.data)], { type: "model/gltf-binary" }));
+  const loader = new GLTFLoader();
+  let gltf;
+  try {
+    gltf = await loader.loadAsync(url);
+  } catch {
+    URL.revokeObjectURL(url);
+    setScreenshotMessage(`${prop.file} GLB를 읽지 못했습니다.`);
+    return;
+  }
+  const group = new THREE.Group();
+  group.name = `ExpressionEditor_Prop_${prop.id}`;
+  group.add(gltf.scene);
+  propOverlay = { id: prop.id, file: prop.file, group, scene: gltf.scene, url };
+  applyPropOverlaySettings(prop);
+}
+
+function applyPropOverlaySettings(setting = getSelectedPropSetting()) {
+  if (!propOverlay?.group || !setting) return;
+  const prop = createPropSetting(setting);
+  const parent = getRawBoneNode(prop.attachBone);
+  if (!parent) {
+    propOverlay.group.visible = false;
+    detachPropTransformControls();
+    return;
+  }
+  if (prop.followRotation && propOverlay.group.parent !== parent) {
+    propOverlay.group.parent?.remove(propOverlay.group);
+    parent.add(propOverlay.group);
+  } else if (!prop.followRotation && propOverlay.group.parent !== scene) {
+    propOverlay.group.parent?.remove(propOverlay.group);
+    scene.add(propOverlay.group);
+  }
+  propOverlay.group.visible = true;
+  applyPropOverlayTransform(prop, parent);
+  attachPropTransformControls();
+}
+
+function applyPropOverlayTransform(prop = getSelectedPropSetting(), parent = null) {
+  if (!propOverlay?.group || !prop) return;
+  const setting = createPropSetting(prop);
+  const targetParent = parent ?? getRawBoneNode(setting.attachBone);
+  if (!targetParent) return;
+  if (setting.followRotation) {
+    propOverlay.group.position.set(...setting.positionOffset);
+    propOverlay.group.rotation.set(
+      THREE.MathUtils.degToRad(setting.rotationOffset[0]),
+      THREE.MathUtils.degToRad(setting.rotationOffset[1]),
+      THREE.MathUtils.degToRad(setting.rotationOffset[2]),
+      "XYZ",
+    );
+  } else {
+    targetParent.updateMatrixWorld(true);
+    targetParent.getWorldPosition(propWorldPosition);
+    propOverlay.group.position.set(
+      propWorldPosition.x + setting.positionOffset[0],
+      propWorldPosition.y + setting.positionOffset[1],
+      propWorldPosition.z + setting.positionOffset[2],
+    );
+    propOverlay.group.rotation.set(
+      THREE.MathUtils.degToRad(setting.rotationOffset[0]),
+      THREE.MathUtils.degToRad(setting.rotationOffset[1]),
+      THREE.MathUtils.degToRad(setting.rotationOffset[2]),
+      "XYZ",
+    );
+  }
+  propOverlay.group.scale.setScalar(setting.scale);
+  propOverlay.group.updateMatrixWorld(true);
+}
+
+function updatePropOverlayRuntime() {
+  const prop = getSelectedPropSetting();
+  if (!propOverlay?.group || !prop || prop.followRotation || propTransformDragging) return;
+  applyPropOverlayTransform(prop);
+}
+
+function ensurePropTransformControls() {
+  if (propTransformControls) return propTransformControls;
+  propTransformControls = new TransformControls(camera, renderer.domElement);
+  propTransformControls.setMode("translate");
+  propTransformControls.setSize(0.75);
+  const helper = propTransformControls.getHelper();
+  helper.name = "ExpressionEditor_PropTransformControls";
+  scene.add(helper);
+  propTransformControls.addEventListener("dragging-changed", (event) => {
+    propTransformDragging = Boolean(event.value);
+    controls.enabled = !event.value;
+  });
+  propTransformControls.addEventListener("objectChange", () => updatePropTransformFromGizmo());
+  return propTransformControls;
+}
+
+function attachPropTransformControls() {
+  if (state.mode !== "correction" || !propOverlay?.group || !getSelectedPropSetting()) {
+    detachPropTransformControls();
+    return;
+  }
+  const transform = ensurePropTransformControls();
+  transform.setMode(state.propTransformMode === "rotate" ? "rotate" : "translate");
+  transform.setSpace?.(getSelectedPropSetting()?.followRotation ? "local" : "world");
+  if (transform.object !== propOverlay.group) transform.attach(propOverlay.group);
+}
+
+function detachPropTransformControls() {
+  if (!propTransformControls) return;
+  propTransformDragging = false;
+  propTransformControls.detach();
+  controls.enabled = true;
+}
+
+function updatePropTransformMode(mode) {
+  state.propTransformMode = mode === "rotate" ? "rotate" : "translate";
+  attachPropTransformControls();
+  renderPreservingScrollableUi();
+}
+
+function updatePropTransformFromGizmo() {
+  const prop = getSelectedPropSetting();
+  if (!prop || !propOverlay?.group) return;
+  const position = propOverlay.group.position;
+  const rotation = propOverlay.group.rotation;
+  const parent = getRawBoneNode(prop.attachBone);
+  let positionOffset = [position.x, position.y, position.z];
+  if (!prop.followRotation && parent) {
+    parent.updateMatrixWorld(true);
+    parent.getWorldPosition(propWorldPosition);
+    positionOffset = [
+      position.x - propWorldPosition.x,
+      position.y - propWorldPosition.y,
+      position.z - propWorldPosition.z,
+    ];
+  }
+  state.correction.props = normalizePropSettings(state.correction.props).map((item) =>
+    item.id === prop.id
+      ? createPropSetting({
+          ...item,
+          positionOffset,
+          rotationOffset: [
+            THREE.MathUtils.radToDeg(rotation.x),
+            THREE.MathUtils.radToDeg(rotation.y),
+            THREE.MathUtils.radToDeg(rotation.z),
+          ],
+        })
+      : item,
+  );
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+  syncPropPositionControls(positionOffset);
+  syncPropRotationControls(rotation);
+}
+
+function syncPropPositionControls(position) {
+  const values = Array.isArray(position) ? position : [position.x, position.y, position.z];
+  for (const [axis, value] of values.entries()) {
+    const input = document.querySelector(`[data-prop-vector="positionOffset"][data-axis="${axis}"]`);
+    if (input) input.value = roundForInput(value);
+  }
+}
+
+function syncPropRotationControls(rotation) {
+  const values = [
+    THREE.MathUtils.radToDeg(rotation.x),
+    THREE.MathUtils.radToDeg(rotation.y),
+    THREE.MathUtils.radToDeg(rotation.z),
+  ];
+  for (const [axis, value] of values.entries()) {
+    const input = document.querySelector(`[data-prop-vector="rotationOffset"][data-axis="${axis}"]`);
+    if (input) input.value = roundForInput(value);
+  }
+}
+
+function clearPropOverlay() {
+  detachPropTransformControls();
+  if (!propOverlay) return;
+  propOverlay.group?.parent?.remove(propOverlay.group);
+  propOverlay.group?.traverse?.((object) => {
+    object.geometry?.dispose?.();
+    const materials = Array.isArray(object.material) ? object.material : object.material ? [object.material] : [];
+    for (const material of materials) {
+      for (const value of Object.values(material)) {
+        if (value?.isTexture) value.dispose();
+      }
+      material.dispose?.();
+    }
+  });
+  if (propOverlay.url) URL.revokeObjectURL(propOverlay.url);
+  propOverlay = null;
+}
+
+function addMotionSlot() {
+  state.correction.motionSlots = normalizeMotionSlots(state.correction.motionSlots);
+  const id = `motion-slot-${Date.now()}-${state.correction.motionSlots.length}`;
+  state.correction.motionSlots.push({
+    id,
+    title: "input title",
+    animationFile: "",
+    expressionPresetId: "",
+    expressionPresetName: "",
+    loop: false,
+    transitionSeconds: 0.2,
+    expressionTimeline: [],
+  });
+  state.selectedMotionSlotId = id;
+  markCorrectionDirtyAndRenderLinker2();
+}
+
+function updateMotionSlot(slotId, patch) {
+  state.correction.motionSlots = normalizeMotionSlots(state.correction.motionSlots).map((slot) =>
+    slot.id === slotId ? normalizeMotionSlot({ ...slot, ...patch }) : slot,
+  );
+  state.selectedMotionSlotId = slotId;
+  markCorrectionDirtyAndRenderLinker2();
+}
+
+function beginMotionSlotTitleEdit(slotId, title) {
+  state.selectedMotionSlotId = slotId;
+  state.editingMotionSlotTitleId = slotId;
+  state.editingMotionSlotTitleValue = title;
+}
+
+function updateMotionSlotTitle(slotId, title) {
+  state.editingMotionSlotTitleId = slotId;
+  state.editingMotionSlotTitleValue = title;
+  state.correction.motionSlots = normalizeMotionSlots(state.correction.motionSlots).map((slot) =>
+    slot.id === slotId ? normalizeMotionSlot({ ...slot, title }) : slot,
+  );
+  state.selectedMotionSlotId = slotId;
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+}
+
+function finishMotionSlotTitleEdit(slotId, title) {
+  updateMotionSlotTitle(slotId, title);
+  if (state.editingMotionSlotTitleId === slotId) {
+    state.editingMotionSlotTitleId = null;
+    state.editingMotionSlotTitleValue = "";
+  }
+  renderPreservingEmotionLinkerScroll();
+}
+
+function updateMotionSlotExpression(slotId, presetId) {
+  const preset = state.expressionPresets.find((item) => item.id === presetId);
+  updateMotionSlot(slotId, {
+    expressionPresetId: preset?.id ?? "",
+    expressionPresetName: preset?.name ?? "",
+  });
+}
+
+function nudgeMotionSlotTransition(slotId, direction) {
+  const slot = getMotionSlot(slotId);
+  if (!slot) return;
+  updateMotionSlot(slotId, {
+    transitionSeconds: clampTimelineTransitionSeconds(slot.transitionSeconds + Math.sign(direction) * 0.1),
+  });
+}
+
+function deleteMotionSlot(slotId) {
+  if (!window.confirm("이 모션 슬롯을 삭제할까요?")) return;
+  state.correction.motionSlots = normalizeMotionSlots(state.correction.motionSlots).filter((slot) => slot.id !== slotId);
+  if (state.selectedMotionSlotId === slotId) state.selectedMotionSlotId = state.correction.motionSlots[0]?.id ?? null;
+  markCorrectionDirtyAndRenderLinker2();
+}
+
+function moveMotionSlot(slotId, direction) {
+  const slots = normalizeMotionSlots(state.correction.motionSlots);
+  const fromIndex = slots.findIndex((slot) => slot.id === slotId);
+  const toIndex = fromIndex + Math.sign(direction);
+  if (fromIndex < 0 || toIndex < 0 || toIndex >= slots.length) return;
+  const [slot] = slots.splice(fromIndex, 1);
+  slots.splice(toIndex, 0, slot);
+  state.correction.motionSlots = slots;
+  state.selectedMotionSlotId = slotId;
+  markCorrectionDirtyAndRenderLinker2();
+}
+
+function getMotionSlot(slotId) {
+  return normalizeMotionSlots(state.correction.motionSlots).find((slot) => slot.id === slotId) ?? null;
+}
+
+function setMotionSlotTimeline(slotId, timeline) {
+  state.correction.motionSlots = normalizeMotionSlots(state.correction.motionSlots).map((slot) =>
+    slot.id === slotId ? normalizeMotionSlot({ ...slot, expressionTimeline: normalizeExpressionTimeline(timeline) }) : slot,
+  );
+  state.selectedMotionSlotId = slotId;
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+}
+
+function addMotionSlotTimelineSlot(slotId) {
+  const slot = getMotionSlot(slotId);
+  if (!slot?.animationFile) return;
+  const timeline = normalizeExpressionTimeline(slot.expressionTimeline);
+  const duration = getAnimationDuration(slot.animationFile, 2);
+  const time = findNewTimelineTime(timeline, duration);
+  const preset = state.expressionPresets.find((item) => item.id === slot.expressionPresetId);
+  timeline.push({
+    id: `motion-point-${Date.now()}-${timeline.length}`,
+    time,
+    expressionPresetId: preset?.id ?? "",
+    expressionPresetName: preset?.name ?? "",
+    expressionValue: 1,
+    transitionSeconds: 0.2,
+  });
+  setMotionSlotTimeline(slotId, timeline);
+  renderPreservingEmotionLinkerScroll();
+}
+
+function deleteMotionSlotTimelineSlot(slotId, pointId) {
+  const slot = getMotionSlot(slotId);
+  if (!slot) return;
+  setMotionSlotTimeline(
+    slotId,
+    normalizeExpressionTimeline(slot.expressionTimeline).filter((point) => point.id !== pointId),
+  );
+  renderPreservingEmotionLinkerScroll();
+}
+
+function updateMotionSlotTimelineExpression(slotId, pointId, presetId) {
+  const preset = state.expressionPresets.find((item) => item.id === presetId);
+  const slot = getMotionSlot(slotId);
+  if (!slot) return;
+  const timeline = normalizeExpressionTimeline(slot.expressionTimeline).map((point) =>
+    point.id === pointId
+      ? {
+          ...point,
+          expressionPresetId: preset?.id ?? "",
+          expressionPresetName: preset?.name ?? "",
+          expressionRangeId: "",
+          expressionRangeName: "",
+        }
+      : point,
+  );
+  setMotionSlotTimeline(slotId, timeline);
+  renderPreservingEmotionLinkerScroll();
+}
+
+function updateMotionSlotTimelineRange(slotId, pointId, rangeId) {
+  const slot = getMotionSlot(slotId);
+  if (!slot) return;
+  const timeline = normalizeExpressionTimeline(slot.expressionTimeline).map((point) => {
+    if (point.id !== pointId) return point;
+    const preset = findMatchingExpressionPreset(point.expressionPresetId, point.expressionPresetName);
+    const range = normalizeExpressionRangeSlots(preset?.rangeSlots).find((item) => item.id === rangeId);
+    return {
+      ...point,
+      expressionRangeId: range?.id ?? "",
+      expressionRangeName: range ? `range ${range.threshold}` : "",
+      expressionValue: range ? clampEmotionValue(range.threshold) : point.expressionValue,
+    };
+  });
+  setMotionSlotTimeline(slotId, timeline);
+  renderPreservingEmotionLinkerScroll();
+}
+
+function nudgeMotionSlotTimelineTransition(slotId, pointId, direction) {
+  const slot = getMotionSlot(slotId);
+  if (!slot) return;
+  const timeline = normalizeExpressionTimeline(slot.expressionTimeline).map((point) =>
+    point.id === pointId
+      ? { ...point, transitionSeconds: clampTimelineTransitionSeconds(point.transitionSeconds + direction * 0.1) }
+      : point,
+  );
+  setMotionSlotTimeline(slotId, timeline);
+  renderPreservingEmotionLinkerScroll();
+}
+
+function beginMotionSlotTimelineDrag(event, slotId, pointId) {
+  event.preventDefault();
+  const slot = getMotionSlot(slotId);
+  if (!slot?.animationFile) return;
+  const duration = getAnimationDuration(slot.animationFile, 2);
+  const startX = event.clientX;
+  const timeline = normalizeExpressionTimeline(slot.expressionTimeline);
+  const point = timeline.find((item) => item.id === pointId);
+  if (!point) return;
+  const startTime = point.time;
+  const onMove = (moveEvent) => {
+    const delta = ((moveEvent.clientX - startX) / 180) * duration;
+    const time = Math.min(duration, Math.max(0, Math.round((startTime + delta) * 10) / 10));
+    const nextTimeline = normalizeExpressionTimeline(getMotionSlot(slotId)?.expressionTimeline).map((item) =>
+      item.id === pointId ? { ...item, time } : item,
+    );
+    setMotionSlotTimeline(slotId, nextTimeline);
+    const value = document.querySelector(`[data-motion-slot-timeline-drag="${cssEscape(slotId)}"][data-slot-id="${cssEscape(pointId)}"]`);
+    if (value) value.textContent = time.toFixed(1);
+  };
+  const onUp = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    renderPreservingEmotionLinkerScroll();
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp, { once: true });
+}
+
+function jumpMotionSlotTimeline(slotId, pointId) {
+  const slot = getMotionSlot(slotId);
+  if (!slot?.animationFile || !animationAction || state.selectedAnimationName !== slot.animationFile) return;
+  const point = normalizeExpressionTimeline(slot.expressionTimeline).find((item) => item.id === pointId);
+  if (!point) return;
+  setAnimationTime(point.time);
+}
+
+async function playMotionSlot(slotId) {
+  const scroller = document.querySelector(".emotion-linker-panel");
+  const scrollTop = scroller?.scrollTop ?? 0;
+  const slot = getMotionSlot(slotId);
+  if (!slot?.animationFile) return;
+  state.selectedMotionSlotId = slot.id;
+  state.selectedAnimationName = slot.animationFile;
+  const transition = await loadSelectedAnimation({ preserveCurrentAction: true });
+  startActiveMotionSlotTimeline(slot);
+  applyInitialMotionSlotExpression(slot);
+  const transitionSeconds = clampTimelineTransitionSeconds(slot.transitionSeconds);
+  playAnimationFromStart(Boolean(slot.loop), {
+    previousAction: transition?.previousAction,
+    transitionSeconds: transition?.previousAction ? transitionSeconds : 0,
+  });
+  render();
+  const nextScroller = document.querySelector(".emotion-linker-panel");
+  if (nextScroller) nextScroller.scrollTop = scrollTop;
+}
+
+function startActiveMotionSlotTimeline(slot) {
+  const timeline = normalizeExpressionTimeline(slot.expressionTimeline).filter((point) =>
+    findMatchingExpressionPreset(point.expressionPresetId, point.expressionPresetName),
+  );
+  state.activeLinkTimeline = {
+    animationName: slot.animationFile,
+    motionSlotId: slot.id,
+    timeline,
+    previousTime: 0,
+    appliedIds: new Set(),
+  };
+}
+
+function applyInitialMotionSlotExpression(slot) {
+  const first = normalizeExpressionTimeline(slot.expressionTimeline)[0];
+  if (first && first.time <= 0.001) {
+    applyTimelineExpressionSlot(first, 0);
+    state.activeLinkTimeline?.appliedIds?.add(first.id);
+    return;
+  }
+  if (slot.expressionPresetId) applyLinkedExpressionPreset(slot.expressionPresetId, clampTimelineTransitionSeconds(slot.transitionSeconds));
+}
+
+function markCorrectionDirtyAndRenderLinker2() {
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+  renderPreservingEmotionLinkerScroll();
 }
 
 function nudgeAnimationDecaySeconds(animationName, direction) {
@@ -5865,9 +7167,13 @@ function updateAnimationControls() {
 function updateEmotionLinkProgressCursor() {
   if (!state.selectedAnimationName || !state.animation.duration) return;
   const cursor = document.querySelector(`[data-link-progress="${cssEscape(state.selectedAnimationName)}"]`);
-  if (!cursor) return;
+  const motionSlotCursor = state.selectedMotionSlotId
+    ? document.querySelector(`[data-motion-slot-progress="${cssEscape(state.selectedMotionSlotId)}"]`)
+    : null;
+  if (!cursor && !motionSlotCursor) return;
   const progress = Math.min(100, Math.max(0, (state.animation.time / Math.max(state.animation.duration, 0.001)) * 100));
-  cursor.style.left = `${progress}%`;
+  if (cursor) cursor.style.left = `${progress}%`;
+  if (motionSlotCursor) motionSlotCursor.style.left = `${progress}%`;
 }
 
 function checkTransferCompatibility() {
@@ -5965,6 +7271,7 @@ async function loadVrm(bytes) {
   resetAnimationState("기준 애니메이션을 불러오세요.");
   clearBlushOverlay();
   clearEmotionImageOverlay();
+  clearPropOverlay();
   if (currentVrm) {
     scene.remove(currentVrm.scene);
     VRMUtils.deepDispose(currentVrm.scene);
@@ -6067,6 +7374,12 @@ function getMaterialOutlineColor(material) {
   return readMaterialOutlineColor(material) ?? "#000000";
 }
 
+function getMaterialOutlineWidth(material) {
+  const saved = normalizeOutlineWidth(state.correction.materialSettings?.outline?.materials?.[material.name]?.width);
+  if (saved != null) return saved;
+  return readMaterialOutlineWidth(material) ?? 0;
+}
+
 function readMaterialOutlineColor(material) {
   const color = new THREE.Color();
   if (material?.outlineColorFactor?.isColor) return `#${material.outlineColorFactor.getHexString()}`;
@@ -6080,15 +7393,39 @@ function readMaterialOutlineColor(material) {
   return null;
 }
 
+function readMaterialOutlineWidth(material) {
+  const direct = normalizeOutlineWidth(material?.outlineWidthFactor);
+  if (direct != null) return direct;
+  const uniform = normalizeOutlineWidth(material?.uniforms?.outlineWidthFactor?.value);
+  if (uniform != null) return uniform;
+  const extension = material?.userData?.gltfExtensions?.VRMC_materials_mtoon ?? material?.userData?.gltfExtensions?.VRM?.materialProperties;
+  const extensionWidth = normalizeOutlineWidth(extension?.outlineWidthFactor ?? extension?.floatProperties?._OutlineWidth);
+  if (extensionWidth != null) return extensionWidth;
+  return null;
+}
+
 function updateMaterialOutlineColor(materialName, colorValue) {
   const color = normalizeHexColor(colorValue);
   if (!materialName || !color) return;
   state.correction.materialSettings = normalizeMaterialSettings(state.correction.materialSettings);
-  state.correction.materialSettings.outline.materials[materialName] = { color };
+  const previous = state.correction.materialSettings.outline.materials[materialName] ?? {};
+  state.correction.materialSettings.outline.materials[materialName] = { ...previous, color };
   applyMaterialOutlineSettings();
   state.correctionDirty = true;
   syncSaveMetaButton();
   syncMaterialOutlineControls(materialName, color);
+}
+
+function updateMaterialOutlineWidth(materialName, widthValue, source = null) {
+  const width = normalizeOutlineWidth(widthValue);
+  if (!materialName || width == null) return;
+  state.correction.materialSettings = normalizeMaterialSettings(state.correction.materialSettings);
+  const previous = state.correction.materialSettings.outline.materials[materialName] ?? {};
+  state.correction.materialSettings.outline.materials[materialName] = { ...previous, width };
+  applyMaterialOutlineSettings();
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+  syncMaterialOutlineWidthControls(materialName, width, source);
 }
 
 function updateOutlineMaterialShowAll(showAll) {
@@ -6123,9 +7460,10 @@ function applyMaterialOutlineSettings() {
   const settings = normalizeMaterialSettings(state.correction.materialSettings).outline.materials;
   if (!currentVrm?.scene || !Object.keys(settings).length) return;
   for (const material of collectRenderableMaterials()) {
-    const color = settings[material.name]?.color;
-    if (!color) continue;
-    applyOutlineColorToMaterial(material, color);
+    const materialSettings = settings[material.name];
+    if (!materialSettings) continue;
+    if (materialSettings.color) applyOutlineColorToMaterial(material, materialSettings.color);
+    if (materialSettings.width != null) applyOutlineWidthToMaterial(material, materialSettings.width);
   }
 }
 
@@ -6138,6 +7476,18 @@ function applyOutlineColorToMaterial(material, colorValue) {
   material.needsUpdate = true;
 }
 
+function applyOutlineWidthToMaterial(material, widthValue) {
+  const width = normalizeOutlineWidth(widthValue);
+  if (width == null) return;
+  if ("outlineWidthFactor" in material) material.outlineWidthFactor = width;
+  if (material.uniforms?.outlineWidthFactor) material.uniforms.outlineWidthFactor.value = width;
+  const extension = material.userData?.gltfExtensions?.VRMC_materials_mtoon;
+  if (extension) extension.outlineWidthFactor = width;
+  const vrm0 = material.userData?.gltfExtensions?.VRM?.materialProperties;
+  if (vrm0?.floatProperties) vrm0.floatProperties._OutlineWidth = width;
+  material.needsUpdate = true;
+}
+
 function syncMaterialOutlineControls(materialName, color) {
   for (const input of document.querySelectorAll(`[data-outline-color="${cssEscape(materialName)}"], [data-outline-hex="${cssEscape(materialName)}"]`)) {
     input.value = color;
@@ -6145,6 +7495,20 @@ function syncMaterialOutlineControls(materialName, color) {
   for (const swatch of document.querySelectorAll(`[data-outline-pick="${cssEscape(materialName)}"]`)) {
     swatch.style.background = color;
   }
+}
+
+function syncMaterialOutlineWidthControls(materialName, width, source = null) {
+  const formatted = roundForInput(width);
+  for (const input of document.querySelectorAll(`[data-outline-width="${cssEscape(materialName)}"], [data-outline-width-number="${cssEscape(materialName)}"]`)) {
+    if (input === source) continue;
+    input.value = formatted;
+  }
+}
+
+function normalizeOutlineWidth(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  return Math.min(2, Math.max(0, Math.round(number * 1000) / 1000));
 }
 
 function normalizeHexColor(value) {
@@ -6675,6 +8039,8 @@ function createEmptyCorrection() {
       rotationOrder: "XYZ",
     },
     animations: {},
+    motionSlots: [],
+    props: [],
     extraBoneFollowSettings: [],
     materialSettings: {
       outline: {
@@ -6917,9 +8283,11 @@ function normalizeLegacyExtraBoneFactors(setting) {
 }
 
 function ensureAnimationMetaEntry(animationName) {
-  if (!animationName || !state.animationCatalog?.[animationName]) return null;
+  if (!animationName) return null;
   state.correction.animations[animationName] = normalizeAnimationCorrectionEntry(state.correction.animations[animationName] ?? {});
-  state.correction.animations[animationName].loop = Boolean(state.animationCatalog?.[animationName]?.loop);
+  if (state.animationCatalog?.[animationName]) {
+    state.correction.animations[animationName].loop = Boolean(state.animationCatalog[animationName].loop);
+  }
   return state.correction.animations[animationName];
 }
 
@@ -6944,9 +8312,9 @@ function getBoneCorrection(boneName) {
 
 function normalizeBoneCorrection(correction) {
   return {
-    positionOffset: normalizeVector(correction.positionOffset, [0, 0, 0]),
+    positionOffset: [0, 0, 0],
     rotationOffset: normalizeVector(correction.rotationOffset, [0, 0, 0]),
-    scaleMultiplier: normalizeVector(correction.scaleMultiplier, [1, 1, 1]),
+    scaleMultiplier: [1, 1, 1],
   };
 }
 
@@ -6974,6 +8342,11 @@ function getMirroredCorrectionAxisValue(key, axis, value) {
   return value * sign;
 }
 
+function getActiveMirrorBoneName(boneName) {
+  if (state.separateMirrorBoneCorrection) return null;
+  return getMirrorBoneName(boneName);
+}
+
 function updateCorrectionMeta(key, value) {
   if (key === "id") state.correction.vrm.characterId = value;
   if (key === "name") state.correction.vrm.displayName = value;
@@ -6991,7 +8364,7 @@ function updateVrmVersion(value) {
 function updateCorrectionValue(key, axis, value) {
   if (!Number.isFinite(value)) return;
   const next = setCorrectionAxisValue(state.selectedBone, key, axis, value);
-  const mirrorBone = getMirrorBoneName(state.selectedBone);
+  const mirrorBone = getActiveMirrorBoneName(state.selectedBone);
   if (mirrorBone) setCorrectionAxisValue(mirrorBone, key, axis, getMirroredCorrectionAxisValue(key, axis, value));
   state.correctionDirty = true;
   applyMotionCorrectionPreview();
@@ -7055,7 +8428,7 @@ function setCorrectionAxisValue(boneName, key, axis, value) {
 
 function resetCorrectionField(key) {
   const next = resetCorrectionFieldForBone(state.selectedBone, key);
-  const mirrorBone = getMirrorBoneName(state.selectedBone);
+  const mirrorBone = getActiveMirrorBoneName(state.selectedBone);
   if (mirrorBone) resetCorrectionFieldForBone(mirrorBone, key);
   state.correctionDirty = true;
   applyMotionCorrectionPreview();
@@ -7079,7 +8452,7 @@ function resetSelectedBoneCorrection() {
   const corrections = ensureSelectedAnimationCorrections();
   if (!corrections) return;
   delete corrections[state.selectedBone];
-  const mirrorBone = getMirrorBoneName(state.selectedBone);
+  const mirrorBone = getActiveMirrorBoneName(state.selectedBone);
   if (mirrorBone) delete corrections[mirrorBone];
   state.correctionDirty = true;
   applyMotionCorrectionPreview();
@@ -7140,6 +8513,7 @@ async function loadOrCreateVrmMeta(vrmPath, vrmName) {
   state.expressionDirty = false;
   const names = getAnimationNames();
   state.selectedAnimationName = getDefaultAnimationName() ?? (names.includes(state.selectedAnimationName) ? state.selectedAnimationName : (names[0] ?? null));
+  applyMaterialOutlineSettings();
 }
 
 async function refreshAnimationCatalog() {
@@ -7210,6 +8584,14 @@ function normalizeCorrectionJson(json) {
   next.extraBoneFollowSettings = normalizeExtraBoneFollowSettings(json.extraBoneFollowSettings);
   next.materialSettings = normalizeMaterialSettings(json.materialSettings);
   next.expressionPresets = normalizeExpressionPresets(json.expressionPresets);
+  if (next.emotionImage?.image) {
+    next.expressionPresets = next.expressionPresets.map((preset) => ({
+      ...preset,
+      emotionImage: preset.emotionImage ? normalizePresetEmotionImage(preset.emotionImage, next.emotionImage) : null,
+    }));
+  }
+  next.motionSlots = normalizeMotionSlots(json.motionSlots, next.expressionPresets);
+  next.props = normalizePropSettings(json.props);
   return next;
 }
 
@@ -7226,8 +8608,12 @@ function normalizeMaterialSettings(settings) {
   if (!materials || typeof materials !== "object") return next;
   for (const [name, value] of Object.entries(materials)) {
     const color = normalizeHexColor(typeof value === "string" ? value : value?.color);
-    if (!name || !color) continue;
-    next.outline.materials[String(name)] = { color };
+    const width = typeof value === "object" ? normalizeOutlineWidth(value?.width) : null;
+    if (!name || (!color && width == null)) continue;
+    next.outline.materials[String(name)] = {
+      ...(color ? { color } : {}),
+      ...(width != null ? { width } : {}),
+    };
   }
   return next;
 }
@@ -7266,10 +8652,66 @@ function normalizeExpressionPresets(presets) {
     locked: Boolean(preset.locked),
     isDisableBlink: Boolean(preset.isDisableBlink),
     parameters: normalizeExpressionParameterValues(preset.parameters),
-    blush: preset.blush ? normalizePresetBlush(preset.blush) : null,
+    blush: normalizePresetBlush(preset.blush),
     emotionImage: preset.emotionImage ? normalizePresetEmotionImage(preset.emotionImage) : null,
     rangeSlots: normalizeExpressionRangeSlots(preset.rangeSlots),
   }));
+}
+
+function normalizeMotionSlots(slots, presets = state.expressionPresets) {
+  if (!Array.isArray(slots)) return [];
+  return slots
+    .slice(0, 128)
+    .map((slot, index) => normalizeMotionSlot(slot, index, presets))
+    .filter((slot) => slot.id);
+}
+
+function normalizeMotionSlot(slot, index = 0, presets = state.expressionPresets) {
+  const animationFile = fileNameFromPath(slot?.animationFile ?? "");
+  const preset =
+    presets?.find?.((item) => item.id === slot?.expressionPresetId) ??
+    presets?.find?.((item) => item.name === slot?.expressionPresetName);
+  return {
+    id: String(slot?.id ?? `motion-slot-${index}`),
+    title: String(slot?.title ?? "input title"),
+    animationFile,
+    expressionPresetId: preset?.id ?? String(slot?.expressionPresetId ?? ""),
+    expressionPresetName: preset?.name ?? String(slot?.expressionPresetName ?? ""),
+    loop: Boolean(slot?.loop),
+    transitionSeconds: clampTimelineTransitionSeconds(Number(slot?.transitionSeconds ?? 0.2)),
+    expressionTimeline: normalizeExpressionTimeline(slot?.expressionTimeline),
+  };
+}
+
+function normalizePropSettings(props) {
+  if (!Array.isArray(props)) return [];
+  return props
+    .slice(0, 32)
+    .map((prop, index) => createPropSetting({ ...prop, id: String(prop?.id ?? `prop-${index}`) }))
+    .filter((prop) => prop.id && prop.file);
+}
+
+function createPropSetting(prop = {}) {
+  const file = fileNameFromPath(prop.file ?? "");
+  return {
+    id: String(prop.id ?? `prop-${Date.now()}`),
+    name: String(prop.name ?? getPropDisplayName({ file })),
+    file,
+    attachBone: HUMAN_BONE_SET.has(prop.attachBone) ? prop.attachBone : "rightHand",
+    followRotation: prop.followRotation !== false,
+    positionOffset: normalizeNumberArray(prop.positionOffset, 3, 0),
+    rotationOffset: normalizeNumberArray(prop.rotationOffset, 3, 0),
+    scale: clampNumber(Number(prop.scale), 0.01, 5, 1),
+    visible: prop.visible !== false,
+  };
+}
+
+function normalizeNumberArray(value, length, fallback = 0) {
+  const source = Array.isArray(value) ? value : [];
+  return Array.from({ length }, (_, index) => {
+    const number = Number(source[index]);
+    return Number.isFinite(number) ? number : fallback;
+  });
 }
 
 function normalizeBlushSettings(blush) {
@@ -7283,10 +8725,23 @@ function normalizeBlushSettings(blush) {
 }
 
 function normalizePresetBlush(blush) {
-  if (!blush) return { opacity: 0.65 };
+  if (!blush) return createDisabledPresetBlush();
+  const enabled = blush.enabled != null ? Boolean(blush.enabled) : true;
   return {
-    opacity: clampEmotionValue(Number(blush.opacity ?? 0.65)),
+    enabled,
+    opacity: enabled ? clampEmotionValue(Number(blush.opacity ?? 0.65)) : 0,
   };
+}
+
+function createDisabledPresetBlush() {
+  return {
+    enabled: false,
+    opacity: 0,
+  };
+}
+
+function isPresetBlushEnabled(preset) {
+  return Boolean(preset?.blush && normalizePresetBlush(preset.blush).enabled);
 }
 
 function normalizeEmotionImageSettings(settings) {
@@ -7302,8 +8757,11 @@ function normalizeEmotionImageSettings(settings) {
     pivotX: clampNumber(Number(settings.pivotX), 0, 1, 0.5),
     pivotY: clampNumber(Number(settings.pivotY), 0, 1, 0.5),
     animationDuration: normalizeEmotionImageDuration(settings.animationDuration),
+    loop: Boolean(settings.loop),
     scaleGraph: normalizeEmotionImageGraph(settings.scaleGraph, 2),
     opacityGraph: normalizeEmotionImageGraph(settings.opacityGraph, 1),
+    headRotationAxes: normalizeHeadRotationAxes(settings.headRotationAxes),
+    headRotationGraph: normalizeHeadRotationGraph(settings.headRotationGraph),
   };
 }
 
@@ -7335,11 +8793,60 @@ function normalizeEmotionImageGraph(graph, maxValue = 1) {
   return deduped;
 }
 
+function normalizeEmotionImageGraphRange(graph, minValue, maxValue, defaultValue = 0) {
+  const source = Array.isArray(graph) && graph.length ? graph : [];
+  const points = source
+    .map((point) => ({
+      time: clampNumber(Number(point?.time), 0, 1, 0),
+      value: Math.round(clampNumber(Number(point?.value), minValue, maxValue, defaultValue) * 100) / 100,
+      curve: ["linear", "easeOut", "easeIn", "easeInOut", "step"].includes(point?.curve) ? point.curve : "linear",
+    }))
+    .sort((a, b) => a.time - b.time);
+  if (!points.length || points[0].time > 0.001) points.unshift({ time: 0, value: defaultValue, curve: "linear" });
+  points[0] = { ...points[0], time: 0 };
+  if (points.at(-1).time < 0.999) points.push({ time: 1, value: defaultValue, curve: "linear" });
+  points[points.length - 1] = { ...points.at(-1), time: 1, curve: "linear" };
+  const deduped = [];
+  for (const point of points.slice(0, 12)) {
+    if (deduped.length && Math.abs(deduped.at(-1).time - point.time) < 0.001) {
+      deduped[deduped.length - 1] = point;
+    } else {
+      deduped.push(point);
+    }
+  }
+  return deduped;
+}
+
+function normalizeHeadRotationAxes(axes) {
+  return {
+    x: Boolean(axes?.x),
+    y: Boolean(axes?.y),
+    z: Boolean(axes?.z),
+  };
+}
+
+function normalizeHeadRotationGraph(graph) {
+  return {
+    x: normalizeEmotionImageGraphRange(graph?.x, EMOTION_HEAD_ROTATION_MIN, EMOTION_HEAD_ROTATION_MAX, 0),
+    y: normalizeEmotionImageGraphRange(graph?.y, EMOTION_HEAD_ROTATION_MIN, EMOTION_HEAD_ROTATION_MAX, 0),
+    z: normalizeEmotionImageGraphRange(graph?.z, EMOTION_HEAD_ROTATION_MIN, EMOTION_HEAD_ROTATION_MAX, 0),
+  };
+}
+
 function isEmotionImageGraphAnimated(settings = getActiveEmotionImageSettings()) {
   if (!settings) return false;
-  return [settings.scaleGraph, settings.opacityGraph].some((graph) =>
+  const graphAnimated = [settings.scaleGraph, settings.opacityGraph].some((graph) =>
     graph.some((point) => Math.abs(point.value - 1) > 0.001 || point.curve !== "linear"),
   );
+  const axes = normalizeHeadRotationAxes(settings.headRotationAxes);
+  const rotationAnimated = ["x", "y", "z"].some(
+    (axis) =>
+      axes[axis] &&
+      normalizeEmotionImageGraphRange(settings.headRotationGraph?.[axis], EMOTION_HEAD_ROTATION_MIN, EMOTION_HEAD_ROTATION_MAX, 0).some(
+        (point) => Math.abs(point.value) > 0.001 || point.curve !== "linear",
+      ),
+  );
+  return graphAnimated || rotationAnimated;
 }
 
 function emotionGraphX(time) {
@@ -7348,6 +8855,11 @@ function emotionGraphX(time) {
 
 function emotionGraphY(value, maxValue) {
   return Math.round((1 - clampNumber(Number(value), 0, maxValue, 1) / Math.max(maxValue, 0.001)) * EMOTION_GRAPH_HEIGHT);
+}
+
+function emotionGraphYRange(value, minValue, maxValue) {
+  const span = Math.max(maxValue - minValue, 0.001);
+  return Math.round((1 - (clampNumber(Number(value), minValue, maxValue, 0) - minValue) / span) * EMOTION_GRAPH_HEIGHT);
 }
 
 function buildEmotionGraphPath(points, maxValue) {
@@ -7376,17 +8888,116 @@ function buildEmotionGraphPath(points, maxValue) {
   return path;
 }
 
+function buildEmotionGraphPathRange(points, minValue, maxValue) {
+  const normalized = normalizeEmotionImageGraphRange(points, minValue, maxValue, 0);
+  if (!normalized.length) return "";
+  let path = `M${emotionGraphX(normalized[0].time)} ${emotionGraphYRange(normalized[0].value, minValue, maxValue)}`;
+  for (let index = 0; index < normalized.length - 1; index += 1) {
+    const current = normalized[index];
+    const next = normalized[index + 1];
+    const x1 = emotionGraphX(current.time);
+    const y1 = emotionGraphYRange(current.value, minValue, maxValue);
+    const x2 = emotionGraphX(next.time);
+    const y2 = emotionGraphYRange(next.value, minValue, maxValue);
+    if (current.curve === "step") {
+      path += ` L${x2} ${y1} L${x2} ${y2}`;
+    } else if (current.curve === "easeOut") {
+      path += ` C${x1 + (x2 - x1) * 0.16} ${y2} ${x1 + (x2 - x1) * 0.44} ${y2} ${x2} ${y2}`;
+    } else if (current.curve === "easeIn") {
+      path += ` C${x1 + (x2 - x1) * 0.56} ${y1} ${x1 + (x2 - x1) * 0.84} ${y1} ${x2} ${y2}`;
+    } else if (current.curve === "easeInOut") {
+      path += ` C${x1 + (x2 - x1) * 0.42} ${y1} ${x1 + (x2 - x1) * 0.58} ${y2} ${x2} ${y2}`;
+    } else {
+      path += ` L${x2} ${y2}`;
+    }
+  }
+  return path;
+}
+
 function getSelectedEmotionImageGraphPoint(settings = getActiveEmotionImageSettings()) {
   const graphKey = state.selectedEmotionImageGraph?.graph;
-  if (!settings || !["scaleGraph", "opacityGraph"].includes(graphKey)) return null;
-  const maxValue = graphKey === "scaleGraph" ? 2 : 1;
-  const points = normalizeEmotionImageGraph(settings[graphKey], maxValue);
+  if (!settings || !isEmotionImageEditableGraph(graphKey)) return null;
+  if (graphKey === "headRotationGraph" && !normalizeHeadRotationAxes(settings.headRotationAxes)[getSelectedHeadRotationAxis(settings)]) return null;
+  const points = getEmotionImageGraphForKey(settings, graphKey);
   const index = clampNumber(Number(state.selectedEmotionImageGraph?.index), 0, points.length - 1, 0);
   return { graphKey, points, index, ...points[index] };
 }
 
-function normalizePresetEmotionImage(settings) {
-  return settings ? {} : {};
+function getSelectedHeadRotationAxis(settings = getActiveEmotionImageSettings()) {
+  const axes = normalizeHeadRotationAxes(settings?.headRotationAxes);
+  const current = state.selectedEmotionImageGraph?.axis;
+  if (["x", "y", "z"].includes(current)) return current;
+  return ["x", "y", "z"].find((axis) => axes[axis]) ?? "x";
+}
+
+function normalizePresetEmotionImage(settings, fallback = null) {
+  const normalized = normalizeEmotionImageSettings(settings?.image ? settings : fallback);
+  return normalized?.image ? normalized : null;
+}
+
+function getPresetEmotionImageRangeSlots(preset) {
+  return normalizeExpressionRangeSlots(preset?.rangeSlots).filter((slot) => slot.emotionImage?.image);
+}
+
+function getLastEmotionImageRangeSettings(preset) {
+  return getPresetEmotionImageRangeSlots(preset).at(-1)?.emotionImage ?? null;
+}
+
+function getEmotionImageBaseSettings(preset) {
+  return getLastEmotionImageRangeSettings(preset) ?? normalizePresetEmotionImage(preset?.emotionImage);
+}
+
+function getSelectedEmotionImageSettingsForEdit() {
+  const selected = getSelectedEmotionPreset();
+  if (!selected?.emotionImage) return null;
+  const slot = getSelectedExpressionRangeSlot();
+  if (slot) {
+    return normalizePresetEmotionImage(slot.emotionImage, getEmotionImageBaseSettings(selected) ?? selected.emotionImage);
+  }
+  return normalizePresetEmotionImage(selected.emotionImage);
+}
+
+function updateSelectedEmotionImageSettings(patch) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected?.emotionImage || selected.locked) return null;
+  const current = getSelectedEmotionImageSettingsForEdit() ?? normalizePresetEmotionImage(selected.emotionImage);
+  const next = normalizePresetEmotionImage({
+    ...(current ?? {}),
+    ...(typeof patch === "function" ? patch(current) : patch),
+    image: selected.emotionImage.image,
+  });
+  if (!next) return null;
+  if (state.selectedExpressionRangeId) {
+    updateSelectedExpressionRangeSlot((slot) => ({
+      ...slot,
+      emotionImage: next,
+    }));
+  } else {
+    selected.emotionImage = next;
+  }
+  return next;
+}
+
+function seedEmotionImageToAllRangeSlots(preset, settings) {
+  if (!preset) return;
+  const normalized = normalizePresetEmotionImage(settings);
+  if (!normalized) return;
+  const slots = normalizeExpressionRangeSlots(preset.rangeSlots);
+  preset.rangeSlots = slots.map((slot) => ({
+    ...slot,
+    emotionImage: normalizePresetEmotionImage(slot.emotionImage, normalized) ?? normalized,
+  }));
+}
+
+function setEmotionImageFileForAllRangeSlots(preset, imageName) {
+  if (!preset || !imageName) return;
+  const slots = normalizeExpressionRangeSlots(preset.rangeSlots);
+  preset.rangeSlots = slots.map((slot) => ({
+    ...slot,
+    emotionImage: slot.emotionImage
+      ? normalizePresetEmotionImage({ ...slot.emotionImage, image: imageName })
+      : null,
+  }));
 }
 
 function getActiveBlushSettings() {
@@ -7394,19 +9005,19 @@ function getActiveBlushSettings() {
 }
 
 function getActiveEmotionImageSettings() {
-  return normalizeEmotionImageSettings(state.correction.emotionImage);
+  return getSelectedEmotionImageSettingsForEdit();
 }
 
 function getSelectedBlushOpacity() {
   const selected = getSelectedEmotionPreset();
-  if (!selected?.blush) return 0;
+  if (!isPresetBlushEnabled(selected)) return 0;
   const slot = getSelectedExpressionRangeSlot();
   return slot?.blushOpacity != null ? clampEmotionValue(Number(slot.blushOpacity)) : normalizePresetBlush(selected.blush).opacity;
 }
 
 function setSelectedBlushOpacity(value) {
   const selected = getSelectedEmotionPreset();
-  if (!selected?.blush) return;
+  if (!isPresetBlushEnabled(selected)) return;
   const opacity = clampEmotionValue(Number(value));
   const slot = getSelectedExpressionRangeSlot();
   if (slot) {
@@ -7420,7 +9031,7 @@ function setSelectedBlushOpacity(value) {
 }
 
 function getBlushOpacityAtValue(preset, value) {
-  if (!preset?.blush) return 0;
+  if (!isPresetBlushEnabled(preset)) return 0;
   const clamped = clampEmotionValue(value);
   const mainOpacity = normalizePresetBlush(preset.blush).opacity;
   const points = [
@@ -7453,6 +9064,7 @@ function normalizeExpressionRangeSlots(slots) {
       threshold: clampEmotionValue(Number(slot?.threshold ?? 0.5)),
       parameters: normalizeExpressionParameterValues(slot?.parameters),
       ...(slot?.blushOpacity != null ? { blushOpacity: clampEmotionValue(Number(slot.blushOpacity)) } : {}),
+      ...(slot?.emotionImage ? { emotionImage: normalizePresetEmotionImage(slot.emotionImage) } : {}),
     }))
     .sort((a, b) => a.threshold - b.threshold);
 }
@@ -7484,6 +9096,7 @@ function normalizeAnimationCorrectionEntry(animation) {
     expressionPresetId: String(animation?.expressionPresetId ?? ""),
     expressionPresetName: String(animation?.expressionPresetName ?? ""),
     expressionTimeline: normalizeExpressionTimeline(animation?.expressionTimeline),
+    props: normalizeStringList(animation?.props),
     corrections: {},
   };
   for (const [boneName, correction] of Object.entries(animation.corrections ?? {})) {
@@ -7494,6 +9107,7 @@ function normalizeAnimationCorrectionEntry(animation) {
   if (!next.expressionPresetId) delete next.expressionPresetId;
   if (!next.expressionPresetName) delete next.expressionPresetName;
   if (!next.expressionTimeline.length) delete next.expressionTimeline;
+  if (!next.props.length) delete next.props;
   return next;
 }
 
@@ -7547,19 +9161,27 @@ function serializeCorrection() {
     }
   }
   next.blush = normalizeBlushSettings(state.correction.blush);
-  next.emotionImage = normalizeEmotionImageSettings(state.correction.emotionImage);
+  next.emotionImage = null;
   next.extraBoneFollowSettings = normalizeExtraBoneFollowSettings(state.correction.extraBoneFollowSettings);
   next.materialSettings = normalizeMaterialSettings(state.correction.materialSettings);
-  next.expressionPresets = normalizeExpressionPresets(state.expressionPresets).map(({ id, name, locked, isDisableBlink, parameters, rangeSlots, blush, emotionImage }) => ({
-    id,
-    name,
-    locked,
-    isDisableBlink,
-    parameters,
-    rangeSlots,
-    blush,
-    emotionImage,
-  }));
+  next.motionSlots = normalizeMotionSlots(state.correction.motionSlots);
+  next.props = normalizePropSettings(state.correction.props);
+  next.expressionPresets = normalizeExpressionPresets(state.expressionPresets).map((preset) => {
+    const blush = normalizePresetBlush(preset.blush);
+    const rangeSlots = normalizeExpressionRangeSlots(preset.rangeSlots).map((slot) =>
+      blush.enabled ? slot : { ...slot, blushOpacity: 0 },
+    );
+    return {
+      id: preset.id,
+      name: preset.name,
+      locked: preset.locked,
+      isDisableBlink: preset.isDisableBlink,
+      parameters: preset.parameters,
+      rangeSlots,
+      blush,
+      emotionImage: preset.emotionImage,
+    };
+  });
   return next;
 }
 
@@ -7689,7 +9311,6 @@ function applyMotionCorrectionPreview() {
     const correction = getSelectedAnimationCorrections()[boneName];
     if (!correction) continue;
     const normalized = normalizeBoneCorrection(correction);
-    bone.position.add(new THREE.Vector3(...normalized.positionOffset));
     const euler = new THREE.Euler(
       THREE.MathUtils.degToRad(normalized.rotationOffset[0]),
       THREE.MathUtils.degToRad(normalized.rotationOffset[1]),
@@ -7697,7 +9318,6 @@ function applyMotionCorrectionPreview() {
       "XYZ",
     );
     bone.quaternion.multiply(new THREE.Quaternion().setFromEuler(euler));
-    bone.scale.multiply(new THREE.Vector3(...normalized.scaleMultiplier));
   }
   currentVrm.scene.updateMatrixWorld(true);
 }
@@ -8491,6 +10111,7 @@ function formatModeName(value) {
   if (value === "correction") return "Motion Correction";
   if (value === "expression") return "Expression Editor";
   if (value === "linker") return "Emotion Linker";
+  if (value === "linker2") return "Emotion Linker 2";
   if (value === "extraBone") return "Extra Bone Follow";
   if (value === "transitionViewer") return "Transition Viewer";
   return "Viewer";
@@ -8519,6 +10140,7 @@ function escapeHtml(value) {
 
 window.addEventListener("resize", resize);
 window.addEventListener("keydown", (event) => {
+  if (isEditableElement(event.target)) return;
   if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "z") {
     event.preventDefault();
     undo();
@@ -8546,6 +10168,7 @@ renderer.domElement.addEventListener("pointerdown", handleEmotionImagePivotPoint
 function tick() {
   requestAnimationFrame(tick);
   const delta = clock.getDelta();
+  restoreEmotionImageHeadRotationOffset();
   controls.update();
   updateCameraTransition(delta);
   updateTransitionTimelineProgress();
@@ -8572,10 +10195,12 @@ function tick() {
   reapplyActiveRorrInfluences();
   updateRandomBlink(delta);
   updateLipSyncPreview(delta);
+  updatePropOverlayRuntime();
   updateEmotionImageAnimation(delta);
   applyMotionCorrectionPreview();
   applyExtraBoneFollowPreview();
   applyEditDraftMorphPreview();
+  applyEmotionImageHeadRotation();
   updateEmotionImageBillboard();
   renderer.render(scene, camera);
   updateExtraBoneGizmoOverlay();

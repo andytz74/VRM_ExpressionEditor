@@ -15,8 +15,9 @@ VRM Expression Editor.bat
 ## 프론트/익스텐션 전달 문서
 
 - [VRM Expression Editor Frontend Runtime Guide](docs/VRM_ExpressionEditor_Frontend_Runtime_Guide.pdf)
+- [Resource Reference Rules](docs/RESOURCE_REFERENCE_RULES.md)
 
-이 PDF에는 다음 내용이 정리되어 있습니다.
+런타임 가이드 PDF에는 다음 내용이 정리되어 있습니다.
 
 - 캐릭터 `.vrm.meta` 로딩 규칙
 - `animations/animations.meta` 로딩 규칙

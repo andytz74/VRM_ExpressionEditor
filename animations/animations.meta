@@ -87,7 +87,7 @@
       "fileName": "a4.vrma",
       "description": "작은 박수",
       "mustWatchFull": true,
-      "duration": 3.708,
+      "duration": 4.208,
       "isFirst": false,
       "loop": false,
       "lookAtCamera": false
@@ -104,7 +104,7 @@
     "a6.vrma": {
       "fileName": "a6.vrma",
       "description": "어머나",
-      "mustWatchFull": true,
+      "mustWatchFull": false,
       "duration": 2.458,
       "isFirst": false,
       "loop": false,
@@ -128,15 +128,6 @@
       "loop": true,
       "lookAtCamera": true
     },
-    "SA1_1.vrma": {
-      "fileName": "SA1_1.vrma",
-      "description": "소셜 대기",
-      "mustWatchFull": true,
-      "duration": 4.958,
-      "isFirst": false,
-      "loop": true,
-      "lookAtCamera": true
-    },
     "SA2.vrma": {
       "fileName": "SA2.vrma",
       "description": "소셜 - 생각중",
@@ -149,8 +140,8 @@
     "SA3.vrma": {
       "fileName": "SA3.vrma",
       "description": "소셜 - 박수",
-      "mustWatchFull": false,
-      "duration": 2.458,
+      "mustWatchFull": true,
+      "duration": 3.458,
       "isFirst": false,
       "loop": false,
       "lookAtCamera": false
@@ -178,6 +169,33 @@
       "description": "만세",
       "mustWatchFull": false,
       "duration": 4.958,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "cheerBoard.vrma": {
+      "fileName": "cheerBoard.vrma",
+      "description": "응원판",
+      "mustWatchFull": true,
+      "duration": 4.125,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": true
+    },
+    "SA5.vrma": {
+      "fileName": "SA5.vrma",
+      "description": "소셜 - 끄덕임",
+      "mustWatchFull": true,
+      "duration": 4.958,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "SA6.vrma": {
+      "fileName": "SA6.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 2.458,
       "isFirst": false,
       "loop": false,
       "lookAtCamera": false

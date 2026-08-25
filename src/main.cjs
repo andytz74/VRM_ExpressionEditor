@@ -52,6 +52,10 @@ function imageDir() {
   return path.join(__dirname, "..", "img");
 }
 
+function propsDir() {
+  return path.join(__dirname, "..", "props");
+}
+
 function animationCatalogPath() {
   return path.join(animationsDir(), "animations.meta");
 }
@@ -350,7 +354,7 @@ ipcMain.handle("image:store", async () => {
     defaultPath: dir,
     properties: ["openFile"],
     filters: [
-      { name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] },
+      { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "svg"] },
       { name: "All Files", extensions: ["*"] },
     ],
   });
@@ -368,6 +372,36 @@ ipcMain.handle("image:store", async () => {
 
 ipcMain.handle("image:openStored", async (_event, fileName) => {
   const filePath = path.join(imageDir(), path.basename(fileName));
+  const data = await fs.readFile(filePath);
+  return { filePath, name: path.basename(filePath), data };
+});
+
+ipcMain.handle("prop:store", async () => {
+  const dir = propsDir();
+  await fs.mkdir(dir, { recursive: true });
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Open Prop GLB",
+    defaultPath: dir,
+    properties: ["openFile"],
+    filters: [
+      { name: "GLB", extensions: ["glb"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+
+  const sourcePath = result.filePaths[0];
+  const fileName = path.basename(sourcePath);
+  const targetPath = path.join(dir, fileName);
+  if (path.resolve(sourcePath) !== path.resolve(targetPath)) {
+    await fs.copyFile(sourcePath, targetPath);
+  }
+  const data = await fs.readFile(targetPath);
+  return { filePath: targetPath, name: fileName, data };
+});
+
+ipcMain.handle("prop:openStored", async (_event, fileName) => {
+  const filePath = path.join(propsDir(), path.basename(fileName));
   const data = await fs.readFile(filePath);
   return { filePath, name: path.basename(filePath), data };
 });
