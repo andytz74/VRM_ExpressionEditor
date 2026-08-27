@@ -1138,7 +1138,7 @@ input[type="range"] {
   position: absolute;
   top: 14px;
   left: 14px;
-  z-index: 15;
+  z-index: 40;
   width: 320px;
   padding: 12px;
   border: 1px solid #343b45;
@@ -2521,6 +2521,354 @@ canvas {
   color: #c8d0d8;
   font-size: 12px;
   transform: none;
+}
+
+.emotion-map-overlay {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  z-index: 16;
+  width: 460px;
+  padding: 14px;
+  border: 1px solid #334052;
+  border-radius: 8px;
+  background: rgba(27, 31, 37, 0.92);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+  pointer-events: auto;
+}
+
+.emotion-map-overlay-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.emotion-map-overlay-head strong {
+  color: #f3f7fb;
+  font-size: 16px;
+}
+
+.emotion-map-overlay-head span {
+  color: #9faab6;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.emotion-map-plot-placeholder {
+  position: relative;
+  height: 300px;
+  border: 1px solid #3a4656;
+  border-radius: 8px;
+  background: rgba(18, 22, 28, 0.82);
+  overflow: hidden;
+}
+
+.emotion-map-plot-inner {
+  position: absolute;
+  inset: 10px;
+  background:
+    linear-gradient(90deg, rgba(170, 179, 189, 0.12) 1px, transparent 1px),
+    transparent;
+  background-size: 25% 100%;
+}
+
+.emotion-map-axis {
+  position: absolute;
+  background: rgba(206, 216, 226, 0.55);
+  pointer-events: none;
+}
+
+.emotion-map-axis.x {
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+}
+
+.emotion-map-axis.y {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+}
+
+.emotion-map-base-dot {
+  position: absolute;
+  bottom: -6px;
+  left: calc(50% - 6px);
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #ffd91f;
+  box-shadow: 0 0 0 3px rgba(255, 217, 31, 0.2);
+}
+
+.emotion-map-cursor-dot {
+  position: absolute;
+  z-index: 2;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: #38bdf8;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.emotion-map-point {
+  position: absolute;
+  z-index: 3;
+  width: 30px;
+  height: 26px;
+  border: 0;
+  padding: 0;
+  color: #ff4b4b;
+  background: transparent;
+  transform: translate(-50%, -2px);
+  cursor: pointer;
+}
+
+.emotion-map-point span {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: #ff3030;
+  transform: translateX(-50%);
+}
+
+.emotion-map-point b {
+  position: absolute;
+  top: 7px;
+  left: 0;
+  width: 100%;
+  color: currentColor;
+  font-size: 10px;
+  line-height: 1;
+  text-align: center;
+}
+
+.emotion-map-point.bottom {
+  transform: translate(-50%, -24px);
+}
+
+.emotion-map-point.bottom span {
+  top: auto;
+  bottom: 0;
+}
+
+.emotion-map-point.bottom b {
+  top: auto;
+  bottom: 7px;
+}
+
+.emotion-map-point.bound {
+  color: #37d78a;
+}
+
+.emotion-map-point.bound span {
+  background: #37d78a;
+}
+
+.emotion-map-point.selected span {
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.22);
+}
+
+.emotion-map-right-tray {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+.emotion-map-coordinate-readout {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #2e3743;
+  border-radius: 8px;
+  background: #20262e;
+}
+
+.emotion-map-coordinate-readout strong {
+  color: #f3f7fb;
+  font-size: 15px;
+}
+
+.emotion-map-coordinate-readout div {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.emotion-map-coordinate-readout span {
+  color: #aab3bd;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.emotion-map-coordinate-readout b {
+  min-height: 34px;
+  border: 1px solid #343d49;
+  border-radius: 7px;
+  padding: 6px 10px;
+  color: #f3f7fb;
+  background: #151a20;
+  text-align: right;
+  font-size: 18px;
+}
+
+.emotion-map-preset-panel {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px;
+  overflow: hidden;
+}
+
+.emotion-map-preset-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #f3f7fb;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.emotion-map-preset-head span {
+  color: #9faab6;
+  font-size: 12px;
+}
+
+.emotion-map-preset-list,
+.emotion-map-slot-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.emotion-map-preset-slot,
+.emotion-map-target-slot {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  border: 1px solid #2e3743;
+  border-radius: 8px;
+  background: #20262e;
+}
+
+.emotion-map-preset-slot {
+  grid-template-columns: minmax(0, 1fr) auto 58px 42px;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.emotion-map-preset-slot.selected {
+  border-color: #37d78a;
+  background: #202b30;
+  box-shadow: 0 0 0 1px rgba(55, 215, 138, 0.24);
+}
+
+.emotion-map-preset-slot span {
+  min-width: 0;
+  overflow: hidden;
+  color: #f3f7fb;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 800;
+}
+
+.emotion-map-preset-slot small {
+  min-width: 26px;
+  color: #37d78a;
+  font-size: 12px;
+  font-weight: 900;
+  text-align: right;
+}
+
+.emotion-map-range-select {
+  min-width: 0;
+  border: 1px solid #3a4654;
+  border-radius: 6px;
+  background: #151a20;
+  color: #edf3f8;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.emotion-map-preset-slot .emotion-map-range-select {
+  grid-column: 3;
+  height: 32px;
+}
+
+.emotion-map-preset-slot .mini-button {
+  grid-column: 4;
+}
+
+.emotion-map-target-slot {
+  grid-template-columns: 34px minmax(0, 1fr) minmax(92px, auto);
+  padding: 10px;
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+}
+
+.emotion-map-target-slot.selected {
+  border-color: #37d78a;
+  box-shadow: 0 0 0 1px rgba(55, 215, 138, 0.28);
+}
+
+.emotion-map-target-slot.bound strong {
+  color: #f3f7fb;
+}
+
+.emotion-map-target-slot span {
+  color: #9faab6;
+  font-size: 13px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.emotion-map-target-slot strong {
+  color: #68727e;
+  font-size: 14px;
+}
+
+.emotion-map-target-slot input {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid #343d49;
+  border-radius: 7px;
+  padding: 7px 9px;
+  background: #151a20;
+  overflow: hidden;
+  color: #aeb8c3;
+  outline: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.emotion-map-target-slot input:focus {
+  border-color: #37d78a;
+  color: #f3f7fb;
+}
+
+.emotion-map-target-slot .emotion-map-range-select {
+  grid-column: 2 / -1;
+  height: 28px;
 }
 
 .lip-sync-preview {

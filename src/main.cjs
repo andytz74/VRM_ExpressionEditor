@@ -56,6 +56,15 @@ function propsDir() {
   return path.join(__dirname, "..", "props");
 }
 
+function emotionMapDir() {
+  return path.join(__dirname, "..", "emotionMap");
+}
+
+function emotionMapTempPath(vrmPath) {
+  const baseName = path.basename(String(vrmPath ?? ""), path.extname(String(vrmPath ?? ""))) || "character";
+  return path.join(emotionMapDir(), `${baseName}.emotionMap.temp.json`);
+}
+
 function animationCatalogPath() {
   return path.join(animationsDir(), "animations.meta");
 }
@@ -529,6 +538,24 @@ ipcMain.handle("meta:open", async () => {
 });
 
 ipcMain.handle("meta:save", async (_event, filePath, data) => {
+  await fs.writeFile(filePath, data, "utf8");
+  return { filePath, name: path.basename(filePath) };
+});
+
+ipcMain.handle("emotionMap:loadTemp", async (_event, vrmPath) => {
+  const filePath = emotionMapTempPath(vrmPath);
+  try {
+    const data = await fs.readFile(filePath);
+    return { filePath, name: path.basename(filePath), data };
+  } catch (error) {
+    if (error.code === "ENOENT") return { filePath, name: path.basename(filePath), data: null };
+    throw error;
+  }
+});
+
+ipcMain.handle("emotionMap:saveTemp", async (_event, vrmPath, data) => {
+  await fs.mkdir(emotionMapDir(), { recursive: true });
+  const filePath = emotionMapTempPath(vrmPath);
   await fs.writeFile(filePath, data, "utf8");
   return { filePath, name: path.basename(filePath) };
 });

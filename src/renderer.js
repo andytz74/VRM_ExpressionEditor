@@ -101,6 +101,32 @@ const EMOTION_GRAPH_WIDTH = 280;
 const EMOTION_GRAPH_HEIGHT = 148;
 const EMOTION_HEAD_ROTATION_MIN = -10;
 const EMOTION_HEAD_ROTATION_MAX = 10;
+const EMOTION_MAP_X_VALUES = [-1, -0.5, 0, 0.5, 1];
+const EMOTION_MAP_Y_VALUES = [0, 0.33, 0.66, 1];
+const EMOTION_MAP_Y_MIN = 0;
+const EMOTION_MAP_Y_MAX = 1;
+const EMOTION_MAP_POINTS = [
+  { index: 1, x: -1, y: 1, label: "극대노" },
+  { index: 2, x: -0.5, y: 1, label: "분노 / 격앙" },
+  { index: 3, x: 0, y: 1, label: "압도 / 패닉" },
+  { index: 4, x: 0.5, y: 1, label: "환희 / 흥분" },
+  { index: 5, x: 1, y: 1, label: "파안대소" },
+  { index: 6, x: -1, y: 0.66, label: "짜증 / 경계" },
+  { index: 7, x: -0.5, y: 0.66, label: "불안 / 긴장" },
+  { index: 8, x: 0, y: 0.66, label: "놀람" },
+  { index: 9, x: 0.5, y: 0.66, label: "들뜸" },
+  { index: 10, x: 1, y: 0.66, label: "신남" },
+  { index: 11, x: -1, y: 0.33, label: "실망" },
+  { index: 12, x: -0.5, y: 0.33, label: "삐짐 / 불만" },
+  { index: 13, x: 0, y: 0.33, label: "당황 / 멈칫" },
+  { index: 14, x: 0.5, y: 0.33, label: "피식 웃음" },
+  { index: 15, x: 1, y: 0.33, label: "만족" },
+  { index: 16, x: -1, y: 0, label: "차가움 / 무심" },
+  { index: 17, x: -0.5, y: 0, label: "무기력" },
+  { index: 18, x: 0, y: 0, label: "무표정 / 기본" },
+  { index: 19, x: 0.5, y: 0, label: "안도 / 편안" },
+  { index: 20, x: 1, y: 0, label: "은은한 호감" },
+];
 
 const state = {
   mode: "expression",
@@ -118,6 +144,12 @@ const state = {
   linkerTransitionSeconds: 0.2,
   activeLinkTimeline: null,
   selectedMotionSlotId: null,
+  emotionMapCursor: { x: 0, y: 0 },
+  selectedEmotionMapSlotIndex: 1,
+  emotionMapBindings: Array.from({ length: 20 }, () => null),
+  emotionMapLabels: Array.from({ length: 20 }, () => ""),
+  emotionMapPresetRangeSelections: {},
+  emotionMapTempPath: null,
   editingMotionSlotTitleId: null,
   editingMotionSlotTitleValue: "",
   selectedPropId: null,
@@ -126,6 +158,7 @@ const state = {
   emotionImagePanelMinimized: false,
   selectedEmotionImageGraph: { graph: "scaleGraph", index: 0 },
   emotionImageAnimation: null,
+  emotionMapActiveEmotionImage: null,
   emotionImagePivotPicking: false,
   screenshot: {
     selecting: false,
@@ -262,6 +295,8 @@ let emotionImageOverlay = null;
 let emotionImageTransformControls = null;
 let emotionImageTransformDragging = false;
 let emotionImageHeadRotationOffset = null;
+let blushOverlayRequestId = 0;
+let emotionImageOverlayRequestId = 0;
 let propOverlay = null;
 let propTransformControls = null;
 let propTransformDragging = false;
@@ -386,7 +421,7 @@ function normalizeTransitionSequence(sequence) {
 
 function normalizeCameraPresets(presets) {
   const next = {};
-  for (const mode of ["transfer", "correction", "expression", "linker", "linker2", "extraBone", "transitionViewer"]) {
+  for (const mode of ["transfer", "correction", "expression", "emotionMap", "linker", "linker2", "extraBone", "transitionViewer"]) {
     const preset = presets?.[mode];
     if (!preset || typeof preset !== "object") continue;
     next[mode] = normalizeCameraPreset(preset);
@@ -616,7 +651,7 @@ function render() {
   }
   const isExpressionLayout = state.mode === "expression" && !state.editing;
   const isTransitionLayout = state.mode === "transitionViewer";
-  const hasEmptyRightTray = state.mode === "correction" || state.mode === "linker" || state.mode === "linker2";
+  const hasEmptyRightTray = state.mode === "correction" || state.mode === "linker" || state.mode === "linker2" || state.mode === "emotionMap";
   app.innerHTML = `
     <main class="app ${isExpressionLayout ? "expression-layout" : ""} ${isTransitionLayout ? "transition-layout" : ""} ${hasEmptyRightTray ? "empty-right-layout" : ""}">
       <aside class="sidebar">
@@ -627,6 +662,8 @@ function render() {
             ? renderEmotionLinkerPanel()
             : state.mode === "linker2"
             ? renderEmotionLinker2Panel()
+            : state.mode === "emotionMap"
+            ? renderEmotionMapPanel()
             : state.mode === "extraBone"
             ? renderExtraBoneFollowPanel()
             : state.mode === "transitionViewer"
@@ -652,11 +689,12 @@ function render() {
         ${renderEmotionImageOverlayPanel()}
         ${renderMetaImportOverlay()}
         ${renderMotionSlotTitleOverlay()}
+        ${renderEmotionMapOverlay()}
         ${state.mode === "transitionViewer" && state.transitionViewer.trayMode !== "sequence" ? renderTransitionTimelineOverlay() : ""}
       </section>
       ${state.mode === "expression" && !state.editing ? renderEmotionParameterTrayWithSave() : ""}
       ${state.mode === "transitionViewer" ? renderTransitionViewerTray() : ""}
-      ${state.mode === "correction" ? renderCorrectionRightTray() : state.mode === "linker" || state.mode === "linker2" ? renderEmptyRightTray() : ""}
+      ${state.mode === "correction" ? renderCorrectionRightTray() : state.mode === "emotionMap" ? renderEmotionMapRightTray() : state.mode === "linker" || state.mode === "linker2" ? renderEmptyRightTray() : ""}
     </main>
   `;
 
@@ -682,6 +720,88 @@ function attachHeaderMetaButtons() {
 
 function renderEmptyRightTray() {
   return `<aside class="mode-empty-tray" aria-hidden="true"></aside>`;
+}
+
+function renderEmotionMapRightTray() {
+  return `
+    <aside class="mode-empty-tray emotion-map-right-tray">
+      <div class="emotion-map-coordinate-readout">
+        <strong>Picked Coordinate</strong>
+        <div>
+          <span>X</span>
+          <b data-emotion-map-readout-x>${formatSignedNumber(state.emotionMapCursor.x)}</b>
+        </div>
+        <div>
+          <span>Y</span>
+          <b data-emotion-map-readout-y>${state.emotionMapCursor.y.toFixed(2)}</b>
+        </div>
+      </div>
+      <div class="emotion-map-slot-list">
+        ${EMOTION_MAP_POINTS.map((point) => renderEmotionMapTargetSlot(point.index)).join("")}
+      </div>
+    </aside>
+  `;
+}
+
+function renderEmotionMapTargetSlot(index) {
+  const binding = getEmotionMapBinding(index);
+  const selected = state.selectedEmotionMapSlotIndex === index;
+  const label = state.emotionMapLabels[index - 1] ?? "";
+  return `
+    <div class="emotion-map-target-slot ${selected ? "selected" : ""} ${binding ? "bound" : ""}" data-emotion-map-slot="${index}">
+      <span>${index}</span>
+      <strong>${binding ? escapeHtml(binding.name) : "Empty"}</strong>
+      <input type="text" value="${escapeHtml(label)}" placeholder="" data-emotion-map-name="${index}" />
+    </div>
+  `;
+}
+
+function renderEmotionMapPanel() {
+  return `
+    <div class="panel-header">
+      <div class="title-block">
+        <h1>Emotion Map</h1>
+        <p>감정 좌표에 표정 프리셋을 배치합니다</p>
+      </div>
+      <button class="icon-button" id="openFile" title="VRM 열기">${iconSvg(FolderOpen)}</button>
+    </div>
+    ${renderModeBar("emotionMap")}
+    <div class="emotion-map-preset-panel">
+      <div class="emotion-map-preset-head">
+        <strong>Expression Presets</strong>
+        <span>${state.expressionPresets.length}</span>
+      </div>
+      <div class="emotion-map-preset-list">
+        ${state.expressionPresets.map((preset) => renderEmotionMapPresetSlot(preset)).join("")}
+      </div>
+    </div>
+    <div class="correction-footer">
+      <button class="primary-button" id="saveCorrection" ${state.correctionPath && state.correctionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
+    </div>
+  `;
+}
+
+function renderEmotionMapPresetSlot(preset) {
+  const boundSlots = getEmotionMapBoundSlotNumbers(preset.id);
+  const selected = state.selectedExpressionPresetId === preset.id;
+  const ranges = normalizeExpressionRangeSlots(preset.rangeSlots);
+  const selectedRangeId = getEmotionMapPresetRangeSelection(preset);
+  return `
+    <div class="emotion-map-preset-slot ${selected ? "selected" : ""}" data-emotion-map-preset="${escapeHtml(preset.id)}">
+      <span>${escapeHtml(preset.name)}</span>
+      <small>${boundSlots.length ? boundSlots.join(", ") : ""}</small>
+      ${
+        ranges.length
+          ? `<select class="emotion-map-range-select" data-emotion-map-preset-range="${escapeHtml(preset.id)}" title="Preset range">
+              ${ranges
+                .map((range, rangeIndex) => `<option value="${escapeHtml(range.id)}" ${range.id === selectedRangeId ? "selected" : ""}>${rangeIndex + 1}</option>`)
+                .join("")}
+            </select>`
+          : ""
+      }
+      <button class="mini-button" type="button" title="Assign preset" data-emotion-map-bind="${escapeHtml(preset.id)}">&gt;</button>
+    </div>
+  `;
 }
 
 function renderCorrectionRightTray() {
@@ -858,6 +978,422 @@ function renderScreenshotTools() {
       <button class="screenshot-button region ${state.screenshot.selecting ? "active" : ""}" id="toggleScreenshotRegion" title="Set screenshot area">${crossedDriversSvg(22)}</button>
     </div>
   `;
+}
+
+function renderEmotionMapOverlay() {
+  if (state.mode !== "emotionMap") return "";
+  return `
+    <div class="emotion-map-overlay">
+      <div class="emotion-map-overlay-head">
+        <strong>Emotion Map</strong>
+        <span>x -1..1 / y 0..1</span>
+      </div>
+      <div class="emotion-map-plot-placeholder" data-emotion-map-plot>
+        <div class="emotion-map-plot-inner">
+          <div class="emotion-map-axis x"></div>
+          <div class="emotion-map-axis y"></div>
+          ${EMOTION_MAP_POINTS.map((point) => renderEmotionMapPoint(point)).join("")}
+          <div class="emotion-map-cursor-dot" data-emotion-map-cursor-dot style="${emotionMapPointStyle(state.emotionMapCursor)}"></div>
+          <div class="emotion-map-base-dot" title="neutral base"></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderEmotionMapPoint(point) {
+  const bound = Boolean(getEmotionMapBinding(point.index));
+  const selected = state.selectedEmotionMapSlotIndex === point.index;
+  const bottom = point.y <= EMOTION_MAP_Y_MIN + 0.000001;
+  return `
+    <button class="emotion-map-point ${bottom ? "bottom" : ""} ${bound ? "bound" : ""} ${selected ? "selected" : ""}" style="${emotionMapPointStyle(point)}" data-emotion-map-slot="${point.index}" title="${point.index}">
+      <span></span>
+      <b>${point.index}</b>
+    </button>
+  `;
+}
+
+function emotionMapPointStyle(point) {
+  const x = clampNumber(Number(point?.x), -1, 1, 0);
+  const y = clampNumber(Number(point?.y), EMOTION_MAP_Y_MIN, EMOTION_MAP_Y_MAX, 0);
+  const left = ((x + 1) / 2) * 100;
+  const top = (1 - (y - EMOTION_MAP_Y_MIN) / (EMOTION_MAP_Y_MAX - EMOTION_MAP_Y_MIN)) * 100;
+  return `left: ${left}%; top: ${top}%;`;
+}
+
+function handleEmotionMapPlotPointerDown(event) {
+  if (event.target.closest("[data-emotion-map-slot]")) return;
+  if (event.button != null && event.button !== 0) return;
+  event.preventDefault();
+  const plot = event.currentTarget;
+  updateEmotionMapCursorFromPointer(event, plot);
+  plot.setPointerCapture?.(event.pointerId);
+  const onMove = (moveEvent) => {
+    updateEmotionMapCursorFromPointer(moveEvent, plot);
+  };
+  const onUp = (upEvent) => {
+    plot.releasePointerCapture?.(upEvent.pointerId);
+    plot.removeEventListener("pointermove", onMove);
+    plot.removeEventListener("pointerup", onUp);
+    plot.removeEventListener("pointercancel", onUp);
+  };
+  plot.addEventListener("pointermove", onMove);
+  plot.addEventListener("pointerup", onUp);
+  plot.addEventListener("pointercancel", onUp);
+}
+
+function updateEmotionMapCursorFromPointer(event, plot) {
+  const plotInner = plot.querySelector(".emotion-map-plot-inner") ?? plot;
+  const rect = plotInner.getBoundingClientRect();
+  const px = clampNumber((event.clientX - rect.left) / Math.max(rect.width, 1), 0, 1, 0.5);
+  const py = clampNumber((event.clientY - rect.top) / Math.max(rect.height, 1), 0, 1, 0.5);
+  state.emotionMapCursor = {
+    x: Math.round((-1 + px * 2) * 100) / 100,
+    y: Math.round((EMOTION_MAP_Y_MAX - py * (EMOTION_MAP_Y_MAX - EMOTION_MAP_Y_MIN)) * 100) / 100,
+  };
+  applyEmotionMapCursorExpression();
+  syncEmotionMapCursorUi();
+}
+
+function syncEmotionMapCursorUi() {
+  const dot = document.querySelector("[data-emotion-map-cursor-dot]");
+  if (dot) dot.setAttribute("style", emotionMapPointStyle(state.emotionMapCursor));
+  const x = document.querySelector("[data-emotion-map-readout-x]");
+  if (x) x.textContent = formatSignedNumber(state.emotionMapCursor.x);
+  const y = document.querySelector("[data-emotion-map-readout-y]");
+  if (y) y.textContent = state.emotionMapCursor.y.toFixed(2);
+}
+
+function selectEmotionMapSlot(index) {
+  if (!EMOTION_MAP_POINTS.some((point) => point.index === index)) return;
+  state.selectedEmotionMapSlotIndex = index;
+  const point = EMOTION_MAP_POINTS.find((item) => item.index === index);
+  if (point) state.emotionMapCursor = { x: point.x, y: point.y };
+  applyEmotionMapCursorExpression();
+  renderPreservingScrollableUi();
+}
+
+function updateEmotionMapLabel(index, value) {
+  if (!EMOTION_MAP_POINTS.some((point) => point.index === index)) return;
+  state.emotionMapLabels[index - 1] = String(value ?? "");
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+}
+
+function bindPresetToSelectedEmotionMapSlot(presetId) {
+  const index = state.selectedEmotionMapSlotIndex;
+  const preset = state.expressionPresets.find((item) => item.id === presetId);
+  if (!preset || !EMOTION_MAP_POINTS.some((point) => point.index === index)) return;
+  const rangeId = getEmotionMapPresetRangeSelection(preset);
+  const range = normalizeExpressionRangeSlots(preset.rangeSlots).find((item) => item.id === rangeId);
+  state.emotionMapBindings[index - 1] = {
+    presetId: preset.id,
+    name: preset.name,
+    expressionRangeId: range?.id ?? "",
+    expressionRangeName: range ? `range ${formatEmotionValue(range.threshold)}` : "",
+    expressionValue: range ? clampEmotionValue(range.threshold) : 1,
+  };
+  state.correctionDirty = true;
+  renderPreservingScrollableUi();
+}
+
+function updateEmotionMapPresetRangeSelection(presetId, rangeId) {
+  const preset = state.expressionPresets.find((item) => item.id === presetId);
+  if (!preset) return;
+  const range = normalizeExpressionRangeSlots(preset.rangeSlots).find((item) => item.id === rangeId);
+  state.emotionMapPresetRangeSelections[preset.id] = range?.id ?? "";
+  previewEmotionMapPreset(preset.id, range?.id ?? "");
+}
+
+function getEmotionMapBinding(index) {
+  return state.emotionMapBindings[index - 1] ?? null;
+}
+
+function getEmotionMapPresetRangeSelection(preset) {
+  const selectedRangeId = state.emotionMapPresetRangeSelections?.[preset.id] ?? "";
+  const ranges = normalizeExpressionRangeSlots(preset.rangeSlots);
+  if (!ranges.length) return "";
+  if (ranges.some((range) => range.id === selectedRangeId)) return selectedRangeId;
+  return ranges[ranges.length - 1]?.id ?? "";
+}
+
+function getEmotionMapBoundSlotNumbers(presetId) {
+  return state.emotionMapBindings
+    .map((binding, index) => (binding?.presetId === presetId ? index + 1 : null))
+    .filter((index) => index != null);
+}
+
+function previewEmotionMapPreset(presetId, rangeId = null) {
+  const preset = state.expressionPresets.find((item) => item.id === presetId);
+  if (!preset) return;
+  const selectedRangeId = rangeId ?? getEmotionMapPresetRangeSelection(preset);
+  const range = normalizeExpressionRangeSlots(preset.rangeSlots).find((item) => item.id === selectedRangeId);
+  state.selectedExpressionPresetId = preset.id;
+  state.selectedExpressionRangeId = range?.id ?? null;
+  for (const item of state.expressionPresets) {
+    item.value = item.id === preset.id ? (range ? clampEmotionValue(range.threshold) : 1) : 0;
+  }
+  loadSelectedExpressionParameterDraft();
+  transitionToSelectedEmotionPreset(0.2);
+  renderPreservingScrollableUi();
+}
+
+function applyEmotionMapCursorExpression() {
+  const weightedPoints = getEmotionMapBilinearWeights(state.emotionMapCursor)
+    .map((item) => ({
+      ...item,
+      binding: getEmotionMapBinding(item.point.index),
+    }))
+    .filter((item) => item.binding && item.weight > 0);
+  const totalWeight = weightedPoints.reduce((sum, item) => sum + item.weight, 0);
+  if (totalWeight <= 0) {
+    applyRorrParameterValues({}, 1);
+    clearBlushOverlay();
+    clearEmotionMapEmotionImageOverlay();
+    return;
+  }
+  const mixed = {};
+  for (const item of weightedPoints) {
+    const preset = state.expressionPresets.find((candidate) => candidate.id === item.binding.presetId);
+    if (!preset) continue;
+    const value = getEmotionMapBindingExpressionValue(item.binding, preset);
+    const parameters = getExpressionParametersAtValue(preset, value, false, null, true);
+    const normalizedWeight = item.weight / totalWeight;
+    for (const [name, value] of Object.entries(parameters)) {
+      mixed[name] = (mixed[name] ?? 0) + clampEmotionValue(value) * normalizedWeight;
+    }
+  }
+  applyRorrParameterValues(mixed, 1);
+  applyEmotionMapBlushOverlay(weightedPoints, totalWeight);
+  applyEmotionMapEmotionImageOverlay(weightedPoints, totalWeight);
+}
+
+function getEmotionMapBindingExpressionValue(binding, preset) {
+  const range = normalizeExpressionRangeSlots(preset?.rangeSlots).find((item) => item.id === binding?.expressionRangeId);
+  if (range) return clampEmotionValue(range.threshold);
+  return clampEmotionValue(binding?.expressionValue ?? 1);
+}
+
+function applyEmotionMapBlushOverlay(weightedPoints, totalWeight) {
+  const blush = getActiveBlushSettings();
+  if (!currentVrm || !blush?.image) {
+    clearBlushOverlay();
+    return;
+  }
+  let opacity = 0;
+  for (const item of weightedPoints) {
+    const preset = state.expressionPresets.find((candidate) => candidate.id === item.binding.presetId);
+    if (!preset) continue;
+    const value = getEmotionMapBindingExpressionValue(item.binding, preset);
+    opacity += getBlushOpacityAtValue(preset, value) * (item.weight / totalWeight);
+  }
+  if (opacity <= 0.001) {
+    clearBlushOverlay();
+    return;
+  }
+  void ensureBlushOverlay(blush, { requireSelectedPreset: false }).then((ready) => {
+    if (ready) applyBlushOverlaySettings(blush, 1, opacity);
+  });
+}
+
+function applyEmotionMapEmotionImageOverlay(weightedPoints, totalWeight) {
+  const candidates = weightedPoints
+    .map((item) => {
+      const preset = state.expressionPresets.find((candidate) => candidate.id === item.binding.presetId);
+      if (!preset) return null;
+      const value = getEmotionMapBindingExpressionValue(item.binding, preset);
+      const settings = getEmotionImageSettingsForPresetAtValue(preset, item.binding, value);
+      return {
+        preset,
+        settings,
+        weight: item.weight / totalWeight,
+      };
+    })
+    .filter(Boolean);
+  const dominant = candidates
+    .filter((item) => item.settings?.image)
+    .sort((a, b) => b.weight - a.weight)[0];
+  if (!dominant?.settings?.image) {
+    clearEmotionMapEmotionImageOverlay();
+    return;
+  }
+  const imageInfluence = candidates
+    .filter((item) => item.settings?.image === dominant.settings.image)
+    .reduce((sum, item) => sum + item.weight, 0);
+  if (imageInfluence <= 0.001) {
+    clearEmotionMapEmotionImageOverlay();
+    return;
+  }
+  state.emotionMapActiveEmotionImage = {
+    settings: dominant.settings,
+    opacityMultiplier: imageInfluence,
+  };
+  void ensureEmotionImageOverlay(dominant.settings, { requireSelectedPreset: false }).then((ready) => {
+    if (ready) applyEmotionImageOverlaySettings(dominant.settings, imageInfluence);
+  });
+}
+
+function clearEmotionMapEmotionImageOverlay() {
+  state.emotionMapActiveEmotionImage = null;
+  clearEmotionImageOverlay();
+}
+
+function getEmotionImageSettingsForPresetAtValue(preset, binding, value) {
+  if (!preset?.emotionImage) return null;
+  const rangeSlot = normalizeExpressionRangeSlots(preset.rangeSlots).find((slot) => slot.id === binding?.expressionRangeId);
+  if (rangeSlot) {
+    return normalizePresetEmotionImage(rangeSlot.emotionImage, getEmotionImageBaseSettings(preset) ?? preset.emotionImage);
+  }
+  return normalizePresetEmotionImage(preset.emotionImage);
+}
+
+function getEmotionMapBilinearWeights(position) {
+  const x = clampNumber(Number(position?.x), -1, 1, 0);
+  const y = clampNumber(Number(position?.y), EMOTION_MAP_Y_MIN, EMOTION_MAP_Y_MAX, 0);
+  const xBounds = getEmotionMapBounds(x, EMOTION_MAP_X_VALUES);
+  const yBounds = getEmotionMapBounds(y, EMOTION_MAP_Y_VALUES);
+  const tx = xBounds.max === xBounds.min ? 0 : (x - xBounds.min) / (xBounds.max - xBounds.min);
+  const ty = yBounds.max === yBounds.min ? 0 : (y - yBounds.min) / (yBounds.max - yBounds.min);
+  const corners = [
+    { x: xBounds.min, y: yBounds.max, weight: (1 - tx) * ty },
+    { x: xBounds.max, y: yBounds.max, weight: tx * ty },
+    { x: xBounds.min, y: yBounds.min, weight: (1 - tx) * (1 - ty) },
+    { x: xBounds.max, y: yBounds.min, weight: tx * (1 - ty) },
+  ];
+  return corners
+    .map((corner) => ({
+      point: EMOTION_MAP_POINTS.find((point) => point.x === corner.x && point.y === corner.y),
+      weight: corner.weight,
+    }))
+    .filter((item) => item.point);
+}
+
+function getEmotionMapBounds(value, values) {
+  if (value <= values[0]) return { min: values[0], max: values[0] };
+  const last = values[values.length - 1];
+  if (value >= last) return { min: last, max: last };
+  for (let index = 0; index < values.length - 1; index += 1) {
+    if (value >= values[index] && value <= values[index + 1]) {
+      return { min: values[index], max: values[index + 1] };
+    }
+  }
+  return { min: values[0], max: values[0] };
+}
+
+async function loadEmotionMapFromCharacterMeta(vrmPath) {
+  state.emotionMapBindings = Array.from({ length: 20 }, () => null);
+  state.emotionMapLabels = Array.from({ length: 20 }, () => "");
+  state.emotionMapTempPath = null;
+  const metaMap = normalizeEmotionMapConfig(state.correction.emotionMap);
+  if (metaMap.hasData) {
+    state.emotionMapBindings = metaMap.bindings;
+    state.emotionMapLabels = metaMap.labels;
+    return;
+  }
+  const result = await window.vrmFiles.loadEmotionMapTemp?.(vrmPath);
+  if (!result?.data) return;
+  state.emotionMapTempPath = result.filePath;
+  try {
+    const json = JSON.parse(dec.decode(new Uint8Array(result.data)));
+    const normalized = normalizeEmotionMapConfig(json);
+    state.emotionMapBindings = normalized.bindings;
+    state.emotionMapLabels = normalized.labels;
+    state.correction.emotionMap = serializeEmotionMapConfig();
+    state.correctionDirty = true;
+  } catch {
+    state.emotionMapBindings = Array.from({ length: 20 }, () => null);
+    state.emotionMapLabels = Array.from({ length: 20 }, () => "");
+  }
+}
+
+function serializeEmotionMapConfig() {
+  return {
+    schemaVersion: 1,
+    type: "vrm-emotion-map",
+    vrmFileName: state.fileName ?? "",
+    range: {
+      x: [-1, 1],
+      y: [EMOTION_MAP_Y_MIN, EMOTION_MAP_Y_MAX],
+    },
+    points: EMOTION_MAP_POINTS.map((point) => {
+      const binding = getEmotionMapBinding(point.index);
+      return {
+        index: point.index,
+        label: point.label,
+        emotionName: state.emotionMapLabels[point.index - 1] ?? "",
+        x: point.x,
+        y: point.y,
+        expressionPresetId: binding?.presetId ?? "",
+        expressionPresetName: binding?.name ?? "",
+        expressionRangeId: binding?.expressionRangeId ?? "",
+        expressionRangeName: binding?.expressionRangeName ?? "",
+        expressionValue: binding?.expressionValue ?? 1,
+      };
+    }),
+  };
+}
+
+function normalizeEmotionMapConfig(json, presets = state.expressionPresets) {
+  const bindings = Array.from({ length: 20 }, () => null);
+  const labels = Array.from({ length: 20 }, () => "");
+  const sourcePoints = Array.isArray(json?.points) ? json.points : [];
+  let hasData = false;
+  for (const source of sourcePoints) {
+    const index = Number(source?.index);
+    if (!EMOTION_MAP_POINTS.some((point) => point.index === index)) continue;
+    const hasPointData = Boolean(
+      String(source?.emotionName ?? "") ||
+        String(source?.expressionPresetId ?? "") ||
+        String(source?.expressionPresetName ?? ""),
+    );
+    if (hasPointData) hasData = true;
+    labels[index - 1] = String(source?.emotionName ?? "");
+    const preset = findMatchingExpressionPreset(source?.expressionPresetId, source?.expressionPresetName, presets);
+    if (!preset) continue;
+    const range = normalizeExpressionRangeSlots(preset.rangeSlots).find((item) => item.id === source?.expressionRangeId);
+    bindings[index - 1] = {
+      presetId: preset.id,
+      name: preset.name,
+      expressionRangeId: range?.id ?? "",
+      expressionRangeName: range ? `range ${formatEmotionValue(range.threshold)}` : "",
+      expressionValue: range ? clampEmotionValue(range.threshold) : clampEmotionValue(source?.expressionValue ?? 1),
+    };
+  }
+  return { bindings, labels, hasData };
+}
+
+function serializeEmotionMapFromNormalized(normalized, source = {}) {
+  const bindings = Array.isArray(normalized?.bindings) ? normalized.bindings : Array.from({ length: 20 }, () => null);
+  const labels = Array.isArray(normalized?.labels) ? normalized.labels : Array.from({ length: 20 }, () => "");
+  return {
+    schemaVersion: 1,
+    type: "vrm-emotion-map",
+    vrmFileName: String(source?.vrmFileName ?? state.fileName ?? ""),
+    range: {
+      x: [-1, 1],
+      y: [EMOTION_MAP_Y_MIN, EMOTION_MAP_Y_MAX],
+    },
+    points: EMOTION_MAP_POINTS.map((point) => {
+      const binding = bindings[point.index - 1];
+      return {
+        index: point.index,
+        label: point.label,
+        emotionName: labels[point.index - 1] ?? "",
+        x: point.x,
+        y: point.y,
+        expressionPresetId: binding?.presetId ?? "",
+        expressionPresetName: binding?.name ?? "",
+        expressionRangeId: binding?.expressionRangeId ?? "",
+        expressionRangeName: binding?.expressionRangeName ?? "",
+        expressionValue: binding?.expressionValue ?? 1,
+      };
+    }),
+  };
+}
+
+function formatSignedNumber(value) {
+  const number = Number.isFinite(Number(value)) ? Number(value) : 0;
+  return `${number >= 0 ? "+" : ""}${number.toFixed(2)}`;
 }
 
 function renderScreenshotSelectionOverlay() {
@@ -1731,6 +2267,7 @@ function renderModeBar(active) {
   const modes = [
     ["correction", "Motion Correction", SlidersHorizontal],
     ["expression", "Expression Editor", SlidersHorizontal],
+    ["emotionMap", "Emotion Map", GitCompare],
     ["linker", "Emotion Linker", GitCompare],
     ["linker2", "Emotion Linker 2", GitCompare],
     ["extraBone", "Extra Bone Follow Setting", GitCompare],
@@ -2925,11 +3462,11 @@ function bindUi() {
   }
   document.querySelector("#minimizeBlushPanel")?.addEventListener("click", () => {
     state.blushPanelMinimized = true;
-    render();
+    renderPreservingExpressionEditorScrolls();
   });
   document.querySelector("#restoreBlushPanel")?.addEventListener("click", () => {
     state.blushPanelMinimized = false;
-    render();
+    renderPreservingExpressionEditorScrolls();
   });
   document.querySelector("#minimizeEmotionImagePanel")?.addEventListener("click", () => {
     state.emotionImagePanelMinimized = true;
@@ -3394,6 +3931,33 @@ function bindUi() {
   }
 
   document.querySelector("#closeCameraSettings")?.addEventListener("click", () => closeCameraSettings());
+  document.querySelector("[data-emotion-map-plot]")?.addEventListener("pointerdown", handleEmotionMapPlotPointerDown);
+  for (const button of document.querySelectorAll("[data-emotion-map-slot]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectEmotionMapSlot(Number(button.dataset.emotionMapSlot));
+    });
+  }
+  for (const input of document.querySelectorAll("[data-emotion-map-name]")) {
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("input", () => updateEmotionMapLabel(Number(input.dataset.emotionMapName), input.value));
+  }
+  for (const button of document.querySelectorAll("[data-emotion-map-bind]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      bindPresetToSelectedEmotionMapSlot(button.dataset.emotionMapBind);
+    });
+  }
+  for (const select of document.querySelectorAll("[data-emotion-map-preset-range]")) {
+    select.addEventListener("click", (event) => event.stopPropagation());
+    select.addEventListener("change", (event) => {
+      event.stopPropagation();
+      updateEmotionMapPresetRangeSelection(select.dataset.emotionMapPresetRange, select.value);
+    });
+  }
+  for (const slot of document.querySelectorAll("[data-emotion-map-preset]")) {
+    slot.addEventListener("click", () => previewEmotionMapPreset(slot.dataset.emotionMapPreset));
+  }
   document.querySelector("[data-light-intensity]")?.addEventListener("input", (event) => updateLightIntensity(Number(event.target.value)));
   document.querySelector("#toggleBoneGizmo")?.addEventListener("click", () => {
     state.extraBoneGizmoVisible = !state.extraBoneGizmoVisible;
@@ -3658,7 +4222,7 @@ function bindUi() {
     });
   }
 
-  for (const scroller of document.querySelectorAll(".expression-list, .parameter-list, .transfer-panel, .correction-panel, .expression-editor-panel, .emotion-linker-panel, .material-outline-list, .props-list, .props-settings-area, .extra-bone-panel, .transition-viewer-panel, .transition-preview-tray")) {
+  for (const scroller of document.querySelectorAll(".expression-list, .parameter-list, .transfer-panel, .correction-panel, .expression-editor-panel, .emotion-linker-panel, .emotion-map-preset-list, .emotion-map-slot-list, .material-outline-list, .props-list, .props-settings-area, .extra-bone-panel, .transition-viewer-panel, .transition-preview-tray")) {
     bindPanelWheel(scroller, scroller);
   }
 
@@ -3670,6 +4234,8 @@ function bindUi() {
         ? ".correction-panel"
         : state.mode === "linker"
           ? ".emotion-linker-panel"
+          : state.mode === "emotionMap"
+            ? ".emotion-map-preset-list"
           : state.mode === "extraBone"
             ? ".extra-bone-panel"
           : state.mode === "transitionViewer"
@@ -4670,6 +5236,8 @@ function renderPreservingScrollableUi() {
     ".expression-editor-panel",
     ".expression-parameter-tray",
     ".emotion-linker-panel",
+    ".emotion-map-preset-list",
+    ".emotion-map-slot-list",
     ".material-outline-list",
     ".props-list",
     ".props-settings-area",
@@ -4726,25 +5294,29 @@ function updateBlushOverlayForSelected() {
     clearBlushOverlay();
     return;
   }
-  void ensureBlushOverlay(blush).then(() => applyBlushOverlaySettings(blush, selected.value));
+  void ensureBlushOverlay(blush).then((ready) => {
+    if (ready) applyBlushOverlaySettings(blush, selected.value);
+  });
 }
 
-async function ensureBlushOverlay(blush) {
+async function ensureBlushOverlay(blush, options = {}) {
+  const requireSelectedPreset = options.requireSelectedPreset !== false;
   const head = getRawBoneNode("head");
   if (!head) {
     clearBlushOverlay();
-    return;
+    return false;
   }
-  if (blushOverlay?.image === blush.image && blushOverlay.mesh?.parent === head) return;
+  if (blushOverlay?.image === blush.image && blushOverlay.mesh?.parent === head) return true;
   clearBlushOverlay();
+  const requestId = ++blushOverlayRequestId;
   let result;
   try {
     result = await window.vrmFiles.openStoredImage(blush.image);
   } catch {
     clearBlushOverlay();
-    return;
+    return false;
   }
-  if (!result || getActiveBlushSettings()?.image !== blush.image || !isPresetBlushEnabled(getSelectedEmotionPreset())) return;
+  if (requestId !== blushOverlayRequestId || !result || getActiveBlushSettings()?.image !== blush.image || (requireSelectedPreset && !isPresetBlushEnabled(getSelectedEmotionPreset()))) return false;
   const url = URL.createObjectURL(new Blob([new Uint8Array(result.data)], { type: getImageMimeType(result.name) }));
   let texture;
   try {
@@ -4752,7 +5324,12 @@ async function ensureBlushOverlay(blush) {
   } catch {
     URL.revokeObjectURL(url);
     clearBlushOverlay();
-    return;
+    return false;
+  }
+  if (requestId !== blushOverlayRequestId || getActiveBlushSettings()?.image !== blush.image || (requireSelectedPreset && !isPresetBlushEnabled(getSelectedEmotionPreset()))) {
+    texture.dispose?.();
+    URL.revokeObjectURL(url);
+    return false;
   }
   texture.colorSpace = THREE.SRGBColorSpace;
   const imageWidth = texture.image?.width || 1;
@@ -4771,20 +5348,22 @@ async function ensureBlushOverlay(blush) {
   mesh.renderOrder = 999;
   head.add(mesh);
   blushOverlay = { mesh, material, texture, geometry, url, image: blush.image };
+  return true;
 }
 
-function applyBlushOverlaySettings(blush, weight = 1) {
+function applyBlushOverlaySettings(blush, weight = 1, opacityOverride = null) {
   if (!blushOverlay?.mesh || !blushOverlay?.material) return;
   const normalized = normalizeBlushSettings(blush);
   if (!normalized) return;
   blushOverlay.mesh.position.set(0, normalized.y, normalized.z);
   blushOverlay.mesh.rotation.set(0, 0, 0);
   blushOverlay.mesh.scale.setScalar(normalized.scale);
-  blushOverlay.material.opacity = getBlushOpacityAtValue(getSelectedEmotionPreset(), weight);
+  blushOverlay.material.opacity = opacityOverride == null ? getBlushOpacityAtValue(getSelectedEmotionPreset(), weight) : clampEmotionValue(Number(opacityOverride));
   blushOverlay.mesh.visible = blushOverlay.material.opacity > 0.001;
 }
 
 function clearBlushOverlay() {
+  blushOverlayRequestId += 1;
   if (!blushOverlay) return;
   blushOverlay.mesh?.parent?.remove(blushOverlay.mesh);
   blushOverlay.geometry?.dispose?.();
@@ -4801,7 +5380,9 @@ function updateEmotionImageOverlayForSelected() {
     clearEmotionImageOverlay();
     return;
   }
-  void ensureEmotionImageOverlay(settings).then(() => applyEmotionImageOverlaySettings(settings));
+  void ensureEmotionImageOverlay(settings).then((ready) => {
+    if (ready) applyEmotionImageOverlaySettings(settings);
+  });
 }
 
 function ensureEmotionImageTransformControls() {
@@ -4867,17 +5448,19 @@ function updateEmotionImagePositionFromGizmo() {
   markExpressionMetaDirty();
 }
 
-async function ensureEmotionImageOverlay(settings) {
-  if (emotionImageOverlay?.image === settings.image && emotionImageOverlay.group?.parent === scene) return;
+async function ensureEmotionImageOverlay(settings, options = {}) {
+  const requireSelectedPreset = options.requireSelectedPreset !== false;
+  if (emotionImageOverlay?.image === settings.image && emotionImageOverlay.group?.parent === scene) return true;
   clearEmotionImageOverlay();
+  const requestId = ++emotionImageOverlayRequestId;
   let result;
   try {
     result = await window.vrmFiles.openStoredImage(settings.image);
   } catch {
     clearEmotionImageOverlay();
-    return;
+    return false;
   }
-  if (!result || getActiveEmotionImageSettings()?.image !== settings.image || !getSelectedEmotionPreset()?.emotionImage) return;
+  if (requestId !== emotionImageOverlayRequestId || !result || getActiveEmotionImageSettings()?.image !== settings.image || (requireSelectedPreset && !getSelectedEmotionPreset()?.emotionImage)) return false;
   const url = URL.createObjectURL(new Blob([new Uint8Array(result.data)], { type: getImageMimeType(result.name) }));
   let texture;
   try {
@@ -4885,7 +5468,12 @@ async function ensureEmotionImageOverlay(settings) {
   } catch {
     URL.revokeObjectURL(url);
     clearEmotionImageOverlay();
-    return;
+    return false;
+  }
+  if (requestId !== emotionImageOverlayRequestId || getActiveEmotionImageSettings()?.image !== settings.image || (requireSelectedPreset && !getSelectedEmotionPreset()?.emotionImage)) {
+    texture.dispose?.();
+    URL.revokeObjectURL(url);
+    return false;
   }
   texture.colorSpace = THREE.SRGBColorSpace;
   const imageWidth = texture.image?.width || 1;
@@ -4910,16 +5498,17 @@ async function ensureEmotionImageOverlay(settings) {
   scene.add(group);
   emotionImageOverlay = { group, mesh, material, texture, geometry, url, image: settings.image, width, height };
   attachEmotionImageTransformControls();
+  return true;
 }
 
-function applyEmotionImageOverlaySettings(settings) {
+function applyEmotionImageOverlaySettings(settings, opacityMultiplier = 1) {
   if (!emotionImageOverlay?.group || !emotionImageOverlay?.mesh) return;
   const normalized = normalizeEmotionImageSettings(settings);
   if (!normalized) return;
   emotionImageOverlay.group.position.set(normalized.x, normalized.y, normalized.z);
   applyEmotionImagePivotOffset(normalized);
   applyEmotionImageBillboardQuaternion(normalized);
-  applyEmotionImageAnimatedValues(normalized);
+  applyEmotionImageAnimatedValues(normalized, opacityMultiplier);
   emotionImageOverlay.group.visible = true;
   emotionImageOverlay.mesh.visible = true;
   attachEmotionImageTransformControls();
@@ -4927,8 +5516,10 @@ function applyEmotionImageOverlaySettings(settings) {
 
 function updateEmotionImageBillboard() {
   if (!emotionImageOverlay?.group?.visible) return;
-  applyEmotionImageBillboardQuaternion(getActiveEmotionImageSettings());
-  applyEmotionImageAnimatedValues(getActiveEmotionImageSettings());
+  const active = getActiveEmotionImageSettings();
+  const opacityMultiplier = state.mode === "emotionMap" ? (state.emotionMapActiveEmotionImage?.opacityMultiplier ?? 1) : 1;
+  applyEmotionImageBillboardQuaternion(active);
+  applyEmotionImageAnimatedValues(active, opacityMultiplier);
 }
 
 function applyEmotionImageBillboardQuaternion(settings = getActiveEmotionImageSettings()) {
@@ -4985,13 +5576,13 @@ function getEmotionImageAnimationProgress(settings = getActiveEmotionImageSettin
   return clampNumber(state.emotionImageAnimation.elapsed / duration, 0, 1, 1);
 }
 
-function applyEmotionImageAnimatedValues(settings = getActiveEmotionImageSettings()) {
+function applyEmotionImageAnimatedValues(settings = getActiveEmotionImageSettings(), opacityMultiplierOverride = 1) {
   if (!emotionImageOverlay?.group || !emotionImageOverlay?.material || !settings) return;
   const progress = getEmotionImageAnimationProgress(settings);
   const scaleMultiplier = evaluateEmotionImageGraph(settings.scaleGraph, progress, 2);
   const opacityMultiplier = evaluateEmotionImageGraph(settings.opacityGraph, progress, 1);
   emotionImageOverlay.group.scale.setScalar(settings.scale * scaleMultiplier);
-  emotionImageOverlay.material.opacity = clampNumber(settings.opacity * opacityMultiplier, 0, 1, 1);
+  emotionImageOverlay.material.opacity = clampNumber(settings.opacity * opacityMultiplier * opacityMultiplierOverride, 0, 1, 1);
 }
 
 function restoreEmotionImageHeadRotationOffset() {
@@ -5055,6 +5646,7 @@ function evaluateEmotionImageCurve(curve, value) {
 }
 
 function clearEmotionImageOverlay() {
+  emotionImageOverlayRequestId += 1;
   restoreEmotionImageHeadRotationOffset();
   state.emotionImageAnimation = null;
   state.emotionImagePivotPicking = false;
@@ -5213,7 +5805,9 @@ async function importMetaSettings() {
       ? importCorrectionMeta(source)
       : state.mode === "expression"
         ? importExpressionMeta(source)
-        : state.mode === "linker" || state.mode === "transitionViewer"
+        : state.mode === "emotionMap"
+          ? importEmotionMapMeta(source)
+          : state.mode === "linker" || state.mode === "transitionViewer"
           ? importLinkerMeta(source)
           : {
               summary: "현재 모드에는 가져올 캐릭터 meta 설정이 없습니다.",
@@ -5235,6 +5829,44 @@ async function importMetaSettings() {
     syncSaveMetaButton();
   }
   renderPreservingScrollableUi();
+}
+
+function importEmotionMapMeta(source) {
+  const messages = [];
+  const labels = Array.from({ length: 20 }, () => "");
+  const bindings = Array.from({ length: 20 }, () => null);
+  let labelCount = 0;
+  let bindingCount = 0;
+  for (const point of source.emotionMap?.points ?? []) {
+    const index = Number(point?.index);
+    if (!EMOTION_MAP_POINTS.some((item) => item.index === index)) continue;
+    labels[index - 1] = String(point?.emotionName ?? "");
+    if (labels[index - 1]) labelCount += 1;
+    const preset = findMatchingExpressionPreset(point?.expressionPresetId, point?.expressionPresetName);
+    if (point?.expressionPresetId || point?.expressionPresetName) {
+      if (!preset) {
+        messages.push(`${point.expressionPresetName || point.expressionPresetId} 표정 없음`);
+        continue;
+      }
+      const range = normalizeExpressionRangeSlots(preset.rangeSlots).find((item) => item.id === point?.expressionRangeId);
+      bindings[index - 1] = {
+        presetId: preset.id,
+        name: preset.name,
+        expressionRangeId: range?.id ?? "",
+        expressionRangeName: range ? `range ${formatEmotionValue(range.threshold)}` : "",
+        expressionValue: range ? clampEmotionValue(range.threshold) : clampEmotionValue(point?.expressionValue ?? 1),
+      };
+      bindingCount += 1;
+    }
+  }
+  state.emotionMapLabels = labels;
+  state.emotionMapBindings = bindings;
+  state.correction.emotionMap = serializeEmotionMapConfig();
+  return {
+    summary: `${labelCount}개 감정 이름, ${bindingCount}개 감정맵 표정 연결 적용`,
+    messages: [...new Set(messages)],
+    applied: labelCount > 0 || bindingCount > 0,
+  };
 }
 
 function importCorrectionMeta(source) {
@@ -5344,12 +5976,12 @@ function filterImportedExpressionParameters(parameters, parameterIds, messages) 
   return next;
 }
 
-function findMatchingExpressionPreset(id, name) {
+function findMatchingExpressionPreset(id, name, presets = state.expressionPresets) {
   const idText = String(id ?? "");
   const nameText = String(name ?? "");
   return (
-    state.expressionPresets.find((preset) => preset.id === idText) ??
-    state.expressionPresets.find((preset) => preset.name === nameText) ??
+    presets.find((preset) => preset.id === idText) ??
+    presets.find((preset) => preset.name === nameText) ??
     null
   );
 }
@@ -5375,6 +6007,7 @@ async function openFile() {
     state.redoStack = [];
     await loadVrm(bytes);
     await loadOrCreateVrmMeta(result.filePath, result.name);
+    await loadEmotionMapFromCharacterMeta(result.filePath);
     state.selectedPropId = normalizePropSettings(state.correction.props)[0]?.id ?? null;
     applySelectedEmotionPreset();
     await loadSelectedAnimation();
@@ -8052,6 +8685,15 @@ function createEmptyCorrection() {
     },
     blush: null,
     emotionImage: null,
+    emotionMap: {
+      schemaVersion: 1,
+      type: "vrm-emotion-map",
+      range: {
+        x: [-1, 1],
+        y: [EMOTION_MAP_Y_MIN, EMOTION_MAP_Y_MAX],
+      },
+      points: [],
+    },
     expressionPresets: createDefaultEmotionPresets().map(({ id, name, locked, isDisableBlink, rangeSlots, emotionImage }) => ({
       id,
       name,
@@ -8592,6 +9234,7 @@ function normalizeCorrectionJson(json) {
   }
   next.motionSlots = normalizeMotionSlots(json.motionSlots, next.expressionPresets);
   next.props = normalizePropSettings(json.props);
+  next.emotionMap = serializeEmotionMapFromNormalized(normalizeEmotionMapConfig(json.emotionMap, next.expressionPresets), json.emotionMap);
   return next;
 }
 
@@ -9005,6 +9648,9 @@ function getActiveBlushSettings() {
 }
 
 function getActiveEmotionImageSettings() {
+  if (state.mode === "emotionMap" && state.emotionMapActiveEmotionImage?.settings) {
+    return normalizePresetEmotionImage(state.emotionMapActiveEmotionImage.settings);
+  }
   return getSelectedEmotionImageSettingsForEdit();
 }
 
@@ -9166,6 +9812,7 @@ function serializeCorrection() {
   next.materialSettings = normalizeMaterialSettings(state.correction.materialSettings);
   next.motionSlots = normalizeMotionSlots(state.correction.motionSlots);
   next.props = normalizePropSettings(state.correction.props);
+  next.emotionMap = serializeEmotionMapConfig();
   next.expressionPresets = normalizeExpressionPresets(state.expressionPresets).map((preset) => {
     const blush = normalizePresetBlush(preset.blush);
     const rangeSlots = normalizeExpressionRangeSlots(preset.rangeSlots).map((slot) =>
@@ -10110,6 +10757,7 @@ function formatModeName(value) {
   if (value === "transfer") return "Shape Transfer";
   if (value === "correction") return "Motion Correction";
   if (value === "expression") return "Expression Editor";
+  if (value === "emotionMap") return "Emotion Map";
   if (value === "linker") return "Emotion Linker";
   if (value === "linker2") return "Emotion Linker 2";
   if (value === "extraBone") return "Extra Bone Follow";

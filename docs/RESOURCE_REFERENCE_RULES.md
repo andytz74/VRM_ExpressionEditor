@@ -1,5 +1,7 @@
 # VRM Companion Resource Reference Rules
 
+Updated: 2026-08-27
+
 이 문서는 VRM Expression Editor에서 제작한 캐릭터 리소스 묶음을 프론트/익스텐션 런타임에 전달할 때의 폴더 구조와 참조 규칙을 정의한다.
 
 ## 1. 전달 단위
@@ -56,6 +58,7 @@ models/CharacterName.vrm.meta
 - Material outline color / width
 - Props 설정
 - Emotion Linker 2 motion slot 설정
+- Emotion Map 설정
 
 ### 애니메이션 폴더
 
@@ -253,6 +256,81 @@ img/imgSurp.svg
 
 Emotion Image는 표정마다 독립 설정이다. Blush처럼 캐릭터 공통 설정으로 공유하지 않는다.
 
+Emotion Image는 단순 표시뿐 아니라 간단한 1초 기준 애니메이션 그래프를 가질 수 있다.
+
+확장 필드:
+
+```json
+{
+  "emotionImage": {
+    "image": "imgSurp.svg",
+    "x": 0,
+    "y": 1.5,
+    "z": 0,
+    "rotation": 0,
+    "scale": 0.4,
+    "opacity": 1,
+    "pivotX": 0.5,
+    "pivotY": 0.5,
+    "animationDuration": 1,
+    "loop": false,
+    "scaleGraph": [
+      { "time": 0, "value": 1, "curve": "linear" },
+      { "time": 1, "value": 1, "curve": "linear" }
+    ],
+    "opacityGraph": [
+      { "time": 0, "value": 1, "curve": "linear" },
+      { "time": 1, "value": 1, "curve": "linear" }
+    ],
+    "headRotationAxes": {
+      "x": false,
+      "y": false,
+      "z": false
+    },
+    "headRotationGraph": {
+      "x": [
+        { "time": 0, "value": 0, "curve": "linear" },
+        { "time": 1, "value": 0, "curve": "linear" }
+      ],
+      "y": [
+        { "time": 0, "value": 0, "curve": "linear" },
+        { "time": 1, "value": 0, "curve": "linear" }
+      ],
+      "z": [
+        { "time": 0, "value": 0, "curve": "linear" },
+        { "time": 1, "value": 0, "curve": "linear" }
+      ]
+    }
+  }
+}
+```
+
+필드 의미:
+
+- `x`, `y`, `z`: 감정 이미지 plane의 위치.
+- `rotation`: 카메라를 바라보는 billboard plane의 화면 기준 회전각, degree 기준.
+- `scale`: 기본 스케일.
+- `opacity`: 기본 투명도.
+- `pivotX`, `pivotY`: 스케일 피벗. 이미지 UV 기준 `0~1` 값이다.
+- `animationDuration`: 그래프를 재생하는 시간, 초 단위.
+- `loop`: true면 그래프 애니메이션을 반복한다.
+- `scaleGraph`: 시간에 따른 scale 배율 그래프. `value`는 기본 scale에 곱해진다.
+- `opacityGraph`: 시간에 따른 opacity 배율 그래프. `value`는 기본 opacity에 곱해진다.
+- `headRotationAxes`: 감정 이미지 재생 중 head bone에 보조 회전을 적용할 축 선택값.
+- `headRotationGraph`: head bone local rotation offset 그래프. `value`는 degree 기준이며 권장 범위는 `-10~10`이다.
+
+`curve` 값은 아래 문자열 중 하나를 사용한다.
+
+```text
+linear
+easeOut
+easeIn
+easeInOut
+step
+```
+
+표정에 감정 이미지가 없으면 런타임은 해당 감정 이미지 opacity를 `0`으로 취급해야 한다. 이전 표정에서 표시하던 감정 이미지가 다음 표정에 남아 있으면 안 된다.
+
 ## 6. Props 참조 규칙
 
 캐릭터 메타의 props 항목은 `props/` 폴더 기준 GLB 파일명을 참조한다.
@@ -297,6 +375,21 @@ props/OBJ_cheerBoard.glb
 
 프랍 파일 자체는 캐릭터 메타 안에 들어가지 않는다. 메타에는 참조값과 배치값만 들어간다.
 
+애니메이션별로 사용할 prop은 각 animation entry의 `props` 배열에 prop `id`를 기록해서 연결한다.
+
+```json
+{
+  "animations": {
+    "cheerBoard.vrma": {
+      "props": ["prop-..."]
+    }
+  }
+}
+```
+
+런타임은 현재 재생 중인 애니메이션 entry의 `props` 배열에 포함된 prop만 표시한다.
+포함되지 않은 prop은 숨기는 것을 기본 규칙으로 한다.
+
 ## 7. Expression Preset 참조 규칙
 
 표정 프리셋은 캐릭터 메타의 `expressionPresets` 배열에 저장된다.
@@ -329,13 +422,22 @@ props/OBJ_cheerBoard.glb
     {
       "id": "range-...",
       "threshold": 0.5,
-      "parameters": {}
+      "parameters": {},
+      "blushOpacity": 0.5,
+      "emotionImage": {}
     }
   ]
 }
 ```
 
 런타임은 표정 강도값이 들어오면 main preset과 range slot 사이를 보간해서 최종 parameter 값을 만든다.
+
+구간별로 홍조와 감정 이미지도 별도 값을 가질 수 있다.
+
+- `blushOpacity`: 해당 구간에서 사용할 홍조 투명도.
+- `emotionImage`: 해당 구간에서 사용할 감정 이미지 설정.
+
+구간이 지정된 표정을 호출할 때는 `expressionRangeId`를 우선 사용한다. `expressionRangeId`가 없으면 `expressionValue`를 기준으로 보간한다.
 
 ## 8. Emotion Linker 2 참조 규칙
 
@@ -368,6 +470,34 @@ Emotion Linker 2의 motion slot은 캐릭터 메타의 `motionSlots`에 저장�
 - `expressionTimeline`은 애니메이션 진행 시간별 표정 전환 정보다.
 
 `expressionTimeline` 안의 표정도 `expressionPresetId`를 우선 사용한다.
+
+`expressionTimeline` 예:
+
+```json
+{
+  "expressionTimeline": [
+    {
+      "id": "timeline-...",
+      "time": 1.2,
+      "expressionPresetId": "emotion-0",
+      "expressionPresetName": "Neutral0",
+      "expressionRangeId": "range-...",
+      "expressionValue": 0.5,
+      "transitionSeconds": 0.2
+    }
+  ]
+}
+```
+
+필드 의미:
+
+- `time`: 애니메이션 시작 후 표정 전환이 발생하는 시간, 초 단위.
+- `expressionPresetId`: 적용할 표정 프리셋 id.
+- `expressionRangeId`: 구간 프리셋을 직접 지정할 때 사용한다.
+- `expressionValue`: 구간 id가 없을 때 표정 강도값으로 사용한다.
+- `transitionSeconds`: 이 지점에 도달했을 때 표정이 전환되는 시간이다.
+
+`motionSlots`는 Emotion Linker 2와 Transition Viewer에서 같이 사용할 수 있는 동작 프리셋이다. 프론트/익스텐션이 특정 동작을 호출할 때는 가능하면 `animationFile`과 `expressionPresetId`를 따로 조합하기보다 `motionSlots[].id` 또는 `motionSlots[].title`을 기준으로 호출하는 구조가 관리에 유리하다.
 
 ## 9. Material Outline 참조 규칙
 
@@ -422,7 +552,101 @@ Extra Bone Follow Setting은 외부 파일을 참조하지 않는다.
 
 런타임에서 본을 찾지 못하면 해당 setting만 무시한다.
 
-## 11. 런타임 로딩 순서
+## 11. Emotion Map 참조 규칙
+
+Emotion Map은 캐릭터 메타의 `emotionMap` 필드에 저장된다.
+
+Emotion Map은 감정 엔진이 만든 좌표값을 표정 프리셋으로 변환하기 위한 매핑 테이블이다.
+
+현재 좌표 범위:
+
+```text
+x: -1 ~ 1
+y: 0 ~ 1
+```
+
+현재 포인트 배치:
+
+```text
+x: -1, -0.5, 0, 0.5, 1
+y: 0, 0.33, 0.66, 1
+```
+
+포인트 번호는 좌상단부터 우하단까지 row-major 순서로 매긴다.
+
+```text
+1   2   3   4   5
+6   7   8   9   10
+11  12  13  14  15
+16  17  18  19  20
+```
+
+예:
+
+```json
+{
+  "emotionMap": {
+    "schemaVersion": 1,
+    "type": "vrm-emotion-map",
+    "range": {
+      "x": [-1, 1],
+      "y": [0, 1]
+    },
+    "points": [
+      {
+        "index": 18,
+        "label": "무표정 / 기본",
+        "emotionName": "Neutral",
+        "x": 0,
+        "y": 0,
+        "expressionPresetId": "emotion-0",
+        "expressionPresetName": "Neutral0",
+        "expressionRangeId": "",
+        "expressionRangeName": "",
+        "expressionValue": 1
+      }
+    ]
+  }
+}
+```
+
+필드 의미:
+
+- `index`: 1~20 포인트 번호.
+- `label`: 툴 내부 기준 라벨. 런타임 필수값은 아니다.
+- `emotionName`: 사용자가 직접 입력한 감정 이름. 프론트 UI 표시나 로그에 사용할 수 있다.
+- `x`, `y`: 감정맵 좌표.
+- `expressionPresetId`: 해당 포인트에 연결된 표정 프리셋 id.
+- `expressionPresetName`: fallback 또는 표시용 표정 이름.
+- `expressionRangeId`: 해당 표정의 특정 구간을 직접 연결할 때 사용한다.
+- `expressionValue`: 구간 id가 없을 때 사용할 표정 강도값이다.
+
+런타임 적용 규칙:
+
+1. 감정 엔진에서 좌표 `x`, `y`를 받는다.
+2. 좌표 주변의 Emotion Map 포인트를 찾는다.
+3. 일반적으로 주변 4개 포인트의 가중치를 bilinear 방식으로 계산한다.
+4. 바인딩된 포인트만 사용한다.
+5. 바인딩된 포인트의 가중치를 다시 정규화한다.
+6. 각 포인트의 `expressionPresetId`와 `expressionRangeId` 또는 `expressionValue`로 표정 파라미터를 계산한다.
+7. 계산된 표정 파라미터를 가중 평균해서 최종 표정을 만든다.
+
+정확히 포인트 위에 있는 좌표라면 해당 포인트 하나만 적용해도 된다.
+
+Emotion Map에서 Blush 처리:
+
+- 각 포인트의 표정 프리셋에서 홍조 opacity를 얻는다.
+- 주변 포인트 가중치로 홍조 opacity를 보간한다.
+- 홍조가 없는 표정은 opacity `0`으로 취급한다.
+
+Emotion Map에서 Emotion Image 처리:
+
+- Emotion Image는 이미지 파일 자체가 표정마다 다를 수 있으므로 여러 이미지를 동시에 단순 보간하지 않는다.
+- 현재 권장 구현은 가중치가 가장 큰 포인트의 Emotion Image를 대표 이미지로 선택하는 방식이다.
+- 같은 이미지가 여러 포인트에 걸려 있으면 해당 포인트들의 가중치를 합산해서 opacity multiplier로 사용할 수 있다.
+- Emotion Image가 없는 표정은 opacity `0`으로 취급하고, 이전 이미지가 남지 않게 숨긴다.
+
+## 12. 런타임 로딩 순서
 
 권장 로딩 순서:
 
@@ -435,10 +659,11 @@ Extra Bone Follow Setting은 외부 파일을 참조하지 않는다.
 6. animations.meta 또는 motionSlots를 기준으로 필요한 VRMA 로드
 7. VRM에 material outline 설정 적용
 8. Extra Bone Follow / Motion Correction / Props / Overlay 초기화
-9. isFirst 애니메이션 또는 지정된 motion slot 재생
+9. Emotion Map 초기화
+10. isFirst 애니메이션 또는 지정된 motion slot 재생
 ```
 
-## 12. 누락 파일 처리 규칙
+## 13. 누락 파일 처리 규칙
 
 런타임은 리소스 누락이 있어도 전체 캐릭터 로딩을 중단하지 않는 것을 권장한다.
 
@@ -454,6 +679,7 @@ props GLB 파일 없음      -> 해당 prop만 비활성
 material 없음            -> 해당 outline 설정만 무시
 bone 없음                -> 해당 correction/follow/prop attach만 무시
 parameter 없음           -> 해당 expression parameter만 무시
+emotionMap point 없음    -> 해당 포인트만 미바인딩으로 취급
 ```
 
 프론트 로그에는 어떤 참조가 실패했는지 파일명 또는 필드명을 남긴다.
@@ -466,9 +692,10 @@ Missing prop: props/OBJ_cheerBoard.glb
 Missing animation: animations/a0_1.vrma
 Missing expression parameter: Fcl_MTH_A
 Missing bone: J_Sec_L_Sleeve
+Missing emotion map preset: emotion-0
 ```
 
-## 13. 적용 우선순위
+## 14. 적용 우선순위
 
 프레임 단위 적용 순서는 아래를 권장한다.
 
@@ -477,7 +704,7 @@ Missing bone: J_Sec_L_Sleeve
 2. Motion Correction
 3. Extra Bone Follow Setting
 4. Props transform update
-5. Expression Preset / Emotion Link Timeline
+5. Expression Preset / Emotion Link Timeline / Emotion Map
 6. Blink / Lip sync 등 임시 override
 7. Blush / Emotion Image overlay update
 8. Render
@@ -494,7 +721,7 @@ Missing bone: J_Sec_L_Sleeve
 -> 자동 blink, 단 isDisableBlink이면 제외
 ```
 
-## 14. 전달 체크리스트
+## 15. 전달 체크리스트
 
 프론트/익스텐션에 전달하기 전에 아래를 확인한다.
 
@@ -505,7 +732,8 @@ Missing bone: J_Sec_L_Sleeve
 [ ] 캐릭터 메타의 image 값이 img 폴더의 실제 파일명과 일치한다.
 [ ] 캐릭터 메타의 props file 값이 props 폴더의 실제 파일명과 일치한다.
 [ ] expressionPresetId가 실제 expressionPresets 안의 id와 일치한다.
+[ ] emotionMap points의 expressionPresetId가 실제 expressionPresets 안의 id와 일치한다.
+[ ] emotionMap points의 expressionRangeId가 해당 expression preset의 rangeSlots 안에 존재한다.
 [ ] outline material 이름이 현재 VRM material 이름과 일치한다.
 [ ] extraBoneFollowSettings의 targetBone/sourceBone/tailDirectionBone을 런타임에서 찾을 수 있다.
 ```
-
