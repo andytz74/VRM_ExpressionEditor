@@ -1,0 +1,314 @@
+{
+  "schemaVersion": 1,
+  "type": "vrm-emotion-linker2-meta",
+  "motionSlots": [
+    {
+      "id": "motion-slot-1787273330073-1",
+      "title": "A0_1 대기",
+      "animationFile": "a0_1.vrma",
+      "expressionPresetId": "emotion-1785207956456-10",
+      "expressionPresetName": "mapNeutral+1",
+      "loop": true,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787559097930-7",
+      "title": "A0_3 대기",
+      "animationFile": "a0_3.vrma",
+      "expressionPresetId": "emotion-1785207956456-10",
+      "expressionPresetName": "mapNeutral+1",
+      "loop": true,
+      "transitionSeconds": 0.4,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787558646989-6",
+      "title": "A0_2 대기",
+      "animationFile": "a0_2.vrma",
+      "expressionPresetId": "emotion-1785207957925-11",
+      "expressionPresetName": "Neutral-1",
+      "loop": true,
+      "transitionSeconds": 0.5,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787532670118-5",
+      "title": "A0_4 대기 - 각성",
+      "animationFile": "a0_standSlantedL.vrma",
+      "expressionPresetId": "emotion-1787559476067-38",
+      "expressionPresetName": "Awake",
+      "loop": true,
+      "transitionSeconds": 0.1,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787559401696-7",
+      "title": "A1 집중",
+      "animationFile": "a1.vrma",
+      "expressionPresetId": "emotion-1",
+      "expressionPresetName": "Focus",
+      "loop": true,
+      "transitionSeconds": 0.3,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787559440854-8",
+      "title": "A2 긴장",
+      "animationFile": "a2.vrma",
+      "expressionPresetId": "emotion-2",
+      "expressionPresetName": "Tension",
+      "loop": true,
+      "transitionSeconds": 0.3,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787559572713-9",
+      "title": "A3 좋았어!",
+      "animationFile": "a3.vrma",
+      "expressionPresetId": "emotion-4",
+      "expressionPresetName": "Joy",
+      "loop": false,
+      "transitionSeconds": 0.1,
+      "expressionTimeline": [
+        {
+          "id": "motion-point-1788234167850-0",
+          "time": 1.2,
+          "expressionPresetId": "emotion-4",
+          "expressionPresetName": "Joy",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.1
+        },
+        {
+          "id": "motion-point-1788234174818-1",
+          "time": 2.1,
+          "expressionPresetId": "emotion-4",
+          "expressionPresetName": "Joy",
+          "expressionRangeId": "range-1785148625618-1",
+          "expressionValue": 0.4,
+          "transitionSeconds": 0.4
+        }
+      ]
+    },
+    {
+      "id": "motion-slot-1787561456897-11",
+      "title": "A4 작은박수",
+      "animationFile": "a4.vrma",
+      "expressionPresetId": "emotion-1785724085823-15",
+      "expressionPresetName": "gpt smile",
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": [
+        {
+          "id": "motion-point-1788234249012-0",
+          "time": 1.9,
+          "expressionPresetId": "emotion-1785724085823-15",
+          "expressionPresetName": "gpt smile",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        },
+        {
+          "id": "motion-point-1788234251705-1",
+          "time": 3.3,
+          "expressionPresetId": "emotion-1787789093101-56",
+          "expressionPresetName": "mapWarm",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.5
+        }
+      ]
+    },
+    {
+      "id": "motion-slot-1787561532993-12",
+      "title": "대기",
+      "animationFile": "a0_standSlantedL.vrma",
+      "expressionPresetId": "emotion-1785207956456-10",
+      "expressionPresetName": "mapNeutral+1",
+      "loop": false,
+      "transitionSeconds": 0.4,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787559589231-10",
+      "title": "A5 안심",
+      "animationFile": "a5.vrma",
+      "expressionPresetId": "emotion-5",
+      "expressionPresetName": "Relief",
+      "loop": false,
+      "transitionSeconds": 0.4,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787273299377-0",
+      "title": "놀람",
+      "animationFile": "a6.vrma",
+      "expressionPresetId": "emotion-1787462525809-37",
+      "expressionPresetName": "Surprise 2",
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787563361482-13",
+      "title": "A0_2 대기",
+      "animationFile": "a0_2.vrma",
+      "expressionPresetId": "emotion-1785898910069-21",
+      "expressionPresetName": "mapDisappoint",
+      "loop": true,
+      "transitionSeconds": 0.3,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787564480385-15",
+      "title": "A0_1 대기",
+      "animationFile": "a0_1.vrma",
+      "expressionPresetId": "emotion-0",
+      "expressionPresetName": "Neutral0",
+      "loop": true,
+      "transitionSeconds": 0.5,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787564405448-14",
+      "title": "SA0 소셜인사",
+      "animationFile": "SA0.vrma",
+      "expressionPresetId": "emotion-1785723926871-14",
+      "expressionPresetName": "mapJoy",
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787564539747-16",
+      "title": "SA1 듣는중",
+      "animationFile": "SA1.vrma",
+      "expressionPresetId": "emotion-1786617942344-31",
+      "expressionPresetName": "s1_listening",
+      "loop": false,
+      "transitionSeconds": 0.3,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787531469308-4",
+      "title": "생각중",
+      "animationFile": "SA2.vrma",
+      "expressionPresetId": "emotion-1785899474355-22",
+      "expressionPresetName": "gpt thinking",
+      "loop": true,
+      "transitionSeconds": 0.3,
+      "expressionTimeline": [
+        {
+          "id": "motion-point-1787533481445-0",
+          "time": 2.5,
+          "expressionPresetId": "emotion-1785899474355-22",
+          "expressionPresetName": "gpt thinking",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        }
+      ]
+    },
+    {
+      "id": "motion-slot-1787564893667-17",
+      "title": "SA5 끄덕임",
+      "animationFile": "SA5.vrma",
+      "expressionPresetId": "emotion-7",
+      "expressionPresetName": "Warm Smile",
+      "loop": true,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787531338223-3",
+      "title": "응원판",
+      "animationFile": "cheerBoard.vrma",
+      "expressionPresetId": "emotion-1785723926871-14",
+      "expressionPresetName": "mapJoy",
+      "loop": false,
+      "transitionSeconds": 0.1,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787564992033-18",
+      "title": "SA3 박수",
+      "animationFile": "SA3.vrma",
+      "expressionPresetId": "emotion-1786618997455-33",
+      "expressionPresetName": "s4_playful",
+      "loop": false,
+      "transitionSeconds": 0.1,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787565139128-19",
+      "title": "A0_3 대기",
+      "animationFile": "a0_3.vrma",
+      "expressionPresetId": "emotion-2",
+      "expressionPresetName": "Tension",
+      "loop": true,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787565188655-20",
+      "title": "etc 화남",
+      "animationFile": "a0_2.vrma",
+      "expressionPresetId": "emotion-1785743089433-16",
+      "expressionPresetName": "Angry",
+      "loop": true,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787565265486-21",
+      "title": "A0_2 대기",
+      "animationFile": "a0_2.vrma",
+      "expressionPresetId": "emotion-1785897820564-19",
+      "expressionPresetName": "gpt surprize",
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787565347073-22",
+      "title": "A0_3",
+      "animationFile": "a0_3.vrma",
+      "expressionPresetId": "emotion-1785724085823-15",
+      "expressionPresetName": "gpt smile",
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787565385274-23",
+      "title": "A0_3 대기",
+      "animationFile": "a0_3.vrma",
+      "expressionPresetId": "emotion-1785723926871-14",
+      "expressionPresetName": "mapJoy",
+      "loop": true,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787565413101-24",
+      "title": "SA6 파이팅",
+      "animationFile": "SA6.vrma",
+      "expressionPresetId": "emotion-1786619400843-35",
+      "expressionPresetName": "s6_encourage",
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787566035066-25",
+      "title": "대기",
+      "animationFile": "a0_standSlantedL.vrma",
+      "expressionPresetId": "emotion-1785207956456-10",
+      "expressionPresetName": "mapNeutral+1",
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    }
+  ]
+}

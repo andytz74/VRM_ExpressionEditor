@@ -142,6 +142,10 @@ const state = {
   selectedExpressionRangeId: null,
   decayPreviewSeconds: {},
   linkerTransitionSeconds: 0.2,
+  emotionLinker: createEmptyEmotionLinkerMeta(),
+  emotionLinker2: createEmptyEmotionLinker2Meta(),
+  emotionLinkerPath: null,
+  emotionLinker2Path: null,
   activeLinkTimeline: null,
   selectedMotionSlotId: null,
   emotionMapCursor: { x: 0, y: 0 },
@@ -2281,10 +2285,10 @@ function renderModeBar(active) {
     ["correction", "Motion Correction", SlidersHorizontal],
     ["expression", "Expression Editor", SlidersHorizontal],
     ["emotionMap", "Emotion Map", GitCompare],
-    ["linker", "Emotion Linker", GitCompare],
-    ["linker2", "Emotion Linker 2", GitCompare],
     ["extraBone", "Extra Bone Follow Setting", GitCompare],
-    ["transitionViewer", "Transition Viewer", GitCompare],
+    ["linker", "Emotion Linker (view only)", GitCompare],
+    ["linker2", "Emotion Linker 2 (view only)", GitCompare],
+    ["transitionViewer", "Transition Viewer (view only)", GitCompare],
   ];
   return `
     <div class="mode-bar">
@@ -2715,7 +2719,7 @@ function renderEmotionLinkerPanel() {
   return `
     <div class="panel-header">
       <div class="title-block">
-        <h1>Emotion Linker</h1>
+        <h1>Emotion Linker (view only)</h1>
         <p>${state.correctionPath ? escapeHtml(fileNameFromPath(state.correctionPath)) : "VRM을 열면 연결 정보를 meta에 저장합니다"}</p>
       </div>
       <button class="icon-button" id="openFile" title="VRM 열기">${iconSvg(FolderOpen)}</button>
@@ -2735,12 +2739,12 @@ function renderEmotionLinkerPanel() {
 }
 
 function renderEmotionLinker2Panel() {
-  const slots = normalizeMotionSlots(state.correction.motionSlots);
-  state.correction.motionSlots = slots;
+  const slots = normalizeMotionSlots(state.emotionLinker2.motionSlots);
+  state.emotionLinker2.motionSlots = slots;
   return `
     <div class="panel-header">
       <div class="title-block">
-        <h1>Emotion Linker 2</h1>
+        <h1>Emotion Linker 2 (view only)</h1>
         <p>${state.correctionPath ? escapeHtml(fileNameFromPath(state.correctionPath)) : "모션 슬롯을 만들어 애니메이션과 표정을 연결합니다"}</p>
       </div>
       <button class="icon-button" id="openFile" title="VRM 열기">${iconSvg(FolderOpen)}</button>
@@ -2872,7 +2876,7 @@ function renderMotionSlotTimelineSlot(slotId, slot, index, duration) {
 
 function renderEmotionLinkerCard(animationName) {
   const catalogEntry = state.animationCatalog?.[animationName] ?? {};
-  const metaEntry = getAnimationMetaEntry(animationName);
+  const metaEntry = getEmotionLinkerEntry(animationName);
   const presetId = metaEntry.expressionPresetId ?? "";
   const linkedPreset = state.expressionPresets.find((preset) => preset.id === presetId);
   const hasDecayControls = normalizeExpressionRangeSlots(linkedPreset?.rangeSlots).length > 0;
@@ -3093,7 +3097,7 @@ function renderTransitionViewerPanel() {
   return `
     <div class="panel-header">
       <div class="title-block">
-        <h1>Transition Viewer</h1>
+        <h1>Transition Viewer (view only)</h1>
         <p>Idle, transition pose, event 전환을 확인합니다</p>
       </div>
       <button class="icon-button" id="openFile" title="VRM 열기">${iconSvg(FolderOpen)}</button>
@@ -5803,8 +5807,10 @@ async function importMetaSettings() {
   const result = await window.vrmFiles.openMeta();
   if (!result) return;
   let source;
+  let rawSource;
   try {
-    source = normalizeCorrectionJson(JSON.parse(dec.decode(new Uint8Array(result.data))));
+    rawSource = JSON.parse(dec.decode(new Uint8Array(result.data)));
+    source = normalizeCorrectionJson(rawSource);
   } catch (error) {
     state.metaImportReport = {
       title: "Import failed",
@@ -5824,7 +5830,7 @@ async function importMetaSettings() {
         : state.mode === "emotionMap"
           ? importEmotionMapMeta(source)
           : state.mode === "linker" || state.mode === "transitionViewer"
-          ? importLinkerMeta(source)
+          ? importLinkerMeta(normalizeEmotionLinkerMeta(rawSource, state.expressionPresets))
           : {
               summary: "현재 모드에는 가져올 캐릭터 meta 설정이 없습니다.",
               messages: [],
@@ -5929,7 +5935,7 @@ function importLinkerMeta(source) {
       messages.push(`${fileName} 없음`);
       continue;
     }
-    const targetEntry = ensureAnimationMetaEntry(fileName);
+    const targetEntry = ensureEmotionLinkerEntry(fileName);
     if (!targetEntry) {
       messages.push(`${fileName} 없음`);
       continue;
@@ -6600,7 +6606,7 @@ async function playTransitionViewerStep(fileName, loop, transitionSeconds, optio
 }
 
 function applyTransitionViewerLinkedExpression(fileName) {
-  const entry = getAnimationMetaEntry(fileName);
+  const entry = getEmotionLinkerEntry(fileName);
   state.expressionDecay = null;
   startActiveLinkTimeline(fileName);
   const active = state.activeLinkTimeline;
@@ -6755,7 +6761,7 @@ function updateSelectedAnimationDescription(value) {
 }
 
 function updateAnimationExpressionLink(animationName, presetId) {
-  const entry = ensureAnimationMetaEntry(animationName);
+  const entry = ensureEmotionLinkerEntry(animationName);
   if (!entry) return;
   const preset = state.expressionPresets.find((item) => item.id === presetId);
   if (preset) {
@@ -7140,9 +7146,9 @@ function clearPropOverlay() {
 }
 
 function addMotionSlot() {
-  state.correction.motionSlots = normalizeMotionSlots(state.correction.motionSlots);
-  const id = `motion-slot-${Date.now()}-${state.correction.motionSlots.length}`;
-  state.correction.motionSlots.push({
+  state.emotionLinker2.motionSlots = normalizeMotionSlots(state.emotionLinker2.motionSlots);
+  const id = `motion-slot-${Date.now()}-${state.emotionLinker2.motionSlots.length}`;
+  state.emotionLinker2.motionSlots.push({
     id,
     title: "input title",
     animationFile: "",
@@ -7157,7 +7163,7 @@ function addMotionSlot() {
 }
 
 function updateMotionSlot(slotId, patch) {
-  state.correction.motionSlots = normalizeMotionSlots(state.correction.motionSlots).map((slot) =>
+  state.emotionLinker2.motionSlots = normalizeMotionSlots(state.emotionLinker2.motionSlots).map((slot) =>
     slot.id === slotId ? normalizeMotionSlot({ ...slot, ...patch }) : slot,
   );
   state.selectedMotionSlotId = slotId;
@@ -7173,7 +7179,7 @@ function beginMotionSlotTitleEdit(slotId, title) {
 function updateMotionSlotTitle(slotId, title) {
   state.editingMotionSlotTitleId = slotId;
   state.editingMotionSlotTitleValue = title;
-  state.correction.motionSlots = normalizeMotionSlots(state.correction.motionSlots).map((slot) =>
+  state.emotionLinker2.motionSlots = normalizeMotionSlots(state.emotionLinker2.motionSlots).map((slot) =>
     slot.id === slotId ? normalizeMotionSlot({ ...slot, title }) : slot,
   );
   state.selectedMotionSlotId = slotId;
@@ -7208,29 +7214,29 @@ function nudgeMotionSlotTransition(slotId, direction) {
 
 function deleteMotionSlot(slotId) {
   if (!window.confirm("이 모션 슬롯을 삭제할까요?")) return;
-  state.correction.motionSlots = normalizeMotionSlots(state.correction.motionSlots).filter((slot) => slot.id !== slotId);
-  if (state.selectedMotionSlotId === slotId) state.selectedMotionSlotId = state.correction.motionSlots[0]?.id ?? null;
+  state.emotionLinker2.motionSlots = normalizeMotionSlots(state.emotionLinker2.motionSlots).filter((slot) => slot.id !== slotId);
+  if (state.selectedMotionSlotId === slotId) state.selectedMotionSlotId = state.emotionLinker2.motionSlots[0]?.id ?? null;
   markCorrectionDirtyAndRenderLinker2();
 }
 
 function moveMotionSlot(slotId, direction) {
-  const slots = normalizeMotionSlots(state.correction.motionSlots);
+  const slots = normalizeMotionSlots(state.emotionLinker2.motionSlots);
   const fromIndex = slots.findIndex((slot) => slot.id === slotId);
   const toIndex = fromIndex + Math.sign(direction);
   if (fromIndex < 0 || toIndex < 0 || toIndex >= slots.length) return;
   const [slot] = slots.splice(fromIndex, 1);
   slots.splice(toIndex, 0, slot);
-  state.correction.motionSlots = slots;
+  state.emotionLinker2.motionSlots = slots;
   state.selectedMotionSlotId = slotId;
   markCorrectionDirtyAndRenderLinker2();
 }
 
 function getMotionSlot(slotId) {
-  return normalizeMotionSlots(state.correction.motionSlots).find((slot) => slot.id === slotId) ?? null;
+  return normalizeMotionSlots(state.emotionLinker2.motionSlots).find((slot) => slot.id === slotId) ?? null;
 }
 
 function setMotionSlotTimeline(slotId, timeline) {
-  state.correction.motionSlots = normalizeMotionSlots(state.correction.motionSlots).map((slot) =>
+  state.emotionLinker2.motionSlots = normalizeMotionSlots(state.emotionLinker2.motionSlots).map((slot) =>
     slot.id === slotId ? normalizeMotionSlot({ ...slot, expressionTimeline: normalizeExpressionTimeline(timeline) }) : slot,
   );
   state.selectedMotionSlotId = slotId;
@@ -7408,11 +7414,11 @@ function nudgeAnimationDecaySeconds(animationName, direction) {
 }
 
 function getEmotionLinkTimeline(animationName) {
-  return normalizeExpressionTimeline(getAnimationMetaEntry(animationName).expressionTimeline);
+  return normalizeExpressionTimeline(getEmotionLinkerEntry(animationName).expressionTimeline);
 }
 
 function setEmotionLinkTimeline(animationName, timeline) {
-  const entry = ensureAnimationMetaEntry(animationName);
+  const entry = ensureEmotionLinkerEntry(animationName);
   if (!entry) return;
   const normalized = normalizeExpressionTimeline(timeline);
   if (normalized.length) entry.expressionTimeline = normalized;
@@ -7422,7 +7428,7 @@ function setEmotionLinkTimeline(animationName, timeline) {
 }
 
 function addEmotionLinkTimelineSlot(animationName) {
-  const entry = ensureAnimationMetaEntry(animationName);
+  const entry = ensureEmotionLinkerEntry(animationName);
   if (!entry) return;
   const timeline = getEmotionLinkTimeline(animationName);
   const duration = getAnimationDuration(animationName, 2);
@@ -7562,7 +7568,7 @@ async function playLinkedAnimation(animationName, options = {}) {
   if (!animationName) return;
   const scroller = document.querySelector(".emotion-linker-panel");
   const scrollTop = scroller?.scrollTop ?? 0;
-  const entry = ensureAnimationMetaEntry(animationName);
+  const entry = ensureEmotionLinkerEntry(animationName);
   if (!entry) return;
   state.selectedAnimationName = animationName;
   const transition = await loadSelectedAnimation({ preserveCurrentAction: true });
@@ -8721,6 +8727,22 @@ function createEmptyCorrection() {
   };
 }
 
+function createEmptyEmotionLinkerMeta() {
+  return {
+    schemaVersion: 1,
+    type: "vrm-emotion-linker-meta",
+    animations: {},
+  };
+}
+
+function createEmptyEmotionLinker2Meta() {
+  return {
+    schemaVersion: 1,
+    type: "vrm-emotion-linker2-meta",
+    motionSlots: [],
+  };
+}
+
 function createEmptyBoneCorrection() {
   return {
     positionOffset: [0, 0, 0],
@@ -8770,7 +8792,7 @@ function formatAnimationOptionLabel(animationName) {
 
 function getTransitionLinkerAnimationNames(kind) {
   const names = getAnimationNames().filter((name) => {
-    const entry = getAnimationMetaEntry(name);
+    const entry = getEmotionLinkerEntry(name);
     return Boolean(entry.expressionPresetId || state.animationCatalog?.[name]?.description);
   });
   const filtered = names.filter((name) => isAnimationRecommendedForTransitionKind(kind, name));
@@ -8780,7 +8802,7 @@ function getTransitionLinkerAnimationNames(kind) {
 function formatTransitionLinkerOptionLabel(animationName) {
   if (!animationName) return "";
   const catalogEntry = state.animationCatalog?.[animationName] ?? {};
-  const metaEntry = getAnimationMetaEntry(animationName);
+  const metaEntry = getEmotionLinkerEntry(animationName);
   const preset = state.expressionPresets.find((item) => item.id === metaEntry.expressionPresetId);
   const title = String(catalogEntry.description ?? "").trim() || getAnimationDisplayName(animationName);
   return preset ? `${title} / ${preset.name}` : title;
@@ -8807,6 +8829,14 @@ function getAnimationMetaEntry(animationName) {
   const next = normalizeAnimationCorrectionEntry(entry ?? {});
   next.loop = Boolean(state.animationCatalog?.[animationName]?.loop);
   next.lookAtCamera = Boolean(state.animationCatalog?.[animationName]?.lookAtCamera);
+  return next;
+}
+
+function getEmotionLinkerEntry(animationName) {
+  if (!animationName) return {};
+  const entry = state.emotionLinker.animations?.[animationName];
+  const next = normalizeAnimationLinkEntry(entry ?? {});
+  next.loop = Boolean(state.animationCatalog?.[animationName]?.loop);
   return next;
 }
 
@@ -8947,6 +8977,12 @@ function ensureAnimationMetaEntry(animationName) {
     state.correction.animations[animationName].loop = Boolean(state.animationCatalog[animationName].loop);
   }
   return state.correction.animations[animationName];
+}
+
+function ensureEmotionLinkerEntry(animationName) {
+  if (!animationName) return null;
+  state.emotionLinker.animations[animationName] = normalizeAnimationLinkEntry(state.emotionLinker.animations[animationName] ?? {});
+  return state.emotionLinker.animations[animationName];
 }
 
 function getSelectedAnimationCorrections() {
@@ -9133,12 +9169,18 @@ async function saveCorrection() {
   const payload = JSON.stringify(serializeCorrection(), null, 2);
   const result = await window.vrmFiles.saveMeta(state.correctionPath, payload);
   if (!result) return;
+  await saveEmotionLinkerMetas();
   await saveEditorConfig();
   state.correctionPath = result.filePath;
   state.correctionDirty = false;
   state.expressionDirty = false;
   syncSaveMetaButton();
   renderPreservingScrollableUi();
+}
+
+async function saveEmotionLinkerMetas() {
+  await window.vrmFiles.saveEmotionLinkerMeta?.("linker", JSON.stringify(serializeEmotionLinkerMeta(), null, 2));
+  await window.vrmFiles.saveEmotionLinkerMeta?.("linker2", JSON.stringify(serializeEmotionLinker2Meta(), null, 2));
 }
 
 async function loadOrCreateVrmMeta(vrmPath, vrmName) {
@@ -9165,13 +9207,67 @@ async function loadOrCreateVrmMeta(vrmPath, vrmName) {
   state.correction.vrm.version ||= detectVrmVersion(state.document?.json);
   state.expressionPresets = normalizeExpressionPresets(state.correction.expressionPresets);
   state.selectedExpressionPresetId = state.expressionPresets[0]?.id ?? null;
+  const migratedLinkerMeta = await loadEmotionLinkerMetas(rawMeta);
   loadSelectedExpressionParameterDraft();
   state.correctionPath = result.filePath;
-  state.correctionDirty = false;
+  state.correctionDirty = Boolean(migratedLinkerMeta);
   state.expressionDirty = false;
   const names = getAnimationNames();
   state.selectedAnimationName = getDefaultAnimationName() ?? (names.includes(state.selectedAnimationName) ? state.selectedAnimationName : (names[0] ?? null));
   applyMaterialOutlineSettings();
+}
+
+async function loadEmotionLinkerMetas(characterMeta = {}) {
+  let migrated = false;
+  const fallbackLinker = createEmptyEmotionLinkerMeta();
+  fallbackLinker.animations = {};
+  for (const [animationName, animation] of Object.entries(characterMeta.animations ?? {})) {
+    const fileName = fileNameFromPath(animationName);
+    if (!fileName) continue;
+    const entry = normalizeAnimationLinkEntry(animation, state.expressionPresets);
+    if (entry.expressionPresetId || entry.expressionPresetName || entry.expressionTimeline?.length) {
+      fallbackLinker.animations[fileName] = entry;
+      migrated = true;
+    }
+  }
+
+  const fallbackLinker2 = createEmptyEmotionLinker2Meta();
+  fallbackLinker2.motionSlots = normalizeMotionSlots(characterMeta.motionSlots, state.expressionPresets);
+  if (fallbackLinker2.motionSlots.length) migrated = true;
+
+  state.emotionLinker = fallbackLinker;
+  state.emotionLinker2 = fallbackLinker2;
+  state.emotionLinkerPath = null;
+  state.emotionLinker2Path = null;
+
+  const linkerResult = await window.vrmFiles.loadOrCreateEmotionLinkerMeta?.("linker", JSON.stringify(fallbackLinker, null, 2));
+  if (linkerResult?.data) {
+    state.emotionLinkerPath = linkerResult.filePath;
+    state.emotionLinker = normalizeEmotionLinkerMeta(parseJsonBuffer(linkerResult.data, fallbackLinker), state.expressionPresets);
+    if (!Object.keys(state.emotionLinker.animations).length && Object.keys(fallbackLinker.animations).length) {
+      state.emotionLinker = normalizeEmotionLinkerMeta(fallbackLinker, state.expressionPresets);
+      await window.vrmFiles.saveEmotionLinkerMeta?.("linker", JSON.stringify(state.emotionLinker, null, 2));
+    }
+  }
+
+  const linker2Result = await window.vrmFiles.loadOrCreateEmotionLinkerMeta?.("linker2", JSON.stringify(fallbackLinker2, null, 2));
+  if (linker2Result?.data) {
+    state.emotionLinker2Path = linker2Result.filePath;
+    state.emotionLinker2 = normalizeEmotionLinker2Meta(parseJsonBuffer(linker2Result.data, fallbackLinker2), state.expressionPresets);
+    if (!state.emotionLinker2.motionSlots.length && fallbackLinker2.motionSlots.length) {
+      state.emotionLinker2 = normalizeEmotionLinker2Meta(fallbackLinker2, state.expressionPresets);
+      await window.vrmFiles.saveEmotionLinkerMeta?.("linker2", JSON.stringify(state.emotionLinker2, null, 2));
+    }
+  }
+  return migrated;
+}
+
+function parseJsonBuffer(data, fallback) {
+  try {
+    return JSON.parse(dec.decode(new Uint8Array(data)));
+  } catch {
+    return fallback;
+  }
 }
 
 async function refreshAnimationCatalog() {
@@ -9248,9 +9344,46 @@ function normalizeCorrectionJson(json) {
       emotionImage: preset.emotionImage ? normalizePresetEmotionImage(preset.emotionImage, next.emotionImage) : null,
     }));
   }
-  next.motionSlots = normalizeMotionSlots(json.motionSlots, next.expressionPresets);
+  delete next.motionSlots;
   next.props = normalizePropSettings(json.props);
   next.emotionMap = serializeEmotionMapFromNormalized(normalizeEmotionMapConfig(json.emotionMap, next.expressionPresets), json.emotionMap);
+  return next;
+}
+
+function normalizeEmotionLinkerMeta(json, presets = state.expressionPresets) {
+  const next = createEmptyEmotionLinkerMeta();
+  next.schemaVersion = Number(json?.schemaVersion) || 1;
+  const animations = json?.animations && typeof json.animations === "object" ? json.animations : {};
+  for (const [animationName, animation] of Object.entries(animations)) {
+    const fileName = fileNameFromPath(animationName);
+    if (!fileName) continue;
+    const entry = normalizeAnimationLinkEntry(animation, presets);
+    if (entry.expressionPresetId || entry.expressionPresetName || entry.expressionTimeline?.length) {
+      next.animations[fileName] = entry;
+    }
+  }
+  return next;
+}
+
+function normalizeEmotionLinker2Meta(json, presets = state.expressionPresets) {
+  const next = createEmptyEmotionLinker2Meta();
+  next.schemaVersion = Number(json?.schemaVersion) || 1;
+  next.motionSlots = normalizeMotionSlots(json?.motionSlots, presets);
+  return next;
+}
+
+function normalizeAnimationLinkEntry(animation, presets = state.expressionPresets) {
+  const preset =
+    presets?.find?.((item) => item.id === animation?.expressionPresetId) ??
+    presets?.find?.((item) => item.name === animation?.expressionPresetName);
+  const next = {
+    expressionPresetId: preset?.id ?? String(animation?.expressionPresetId ?? ""),
+    expressionPresetName: preset?.name ?? String(animation?.expressionPresetName ?? ""),
+    expressionTimeline: normalizeExpressionTimeline(animation?.expressionTimeline),
+  };
+  if (!next.expressionPresetId) delete next.expressionPresetId;
+  if (!next.expressionPresetName) delete next.expressionPresetName;
+  if (!next.expressionTimeline.length) delete next.expressionTimeline;
   return next;
 }
 
@@ -9755,9 +9888,6 @@ function normalizeVrmVersion(value) {
 function normalizeAnimationCorrectionEntry(animation) {
   const next = {
     loop: Boolean(animation?.loop),
-    expressionPresetId: String(animation?.expressionPresetId ?? ""),
-    expressionPresetName: String(animation?.expressionPresetName ?? ""),
-    expressionTimeline: normalizeExpressionTimeline(animation?.expressionTimeline),
     props: normalizeStringList(animation?.props),
     corrections: {},
   };
@@ -9766,9 +9896,6 @@ function normalizeAnimationCorrectionEntry(animation) {
     next.corrections[boneName] = normalizeBoneCorrection(correction);
     pruneCorrectionObject(next.corrections, boneName);
   }
-  if (!next.expressionPresetId) delete next.expressionPresetId;
-  if (!next.expressionPresetName) delete next.expressionPresetName;
-  if (!next.expressionTimeline.length) delete next.expressionTimeline;
   if (!next.props.length) delete next.props;
   return next;
 }
@@ -9826,7 +9953,7 @@ function serializeCorrection() {
   next.emotionImage = null;
   next.extraBoneFollowSettings = normalizeExtraBoneFollowSettings(state.correction.extraBoneFollowSettings);
   next.materialSettings = normalizeMaterialSettings(state.correction.materialSettings);
-  next.motionSlots = normalizeMotionSlots(state.correction.motionSlots);
+  next.motionSlots = [];
   next.props = normalizePropSettings(state.correction.props);
   next.emotionMap = serializeEmotionMapConfig();
   next.expressionPresets = normalizeExpressionPresets(state.expressionPresets).map((preset) => {
@@ -9843,6 +9970,58 @@ function serializeCorrection() {
       rangeSlots,
       blush,
       emotionImage: preset.emotionImage,
+    };
+  });
+  return next;
+}
+
+function serializeEmotionLinkerMeta() {
+  const next = normalizeEmotionLinkerMeta(state.emotionLinker, state.expressionPresets);
+  for (const animation of Object.values(next.animations)) {
+    const preset = findMatchingExpressionPreset(animation.expressionPresetId, animation.expressionPresetName);
+    if (preset) {
+      animation.expressionPresetId = preset.id;
+      animation.expressionPresetName = preset.name;
+    }
+    if (Array.isArray(animation.expressionTimeline)) {
+      animation.expressionTimeline = animation.expressionTimeline.map((slot) => {
+        const preset = findMatchingExpressionPreset(slot.expressionPresetId, slot.expressionPresetName);
+        if (!preset) return slot;
+        const rangeSlot = normalizeExpressionRangeSlots(preset.rangeSlots).find((item) => item.id === slot.expressionRangeId);
+        return {
+          ...slot,
+          expressionPresetId: preset.id,
+          expressionPresetName: preset.name,
+          expressionRangeId: rangeSlot?.id ?? "",
+          expressionValue: rangeSlot ? clampEmotionValue(rangeSlot.threshold) : clampEmotionValue(slot.expressionValue ?? 1),
+        };
+      });
+    }
+  }
+  return next;
+}
+
+function serializeEmotionLinker2Meta() {
+  const next = normalizeEmotionLinker2Meta(state.emotionLinker2, state.expressionPresets);
+  next.motionSlots = next.motionSlots.map((slot) => {
+    const preset = findMatchingExpressionPreset(slot.expressionPresetId, slot.expressionPresetName);
+    const timeline = normalizeExpressionTimeline(slot.expressionTimeline).map((point) => {
+      const pointPreset = findMatchingExpressionPreset(point.expressionPresetId, point.expressionPresetName);
+      if (!pointPreset) return point;
+      const rangeSlot = normalizeExpressionRangeSlots(pointPreset.rangeSlots).find((item) => item.id === point.expressionRangeId);
+      return {
+        ...point,
+        expressionPresetId: pointPreset.id,
+        expressionPresetName: pointPreset.name,
+        expressionRangeId: rangeSlot?.id ?? "",
+        expressionValue: rangeSlot ? clampEmotionValue(rangeSlot.threshold) : clampEmotionValue(point.expressionValue ?? 1),
+      };
+    });
+    return {
+      ...slot,
+      expressionPresetId: preset?.id ?? slot.expressionPresetId,
+      expressionPresetName: preset?.name ?? slot.expressionPresetName,
+      expressionTimeline: timeline,
     };
   });
   return next;
@@ -10774,10 +10953,10 @@ function formatModeName(value) {
   if (value === "correction") return "Motion Correction";
   if (value === "expression") return "Expression Editor";
   if (value === "emotionMap") return "Emotion Map";
-  if (value === "linker") return "Emotion Linker";
-  if (value === "linker2") return "Emotion Linker 2";
+  if (value === "linker") return "Emotion Linker (view only)";
+  if (value === "linker2") return "Emotion Linker 2 (view only)";
   if (value === "extraBone") return "Extra Bone Follow";
-  if (value === "transitionViewer") return "Transition Viewer";
+  if (value === "transitionViewer") return "Transition Viewer (view only)";
   return "Viewer";
 }
 

@@ -1,0 +1,159 @@
+{
+  "schemaVersion": 1,
+  "type": "vrm-emotion-linker-meta",
+  "animations": {
+    "a0_1.vrma": {
+      "expressionPresetId": "emotion-0",
+      "expressionPresetName": "Neutral0"
+    },
+    "a0_2.vrma": {
+      "expressionPresetId": "emotion-0",
+      "expressionPresetName": "Neutral0"
+    },
+    "a0.vrma": {
+      "expressionPresetId": "emotion-0",
+      "expressionPresetName": "Neutral0"
+    },
+    "a0_3.vrma": {
+      "expressionPresetId": "emotion-0",
+      "expressionPresetName": "Neutral0"
+    },
+    "a0_standSlantedL.vrma": {
+      "expressionPresetId": "emotion-0",
+      "expressionPresetName": "Neutral0"
+    },
+    "a1.vrma": {
+      "expressionPresetId": "emotion-1",
+      "expressionPresetName": "Focus"
+    },
+    "a2.vrma": {
+      "expressionPresetId": "emotion-2",
+      "expressionPresetName": "Tension"
+    },
+    "a3_1.vrma": {
+      "expressionPresetId": "emotion-4",
+      "expressionPresetName": "Joy"
+    },
+    "a3.vrma": {
+      "expressionPresetId": "emotion-1785210628762-12",
+      "expressionPresetName": "s3_happy"
+    },
+    "a4.vrma": {
+      "expressionPresetId": "emotion-1785723926871-14",
+      "expressionPresetName": "mapJoy"
+    },
+    "a5.vrma": {
+      "expressionPresetId": "emotion-5",
+      "expressionPresetName": "Relief"
+    },
+    "a6.vrma": {
+      "expressionPresetId": "emotion-3",
+      "expressionPresetName": "Surprise",
+      "expressionTimeline": [
+        {
+          "id": "link-point-1787363523769-0",
+          "time": 0,
+          "expressionPresetId": "emotion-3",
+          "expressionPresetName": "Surprise",
+          "expressionRangeId": "range-1785384920834-3",
+          "expressionValue": 0.76,
+          "transitionSeconds": 0.2
+        },
+        {
+          "id": "link-point-1787364549198-2",
+          "time": 0.8,
+          "expressionPresetId": "emotion-3",
+          "expressionPresetName": "Surprise",
+          "expressionRangeId": "range-1785384816742-0",
+          "expressionValue": 0.25,
+          "transitionSeconds": 0.2
+        }
+      ]
+    },
+    "SA0.vrma": {
+      "expressionPresetId": "emotion-1785723926871-14",
+      "expressionPresetName": "mapJoy"
+    },
+    "SA1.vrma": {
+      "expressionPresetId": "emotion-1",
+      "expressionPresetName": "Focus"
+    },
+    "SA2.vrma": {
+      "expressionPresetId": "emotion-1785899474355-22",
+      "expressionPresetName": "gpt thinking"
+    },
+    "VRMA_twoHandsUp.vrma": {
+      "expressionTimeline": [
+        {
+          "id": "link-point-1786410808922-0",
+          "time": 0,
+          "expressionPresetId": "emotion-1785890145709-18",
+          "expressionPresetName": "smile before",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        },
+        {
+          "id": "link-point-1786410850804-2",
+          "time": 1,
+          "expressionPresetId": "emotion-4",
+          "expressionPresetName": "Joy",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        },
+        {
+          "id": "link-point-1786410849373-1",
+          "time": 2.5,
+          "expressionPresetId": "emotion-4",
+          "expressionPresetName": "Joy",
+          "expressionRangeId": "range-1785148900349-3",
+          "expressionValue": 0.8,
+          "transitionSeconds": 0.6
+        },
+        {
+          "id": "link-point-1786410852957-3",
+          "time": 4.2,
+          "expressionPresetId": "emotion-4",
+          "expressionPresetName": "Joy",
+          "expressionRangeId": "range-1785148483545-0",
+          "expressionValue": 0,
+          "transitionSeconds": 0.3
+        }
+      ]
+    },
+    "VRMA_hello.vrma": {
+      "expressionPresetId": "emotion-1785210628762-12",
+      "expressionPresetName": "s3_happy",
+      "expressionTimeline": [
+        {
+          "id": "link-point-1786411044604-0",
+          "time": 0,
+          "expressionPresetId": "emotion-1785210628762-12",
+          "expressionPresetName": "s3_happy",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        },
+        {
+          "id": "link-point-1786411047109-1",
+          "time": 2.2,
+          "expressionPresetId": "emotion-4",
+          "expressionPresetName": "Joy",
+          "expressionRangeId": "range-1785148483545-0",
+          "expressionValue": 0,
+          "transitionSeconds": 0.5
+        },
+        {
+          "id": "link-point-1786411048503-2",
+          "time": 3.3,
+          "expressionPresetId": "emotion-1785723926871-14",
+          "expressionPresetName": "mapJoy",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.3
+        }
+      ]
+    }
+  }
+}

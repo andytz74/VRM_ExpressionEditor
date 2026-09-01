@@ -60,6 +60,15 @@ function emotionMapDir() {
   return path.join(__dirname, "..", "emotionMap");
 }
 
+function emotionLinkerDir() {
+  return path.join(__dirname, "..", "emotionLinker");
+}
+
+function emotionLinkerMetaPath(kind) {
+  const fileName = kind === "linker2" ? "emotion-linker2.meta" : "emotion-linker.meta";
+  return path.join(emotionLinkerDir(), fileName);
+}
+
 function emotionMapTempPath(vrmPath) {
   const baseName = path.basename(String(vrmPath ?? ""), path.extname(String(vrmPath ?? ""))) || "character";
   return path.join(emotionMapDir(), `${baseName}.emotionMap.temp.json`);
@@ -556,6 +565,26 @@ ipcMain.handle("emotionMap:loadTemp", async (_event, vrmPath) => {
 ipcMain.handle("emotionMap:saveTemp", async (_event, vrmPath, data) => {
   await fs.mkdir(emotionMapDir(), { recursive: true });
   const filePath = emotionMapTempPath(vrmPath);
+  await fs.writeFile(filePath, data, "utf8");
+  return { filePath, name: path.basename(filePath) };
+});
+
+ipcMain.handle("emotionLinker:loadOrCreate", async (_event, kind, data) => {
+  await fs.mkdir(emotionLinkerDir(), { recursive: true });
+  const filePath = emotionLinkerMetaPath(kind);
+  try {
+    const existing = await fs.readFile(filePath);
+    return { filePath, name: path.basename(filePath), data: existing, created: false };
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    await fs.writeFile(filePath, data, "utf8");
+    return { filePath, name: path.basename(filePath), data: Buffer.from(data, "utf8"), created: true };
+  }
+});
+
+ipcMain.handle("emotionLinker:save", async (_event, kind, data) => {
+  await fs.mkdir(emotionLinkerDir(), { recursive: true });
+  const filePath = emotionLinkerMetaPath(kind);
   await fs.writeFile(filePath, data, "utf8");
   return { filePath, name: path.basename(filePath) };
 });

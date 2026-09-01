@@ -17,6 +17,10 @@ animations/
   animations.meta
   *.vrma
 
+emotionLinker/
+  emotion-linker.meta
+  emotion-linker2.meta
+
 img/
   *.png
   *.svg
@@ -57,8 +61,9 @@ models/CharacterName.vrm.meta
 - Extra Bone Follow Setting
 - Material outline color / width
 - Props 설정
-- Emotion Linker 2 motion slot 설정
 - Emotion Map 설정
+
+Emotion Linker 관련 조합 정보는 캐릭터 메타에 넣지 않는다. 별도의 `emotionLinker/` 메타파일을 사용한다.
 
 ### 애니메이션 폴더
 
@@ -439,14 +444,48 @@ props/OBJ_cheerBoard.glb
 
 구간이 지정된 표정을 호출할 때는 `expressionRangeId`를 우선 사용한다. `expressionRangeId`가 없으면 `expressionValue`를 기준으로 보간한다.
 
-## 8. Emotion Linker 2 참조 규칙
+## 8. Emotion Linker 참조 규칙
 
-Emotion Linker 2의 motion slot은 캐릭터 메타의 `motionSlots`에 저장된다.
+Emotion Linker 계열의 정보는 캐릭터 메타와 분리해서 저장한다.
+
+```text
+emotionLinker/
+  emotion-linker.meta
+  emotion-linker2.meta
+```
+
+이 파일들은 표정의 실제 파라미터 값을 저장하지 않는다. 항상 캐릭터 메타의 `expressionPresets[].id`를 참조한다.
+
+### emotion-linker.meta
+
+기존 Emotion Linker의 애니메이션별 표정 연결과 타임라인을 저장한다.
 
 예:
 
 ```json
 {
+  "schemaVersion": 1,
+  "type": "vrm-emotion-linker-meta",
+  "animations": {
+    "a0_1.vrma": {
+      "expressionPresetId": "emotion-0",
+      "expressionPresetName": "Neutral0",
+      "expressionTimeline": []
+    }
+  }
+}
+```
+
+### emotion-linker2.meta
+
+Emotion Linker 2의 motion slot을 저장한다.
+
+예:
+
+```json
+{
+  "schemaVersion": 1,
+  "type": "vrm-emotion-linker2-meta",
   "motionSlots": [
     {
       "id": "motion-slot-...",
@@ -468,6 +507,7 @@ Emotion Linker 2의 motion slot은 캐릭터 메타의 `motionSlots`에 저장�
 - `expressionPresetId`는 같은 캐릭터 메타의 `expressionPresets[].id`를 참조한다.
 - `transitionSeconds`는 이 motion slot을 시작할 때 애니메이션과 표정 전환에 사용하는 시간이다.
 - `expressionTimeline`은 애니메이션 진행 시간별 표정 전환 정보다.
+- 캐릭터가 바뀌어도 같은 `expressionPresetId`가 유지되면 같은 Emotion Linker 메타를 재사용할 수 있다.
 
 `expressionTimeline` 안의 표정도 `expressionPresetId`를 우선 사용한다.
 
@@ -654,13 +694,15 @@ Emotion Map에서 Emotion Image 처리:
 1. VRM 파일 로드
 2. 같은 캐릭터의 .vrm.meta 로드
 3. animations/animations.meta 로드
-4. .vrm.meta의 참조값을 기준으로 필요한 img 리소스 로드
-5. .vrm.meta의 props 항목을 기준으로 필요한 props GLB 로드
-6. animations.meta 또는 motionSlots를 기준으로 필요한 VRMA 로드
-7. VRM에 material outline 설정 적용
-8. Extra Bone Follow / Motion Correction / Props / Overlay 초기화
-9. Emotion Map 초기화
-10. isFirst 애니메이션 또는 지정된 motion slot 재생
+4. emotionLinker/emotion-linker.meta 로드
+5. emotionLinker/emotion-linker2.meta 로드
+6. .vrm.meta의 참조값을 기준으로 필요한 img 리소스 로드
+7. .vrm.meta의 props 항목을 기준으로 필요한 props GLB 로드
+8. animations.meta 또는 emotion-linker2.meta의 motionSlots를 기준으로 필요한 VRMA 로드
+9. VRM에 material outline 설정 적용
+10. Extra Bone Follow / Motion Correction / Props / Overlay 초기화
+11. Emotion Map 초기화
+12. isFirst 애니메이션 또는 지정된 motion slot 재생
 ```
 
 ## 13. 누락 파일 처리 규칙
@@ -680,6 +722,7 @@ material 없음            -> 해당 outline 설정만 무시
 bone 없음                -> 해당 correction/follow/prop attach만 무시
 parameter 없음           -> 해당 expression parameter만 무시
 emotionMap point 없음    -> 해당 포인트만 미바인딩으로 취급
+emotion-linker meta 없음 -> 동작-표정 연결 프리셋 없이 기본 애니메이션만 사용
 ```
 
 프론트 로그에는 어떤 참조가 실패했는지 파일명 또는 필드명을 남긴다.
