@@ -146,6 +146,7 @@ const state = {
   selectedMotionSlotId: null,
   emotionMapCursor: { x: 0, y: 0 },
   selectedEmotionMapSlotIndex: 1,
+  emotionMapTransitionSeconds: 0.3,
   emotionMapBindings: Array.from({ length: 20 }, () => null),
   emotionMapLabels: Array.from({ length: 20 }, () => ""),
   emotionMapPresetRangeSelections: {},
@@ -983,19 +984,25 @@ function renderScreenshotTools() {
 function renderEmotionMapOverlay() {
   if (state.mode !== "emotionMap") return "";
   return `
-    <div class="emotion-map-overlay">
-      <div class="emotion-map-overlay-head">
-        <strong>Emotion Map</strong>
-        <span>x -1..1 / y 0..1</span>
-      </div>
-      <div class="emotion-map-plot-placeholder" data-emotion-map-plot>
-        <div class="emotion-map-plot-inner">
-          <div class="emotion-map-axis x"></div>
-          <div class="emotion-map-axis y"></div>
-          ${EMOTION_MAP_POINTS.map((point) => renderEmotionMapPoint(point)).join("")}
-          <div class="emotion-map-cursor-dot" data-emotion-map-cursor-dot style="${emotionMapPointStyle(state.emotionMapCursor)}"></div>
-          <div class="emotion-map-base-dot" title="neutral base"></div>
+    <div class="emotion-map-overlay-wrap">
+      <div class="emotion-map-overlay">
+        <div class="emotion-map-overlay-head">
+          <strong>Emotion Map</strong>
+          <span>x -1..1 / y 0..1</span>
         </div>
+        <div class="emotion-map-plot-placeholder" data-emotion-map-plot>
+          <div class="emotion-map-plot-inner">
+            <div class="emotion-map-axis x"></div>
+            <div class="emotion-map-axis y"></div>
+            ${EMOTION_MAP_POINTS.map((point) => renderEmotionMapPoint(point)).join("")}
+            <div class="emotion-map-cursor-dot" data-emotion-map-cursor-dot style="${emotionMapPointStyle(state.emotionMapCursor)}"></div>
+            <div class="emotion-map-base-dot" title="neutral base"></div>
+          </div>
+        </div>
+      </div>
+      <div class="emotion-map-transition-control" title="Emotion map transition seconds">
+        <input type="range" min="0" max="1" step="0.01" value="${state.emotionMapTransitionSeconds.toFixed(2)}" data-emotion-map-transition />
+        <b data-emotion-map-transition-value>${state.emotionMapTransitionSeconds.toFixed(2)}</b>
       </div>
     </div>
   `;
@@ -1147,7 +1154,7 @@ function applyEmotionMapCursorExpression() {
     .filter((item) => item.binding && item.weight > 0);
   const totalWeight = weightedPoints.reduce((sum, item) => sum + item.weight, 0);
   if (totalWeight <= 0) {
-    applyRorrParameterValues({}, 1);
+    startExpressionTransition({}, 1, state.emotionMapTransitionSeconds);
     clearBlushOverlay();
     clearEmotionMapEmotionImageOverlay();
     return;
@@ -1163,9 +1170,15 @@ function applyEmotionMapCursorExpression() {
       mixed[name] = (mixed[name] ?? 0) + clampEmotionValue(value) * normalizedWeight;
     }
   }
-  applyRorrParameterValues(mixed, 1);
+  startExpressionTransition(mixed, 1, state.emotionMapTransitionSeconds);
   applyEmotionMapBlushOverlay(weightedPoints, totalWeight);
   applyEmotionMapEmotionImageOverlay(weightedPoints, totalWeight);
+}
+
+function updateEmotionMapTransitionSeconds(value) {
+  state.emotionMapTransitionSeconds = Math.min(1, Math.max(0, Math.round(Number(value || 0) * 100) / 100));
+  const readout = document.querySelector("[data-emotion-map-transition-value]");
+  if (readout) readout.textContent = state.emotionMapTransitionSeconds.toFixed(2);
 }
 
 function getEmotionMapBindingExpressionValue(binding, preset) {
@@ -3932,6 +3945,9 @@ function bindUi() {
 
   document.querySelector("#closeCameraSettings")?.addEventListener("click", () => closeCameraSettings());
   document.querySelector("[data-emotion-map-plot]")?.addEventListener("pointerdown", handleEmotionMapPlotPointerDown);
+  document.querySelector("[data-emotion-map-transition]")?.addEventListener("input", (event) =>
+    updateEmotionMapTransitionSeconds(Number(event.target.value)),
+  );
   for (const button of document.querySelectorAll("[data-emotion-map-slot]")) {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
