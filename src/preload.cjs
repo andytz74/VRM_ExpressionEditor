@@ -20,8 +20,6 @@ contextBridge.exposeInMainWorld("vrmFiles", {
   loadOrCreateMeta: (vrmPath, data) => ipcRenderer.invoke("meta:loadOrCreate", vrmPath, data),
   openMeta: () => ipcRenderer.invoke("meta:open"),
   saveMeta: (filePath, data) => ipcRenderer.invoke("meta:save", filePath, data),
-  loadEmotionMapTemp: (vrmPath) => ipcRenderer.invoke("emotionMap:loadTemp", vrmPath),
-  saveEmotionMapTemp: (vrmPath, data) => ipcRenderer.invoke("emotionMap:saveTemp", vrmPath, data),
   loadOrCreateEmotionLinkerMeta: (kind, data) => ipcRenderer.invoke("emotionLinker:loadOrCreate", kind, data),
   saveEmotionLinkerMeta: (kind, data) => ipcRenderer.invoke("emotionLinker:save", kind, data),
   openJson: () => ipcRenderer.invoke("json:open"),

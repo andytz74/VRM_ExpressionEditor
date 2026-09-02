@@ -154,7 +154,6 @@ const state = {
   emotionMapBindings: Array.from({ length: 20 }, () => null),
   emotionMapLabels: Array.from({ length: 20 }, () => ""),
   emotionMapPresetRangeSelections: {},
-  emotionMapTempPath: null,
   editingMotionSlotTitleId: null,
   editingMotionSlotTitleValue: "",
   selectedPropId: null,
@@ -1297,29 +1296,13 @@ function getEmotionMapBounds(value, values) {
   return { min: values[0], max: values[0] };
 }
 
-async function loadEmotionMapFromCharacterMeta(vrmPath) {
+async function loadEmotionMapFromCharacterMeta() {
   state.emotionMapBindings = Array.from({ length: 20 }, () => null);
   state.emotionMapLabels = Array.from({ length: 20 }, () => "");
-  state.emotionMapTempPath = null;
   const metaMap = normalizeEmotionMapConfig(state.correction.emotionMap);
   if (metaMap.hasData) {
     state.emotionMapBindings = metaMap.bindings;
     state.emotionMapLabels = metaMap.labels;
-    return;
-  }
-  const result = await window.vrmFiles.loadEmotionMapTemp?.(vrmPath);
-  if (!result?.data) return;
-  state.emotionMapTempPath = result.filePath;
-  try {
-    const json = JSON.parse(dec.decode(new Uint8Array(result.data)));
-    const normalized = normalizeEmotionMapConfig(json);
-    state.emotionMapBindings = normalized.bindings;
-    state.emotionMapLabels = normalized.labels;
-    state.correction.emotionMap = serializeEmotionMapConfig();
-    state.correctionDirty = true;
-  } catch {
-    state.emotionMapBindings = Array.from({ length: 20 }, () => null);
-    state.emotionMapLabels = Array.from({ length: 20 }, () => "");
   }
 }
 
@@ -6029,7 +6012,7 @@ async function openFile() {
     state.redoStack = [];
     await loadVrm(bytes);
     await loadOrCreateVrmMeta(result.filePath, result.name);
-    await loadEmotionMapFromCharacterMeta(result.filePath);
+          await loadEmotionMapFromCharacterMeta();
     state.selectedPropId = normalizePropSettings(state.correction.props)[0]?.id ?? null;
     applySelectedEmotionPreset();
     await loadSelectedAnimation();
