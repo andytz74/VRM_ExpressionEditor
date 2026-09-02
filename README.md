@@ -6,10 +6,24 @@ VRM 캐릭터의 표정 프리셋, 애니메이션별 보정값, 추가 본 팔�
 
 ## 실행
 
-Windows에서 아래 배치 파일을 실행합니다.
+먼저 Node.js LTS가 설치되어 있어야 합니다.
+
+Windows에서는 아래 배치 파일을 실행합니다.
 
 ```text
 VRM Expression Editor.bat
+```
+
+macOS에서는 아래 파일을 실행합니다.
+
+```text
+VRM Expression Editor.command
+```
+
+명령줄에서는 Windows와 macOS 모두 아래 명령으로 실행할 수 있습니다.
+
+```text
+npm start
 ```
 
 ## 프론트/익스텐션 전달 문서
@@ -59,13 +73,19 @@ VRM 휴머노이드 본이 아닌 추가 본을 특정 휴머노이드 본의 �
 
 ### Emotion Linker
 
-등록된 애니메이션과 표정 프리셋을 연결해서 확인하는 모드입니다.
+등록된 애니메이션과 표정 프리셋을 연결해서 확인하는 view only 모드입니다.
 
-애니메이션 재생 중 특정 시점에 표정 프리셋을 전환하는 설정을 만들 수 있습니다. 이 정보는 캐릭터 `.meta` 파일에 저장되며, 익스텐션에서 애니메이션을 호출할 때 표정 연동에 사용됩니다.
+애니메이션 재생 중 특정 시점에 표정 프리셋을 전환하는 설정을 만들 수 있습니다. 이 정보는 `emotionLinker/emotion-linker.meta`에 저장됩니다.
+
+### Emotion Linker 2
+
+모션 슬롯 단위로 애니메이션과 표정 프리셋을 연결해서 확인하는 view only 모드입니다.
+
+슬롯 제목, 애니메이션 파일, 표정 프리셋, loop, transition 값을 관리합니다. 이 정보는 `emotionLinker/emotion-linker2.meta`에 저장됩니다.
 
 ### Transition Viewer
 
-애니메이션 전환 상태를 검수하는 참고용 모드입니다.
+애니메이션 전환 상태를 검수하는 view only 모드입니다.
 
 start, transition, end 또는 sequence 형태로 애니메이션 전환을 확인합니다. 현재는 런타임 필수 메타라기보다 제작/검수용 작업환경에 가깝습니다.
 
@@ -85,14 +105,20 @@ CharacterName.vrm.meta
 animations/
   animations.meta
 img/
+props/
+emotionLinker/
+  emotion-linker.meta
+  emotion-linker2.meta
 ```
 
-- `.vrm.meta`: 캐릭터별 표정, 모션 보정, 추가 본 설정, 애니메이션-표정 연결 정보를 저장합니다.
+- `.vrm.meta`: 캐릭터별 표정, 모션 보정, 추가 본 설정, 감정맵, 보조 이미지, 아웃라인, props 정보를 저장합니다.
 - `animations/animations.meta`: 툴에 등록된 VRMA 애니메이션 목록, 설명, 루프 여부, first 여부 등을 저장합니다.
 - `img/`: 홍조 등 표정 보조 이미지 리소스를 저장합니다.
+- `props/`: GLB 소품 리소스를 저장합니다.
+- `emotionLinker/`: 확인용 애니메이션-표정 연결 정보를 저장합니다.
 
 ## 개발 메모
 
 - 기술 스택: Electron, Vite, Three.js, `@pixiv/three-vrm`
-- 실행 방식: Windows `.bat`
+- 실행 방식: Windows `.bat`, macOS `.command`, 공통 `npm start`
 - 현재 주요 작업 대상은 Expression Editor, Motion Correction, Extra Bone Follow Setting, Emotion Linker, Transition Viewer입니다.
