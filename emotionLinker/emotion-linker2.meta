@@ -178,7 +178,35 @@
       "expressionPresetName": "mapJoy",
       "loop": false,
       "transitionSeconds": 0.2,
-      "expressionTimeline": []
+      "expressionTimeline": [
+        {
+          "id": "motion-point-1788912773707-0",
+          "time": 1.6,
+          "expressionPresetId": "emotion-1785723926871-14",
+          "expressionPresetName": "mapJoy",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        },
+        {
+          "id": "motion-point-1788913144789-2",
+          "time": 1.6,
+          "expressionPresetId": "emotion-1785723926871-14",
+          "expressionPresetName": "mapJoy",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        },
+        {
+          "id": "motion-point-1788912775173-1",
+          "time": 3.1,
+          "expressionPresetId": "emotion-2",
+          "expressionPresetName": "Tension",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        }
+      ]
     },
     {
       "id": "motion-slot-1787564539747-16",
@@ -228,17 +256,64 @@
       "expressionPresetName": "mapJoy",
       "loop": false,
       "transitionSeconds": 0.1,
-      "expressionTimeline": []
+      "expressionTimeline": [
+        {
+          "id": "motion-point-1788901907645-0",
+          "time": 3,
+          "expressionPresetId": "emotion-1785723926871-14",
+          "expressionPresetName": "mapJoy",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        },
+        {
+          "id": "motion-point-1788901925078-1",
+          "time": 3.5,
+          "expressionPresetId": "emotion-4",
+          "expressionPresetName": "Joy",
+          "expressionRangeId": "range-1785148483545-0",
+          "expressionValue": 0,
+          "transitionSeconds": 0.2
+        }
+      ]
     },
     {
       "id": "motion-slot-1787564992033-18",
       "title": "SA3 박수",
       "animationFile": "SA3.vrma",
-      "expressionPresetId": "emotion-1786618997455-33",
-      "expressionPresetName": "s4_playful",
+      "expressionPresetId": "emotion-1785901115339-23",
+      "expressionPresetName": "mapSinnam",
       "loop": false,
       "transitionSeconds": 0.1,
-      "expressionTimeline": []
+      "expressionTimeline": [
+        {
+          "id": "motion-point-1788902026359-0",
+          "time": 0,
+          "expressionPresetId": "emotion-1785901115339-23",
+          "expressionPresetName": "mapSinnam",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        },
+        {
+          "id": "motion-point-1788902033954-1",
+          "time": 0.7,
+          "expressionPresetId": "emotion-1786618997455-33",
+          "expressionPresetName": "s4_playful",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.1
+        },
+        {
+          "id": "motion-point-1788902159082-2",
+          "time": 1.9,
+          "expressionPresetId": "emotion-1787789093101-56",
+          "expressionPresetName": "mapWarm",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        }
+      ]
     },
     {
       "id": "motion-slot-1787565139128-19",

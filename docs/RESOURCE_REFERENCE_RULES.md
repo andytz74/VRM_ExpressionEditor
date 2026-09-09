@@ -1,6 +1,6 @@
 # VRM Companion Resource Reference Rules
 
-Updated: 2026-08-27
+Updated: 2026-09-02
 
 이 문서는 VRM Expression Editor에서 제작한 캐릭터 리소스 묶음을 프론트/익스텐션 런타임에 전달할 때의 폴더 구조와 참조 규칙을 정의한다.
 
@@ -203,6 +203,7 @@ animations/a0_1.vrma
 {
   "blush": {
     "image": "redFace.png",
+    "baseHeight": 1,
     "y": 0.04,
     "z": 0.08,
     "scale": 0.28
@@ -214,6 +215,26 @@ animations/a0_1.vrma
 
 ```text
 img/redFace.png
+```
+
+홍조 이미지 plane의 기준 높이는 `baseHeight: 1`이다.
+
+런타임은 아래 규칙으로 plane 크기를 계산한다.
+
+```text
+height = baseHeight
+width = imageAspectRatio * baseHeight
+finalScale = scale
+```
+
+`baseHeight`가 없는 기존 메타는 `1`로 취급한다.
+
+홍조 plane은 head bone의 자식으로 붙는다. 위치는 head bone local 기준이며 현재 에디터는 `x`를 사용하지 않는다.
+
+```text
+position = [0, y, z]
+rotation = [0, 0, 0]
+scale = [scale, scale, scale]
 ```
 
 표정별 홍조 사용 여부와 투명도:
@@ -245,6 +266,7 @@ img/redFace.png
 {
   "emotionImage": {
     "image": "imgSurp.svg",
+    "baseHeight": 0.45,
     "position": [0, 1.5, 0],
     "rotation": 0,
     "scale": 0.4,
@@ -269,6 +291,7 @@ Emotion Image는 단순 표시뿐 아니라 간단한 1초 기준 애니메이�
 {
   "emotionImage": {
     "image": "imgSurp.svg",
+    "baseHeight": 0.45,
     "x": 0,
     "y": 1.5,
     "z": 0,
@@ -313,6 +336,7 @@ Emotion Image는 단순 표시뿐 아니라 간단한 1초 기준 애니메이�
 필드 의미:
 
 - `x`, `y`, `z`: 감정 이미지 plane의 위치.
+- `baseHeight`: `scale: 1`일 때 감정 이미지 plane의 기준 높이. 현재 에디터 기준값은 `0.45`이다.
 - `rotation`: 카메라를 바라보는 billboard plane의 화면 기준 회전각, degree 기준.
 - `scale`: 기본 스케일.
 - `opacity`: 기본 투명도.
@@ -324,6 +348,50 @@ Emotion Image는 단순 표시뿐 아니라 간단한 1초 기준 애니메이�
 - `headRotationAxes`: 감정 이미지 재생 중 head bone에 보조 회전을 적용할 축 선택값.
 - `headRotationGraph`: head bone local rotation offset 그래프. `value`는 degree 기준이며 권장 범위는 `-10~10`이다.
 
+감정 이미지 plane의 기준 크기 계산:
+
+```text
+height = baseHeight
+width = imageAspectRatio * baseHeight
+finalScale = scale
+```
+
+`baseHeight`가 없는 기존 메타는 `0.45`로 취급한다.
+
+이 값은 런타임 재현에 중요하다. 에디터에서 감정 이미지는 `scale`만으로 크기를 정하지 않고, 먼저 `0.45m` 높이의 기준 plane을 만든 뒤 그 위에 `scale`을 곱한다. 런타임에서 기준 plane을 `1m`로 잡으면 같은 `scale` 값이 약 `2.22배` 크게 보인다.
+
+감정 이미지 billboard 회전 규칙:
+
+```text
+worldRotation = cameraRotation * localZRotation(rotationDegrees)
+```
+
+즉 `rotation`은 카메라를 바라보는 billboard 상태에서 화면 기준 roll 값으로 적용한다.
+
+피벗 오프셋 규칙:
+
+```text
+offsetX = (0.5 - pivotX) * width
+offsetY = (0.5 - pivotY) * height
+```
+
+`pivotX`, `pivotY`는 이미지 UV 기준 `0~1` 값이지만, 실제 mesh offset은 기준 plane의 월드 크기인 `width`, `height`를 곱해서 계산한다.
+
+Emotion Image 값 범위와 기본값:
+
+```text
+x: -2 ~ 2, 기본 0
+y: -1 ~ 3, 기본 1.5
+z: -2 ~ 2, 기본 0
+scale: 0 ~ 3, 기본 1
+opacity: 0 ~ 1, 기본 1
+rotation: -180 ~ 180, 기본 0
+pivotX: 0 ~ 1, 기본 0.5
+pivotY: 0 ~ 1, 기본 0.5
+animationDuration: 0.1 ~ 30초, 기본 1
+loop: boolean, 기본 false
+```
+
 `curve` 값은 아래 문자열 중 하나를 사용한다.
 
 ```text
@@ -332,6 +400,43 @@ easeOut
 easeIn
 easeInOut
 step
+```
+
+그래프 정규화 규칙:
+
+```text
+scaleGraph maxValue = 2
+opacityGraph maxValue = 1
+headRotationGraph range = -10 ~ 10
+
+각 graph point의 time은 0~1로 제한한다.
+각 graph point의 value는 해당 graph 범위 안으로 제한한다.
+curve 값이 지원 문자열이 아니면 linear로 취급한다.
+point는 time 오름차순으로 정렬한다.
+첫 점이 0보다 뒤에 있으면 time 0의 기본점을 추가한다.
+마지막 점이 1보다 앞에 있으면 time 1의 기본점을 추가한다.
+첫 점 time은 0, 마지막 점 time은 1로 강제한다.
+연속된 두 점의 time 차이가 0.001 미만이면 뒤쪽 점으로 합친다.
+최대 12개 점까지만 사용한다.
+```
+
+기본점 value:
+
+```text
+scaleGraph: 1
+opacityGraph: 1
+headRotationGraph: 0
+```
+
+그래프 평가 규칙:
+
+```text
+구간의 보간 방식은 시작점의 curve 값을 따른다.
+linear: 선형 보간
+easeIn: t^3
+easeOut: 1 - (1 - t)^3
+easeInOut: t^2 * (3 - 2t)
+step: 다음 점에 도달하기 전까지 시작값 유지
 ```
 
 표정에 감정 이미지가 없으면 런타임은 해당 감정 이미지 opacity를 `0`으로 취급해야 한다. 이전 표정에서 표시하던 감정 이미지가 다음 표정에 남아 있으면 안 된다.

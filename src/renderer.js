@@ -89,6 +89,18 @@ const BONE_GROUPS = [
 
 const HUMAN_BONES = BONE_GROUPS.flatMap((group) => group.bones);
 const HUMAN_BONE_SET = new Set(HUMAN_BONES);
+const PARTICLE_SHAPES = [
+  { value: "dot", label: "Dot" },
+  { value: "softCircle", label: "Soft Circle" },
+  { value: "square", label: "Square" },
+  { value: "diamond", label: "Diamond" },
+  { value: "triangle", label: "Triangle" },
+  { value: "star", label: "Star" },
+  { value: "cross", label: "Cross" },
+  { value: "ring", label: "Ring" },
+  { value: "line", label: "Line" },
+];
+const PARTICLE_SHAPE_INDEX = new Map(PARTICLE_SHAPES.map((shape, index) => [shape.value, index]));
 const POSITION_MATCH_TOLERANCE = 0.0005;
 const MIRROR_AXIS_SIGNS = {
   positionOffset: [-1, 1, 1],
@@ -99,6 +111,10 @@ const MIRROR_AXIS_SIGNS = {
 const DEFAULT_EMOTION_PRESET_NAMES = ["Neutral", "Focus", "Tension", "Surprise", "Joy", "Relief", "Disappointed", "Warm Smile", "Joy"];
 const EMOTION_GRAPH_WIDTH = 280;
 const EMOTION_GRAPH_HEIGHT = 148;
+const EFFECT_GRAPH_WIDTH = 280;
+const EFFECT_GRAPH_HEIGHT = 160;
+const BLUSH_OVERLAY_BASE_HEIGHT = 1;
+const EMOTION_IMAGE_BASE_HEIGHT = 0.45;
 const EMOTION_HEAD_ROTATION_MIN = -10;
 const EMOTION_HEAD_ROTATION_MAX = 10;
 const EMOTION_MAP_X_VALUES = [-1, -0.5, 0, 0.5, 1];
@@ -146,6 +162,15 @@ const state = {
   emotionLinker2: createEmptyEmotionLinker2Meta(),
   emotionLinkerPath: null,
   emotionLinker2Path: null,
+  effects: createEmptyEffectsMeta(),
+  effectsPath: null,
+  effectsDirty: false,
+  selectedEffectId: null,
+  effectShowModel: true,
+  effectGizmoVisible: false,
+  effectTransformMode: "translate",
+  selectedEffectGraphIndex: 0,
+  selectedEffectGraphKind: "emission",
   activeLinkTimeline: null,
   selectedMotionSlotId: null,
   emotionMapCursor: { x: 0, y: 0 },
@@ -304,7 +329,24 @@ let emotionImageOverlayRequestId = 0;
 let propOverlay = null;
 let propTransformControls = null;
 let propTransformDragging = false;
+let effectPreview = null;
+let effectTransformControls = null;
+let effectTransformDragging = false;
 const propWorldPosition = new THREE.Vector3();
+const effectAnchorPosition = new THREE.Vector3();
+const effectWorldGravity = new THREE.Vector3(0, -1, 0);
+const effectLocalGravity = new THREE.Vector3();
+const effectWorldQuaternion = new THREE.Quaternion();
+const effectParticleCorner = new THREE.Vector3();
+const effectParticleEuler = new THREE.Euler(0, 0, 0, "XYZ");
+const effectParticleBillboardQuaternion = new THREE.Quaternion();
+const effectParticleLocalCameraQuaternion = new THREE.Quaternion();
+const effectParticleInverseBillboardQuaternion = new THREE.Quaternion();
+const effectParticleSpinQuaternion = new THREE.Quaternion();
+const effectParticleZAxis = new THREE.Vector3(0, 0, 1);
+const effectParticleVelocity = new THREE.Vector3();
+const effectParticleCameraPlaneVelocity = new THREE.Vector3();
+const effectParticleColor = new THREE.Color();
 const emotionImageRollAxis = new THREE.Vector3(0, 0, 1);
 const emotionImageRollQuat = new THREE.Quaternion();
 const emotionImageRaycaster = new THREE.Raycaster();
@@ -425,7 +467,7 @@ function normalizeTransitionSequence(sequence) {
 
 function normalizeCameraPresets(presets) {
   const next = {};
-  for (const mode of ["transfer", "correction", "expression", "emotionMap", "linker", "linker2", "extraBone", "transitionViewer"]) {
+  for (const mode of ["transfer", "correction", "expression", "emotionMap", "effect", "linker", "linker2", "extraBone", "transitionViewer"]) {
     const preset = presets?.[mode];
     if (!preset || typeof preset !== "object") continue;
     next[mode] = normalizeCameraPreset(preset);
@@ -447,6 +489,17 @@ function normalizeCameraPreset(preset) {
 function normalizeFiniteNumber(value, fallback) {
   const next = Number(value);
   return Number.isFinite(next) ? next : fallback;
+}
+
+function isCompleteNumberInput(value) {
+  return (
+    value !== "" &&
+    value !== "-" &&
+    value !== "." &&
+    value !== "-." &&
+    !/^-?\d+\.$/.test(value) &&
+    Number.isFinite(Number(value))
+  );
 }
 
 function clampLightIntensity(value) {
@@ -545,6 +598,7 @@ async function initialize() {
   await loadEditorConfig();
   applyViewerLightIntensity(state.config.viewer.lightIntensity);
   await refreshAnimationCatalog();
+  await loadEffectsMeta();
   const names = getAnimationNames();
   state.selectedAnimationName = getDefaultAnimationName() ?? names[0] ?? null;
   await loadSelectedAnimation();
@@ -655,7 +709,12 @@ function render() {
   }
   const isExpressionLayout = state.mode === "expression" && !state.editing;
   const isTransitionLayout = state.mode === "transitionViewer";
-  const hasEmptyRightTray = state.mode === "correction" || state.mode === "linker" || state.mode === "linker2" || state.mode === "emotionMap";
+  const hasEmptyRightTray =
+    state.mode === "correction" ||
+    state.mode === "linker" ||
+    state.mode === "linker2" ||
+    state.mode === "emotionMap" ||
+    state.mode === "effect";
   app.innerHTML = `
     <main class="app ${isExpressionLayout ? "expression-layout" : ""} ${isTransitionLayout ? "transition-layout" : ""} ${hasEmptyRightTray ? "empty-right-layout" : ""}">
       <aside class="sidebar">
@@ -668,6 +727,8 @@ function render() {
             ? renderEmotionLinker2Panel()
             : state.mode === "emotionMap"
             ? renderEmotionMapPanel()
+            : state.mode === "effect"
+            ? renderEffectEditorPanel()
             : state.mode === "extraBone"
             ? renderExtraBoneFollowPanel()
             : state.mode === "transitionViewer"
@@ -680,7 +741,7 @@ function render() {
       <section class="viewer">
         <div id="canvasHost"></div>
         ${renderCameraSettingsPanel()}
-        ${state.filePath ? "" : renderDropHint()}
+        ${state.filePath || state.mode === "effect" ? "" : renderDropHint()}
         ${renderStatusPill()}
         ${renderScreenshotTools()}
         ${renderScreenshotSelectionOverlay()}
@@ -688,6 +749,7 @@ function render() {
         ${renderExtraBoneGizmoControls()}
         ${renderExtraBoneGizmoOverlay()}
         ${renderEmotionLinkerTransitionControl()}
+        ${renderEffectRestartControl()}
         ${renderLipSyncPreviewOverlay()}
         ${renderBlushOverlayPanel()}
         ${renderEmotionImageOverlayPanel()}
@@ -698,7 +760,17 @@ function render() {
       </section>
       ${state.mode === "expression" && !state.editing ? renderEmotionParameterTrayWithSave() : ""}
       ${state.mode === "transitionViewer" ? renderTransitionViewerTray() : ""}
-      ${state.mode === "correction" ? renderCorrectionRightTray() : state.mode === "emotionMap" ? renderEmotionMapRightTray() : state.mode === "linker" || state.mode === "linker2" ? renderEmptyRightTray() : ""}
+      ${
+        state.mode === "correction"
+          ? renderCorrectionRightTray()
+          : state.mode === "emotionMap"
+          ? renderEmotionMapRightTray()
+          : state.mode === "effect"
+          ? renderEffectRightTray()
+          : state.mode === "linker" || state.mode === "linker2"
+          ? renderEmptyRightTray()
+          : ""
+      }
     </main>
   `;
 
@@ -757,6 +829,41 @@ function renderEmotionMapTargetSlot(index) {
       <strong>${binding ? escapeHtml(binding.name) : "Empty"}</strong>
       <input type="text" value="${escapeHtml(label)}" placeholder="" data-emotion-map-name="${index}" />
     </div>
+  `;
+}
+
+function renderEffectRightTray() {
+  const effects = normalizeEffectSlots(state.effects.effects);
+  state.effects.effects = effects;
+  const selected = effects.find((effect) => effect.id === state.selectedEffectId) ?? effects[0] ?? null;
+  if (selected && state.selectedEffectId !== selected.id) state.selectedEffectId = selected.id;
+  return `
+    <aside class="mode-empty-tray effect-right-tray">
+      <div class="effect-right-head">
+        <strong>Effect Settings</strong>
+        <label class="effect-model-toggle" title="VRM 모델 표시">
+          <input type="checkbox" id="toggleEffectModelVisible" ${state.effectShowModel ? "checked" : ""} ${currentVrm ? "" : "disabled"} />
+          Model
+        </label>
+      </div>
+      <div class="effect-settings-area">
+        ${
+          selected
+            ? renderEffectSlotSettings(selected)
+            : `<div class="correction-card"><p class="parameter-meta">왼쪽에서 효과 슬롯을 추가하거나 선택하세요.</p></div>`
+        }
+      </div>
+    </aside>
+  `;
+}
+
+function renderEffectRestartControl() {
+  const effect = state.mode === "effect" ? getSelectedEffectSlot() : null;
+  if (!effect || effect.type !== "particle") return "";
+  return `
+    <button class="effect-restart-control" id="restartEffectPreview" ${effect.enabled ? "" : "disabled"} title="Restart effect">
+      ${iconSvg(Play, 20)}
+    </button>
   `;
 }
 
@@ -2269,6 +2376,7 @@ function renderModeBar(active) {
     ["expression", "Expression Editor", SlidersHorizontal],
     ["emotionMap", "Emotion Map", GitCompare],
     ["extraBone", "Extra Bone Follow Setting", GitCompare],
+    ["effect", "Effect Editor", GitCompare],
     ["linker", "Emotion Linker (view only)", GitCompare],
     ["linker2", "Emotion Linker 2 (view only)", GitCompare],
     ["transitionViewer", "Transition Viewer (view only)", GitCompare],
@@ -2745,6 +2853,466 @@ function renderEmotionLinker2Panel() {
       <button class="primary-button" id="saveCorrection" ${state.correctionPath && state.correctionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
     </div>
   `;
+}
+
+function renderEffectEditorPanel() {
+  const effects = normalizeEffectSlots(state.effects.effects);
+  state.effects.effects = effects;
+  const selected = effects.find((effect) => effect.id === state.selectedEffectId) ?? effects[0] ?? null;
+  if (selected && state.selectedEffectId !== selected.id) state.selectedEffectId = selected.id;
+  return `
+    <div class="panel-header">
+      <div class="title-block">
+        <h1>Effect Editor</h1>
+        <p>${state.effectsPath ? escapeHtml(fileNameFromPath(state.effectsPath)) : "effects/effects.meta"}</p>
+      </div>
+      <button class="icon-button" id="openFile" title="VRM 열기">${iconSvg(FolderOpen)}</button>
+    </div>
+    ${renderModeBar("effect")}
+    <div class="effect-editor-panel">
+      <div class="effect-editor-toolbar">
+        <strong>Effects</strong>
+        <button class="icon-button compact" id="addEffectSlot" title="Add effect">+</button>
+      </div>
+      <div class="effect-slot-list">
+        ${
+          effects.length
+            ? effects.map((effect) => renderEffectSlot(effect)).join("")
+            : `<div class="correction-card"><p class="parameter-meta">+ 버튼으로 효과 슬롯을 추가하세요.</p></div>`
+        }
+      </div>
+    </div>
+    <div class="correction-footer">
+      <button class="primary-button" id="saveEffects" ${state.effectsDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Effects</button>
+    </div>
+  `;
+}
+
+function renderEffectSlot(effect) {
+  const selected = effect.id === state.selectedEffectId;
+  return `
+    <button class="effect-slot ${selected ? "selected" : ""}" data-effect-select="${escapeHtml(effect.id)}">
+      <span>${escapeHtml(effect.name || "New Effect")}</span>
+      <em>${escapeHtml(effect.type)}</em>
+    </button>
+  `;
+}
+
+function renderEffectSlotSettings(effect) {
+  return `
+    <div class="correction-card effect-settings-card">
+      <div class="correction-card-head">
+        <strong>Effect Settings</strong>
+        <button class="delete-emotion-button compact-delete" data-effect-delete="${escapeHtml(effect.id)}" title="Delete">${iconSvg(X, 16)}</button>
+      </div>
+      <label>
+        Effect Name
+        <input type="text" value="${escapeHtml(effect.name)}" data-effect-name="${escapeHtml(effect.id)}" />
+      </label>
+      <label>
+        Effect Type
+        <select data-effect-type="${escapeHtml(effect.id)}">
+          ${["particle", "sprite", "mesh"].map((type) => `<option value="${type}" ${effect.type === type ? "selected" : ""}>${type}</option>`).join("")}
+        </select>
+      </label>
+      <label>
+        Attach Bone
+        <select data-effect-bone="${escapeHtml(effect.id)}">
+          <option value="world" ${effect.attachBone === "world" ? "selected" : ""}>World</option>
+          ${HUMAN_BONES.map((bone) => `<option value="${escapeHtml(bone)}" ${effect.attachBone === bone ? "selected" : ""}>${escapeHtml(formatBoneName(bone))}</option>`).join("")}
+        </select>
+      </label>
+      <label class="effect-enabled-row">
+        <input type="checkbox" data-effect-enabled="${escapeHtml(effect.id)}" ${effect.enabled ? "checked" : ""} />
+        Enabled in preview
+      </label>
+      <label>
+        Color
+        <input type="color" value="${escapeHtml(effect.color)}" data-effect-color="${escapeHtml(effect.id)}" />
+      </label>
+      <div class="effect-setting-label-row">
+        <strong>Position Offset</strong>
+        <label class="effect-enabled-row effect-gizmo-toggle">
+          <input type="checkbox" id="toggleEffectGizmo" ${state.effectGizmoVisible ? "checked" : ""} ${effect.enabled ? "" : "disabled"} />
+          Gizmo
+        </label>
+      </div>
+      ${renderEffectTransformModeButtons(effect)}
+      <div class="effect-vector-grid">
+        ${["X", "Y", "Z"]
+          .map(
+            (axis, index) => `
+              <label>
+                ${axis}
+                <input type="number" step="0.01" value="${roundForInput(effect.positionOffset[index])}" data-effect-vector="${escapeHtml(effect.id)}" data-key="positionOffset" data-axis="${index}" />
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="effect-setting-label-row">
+        <strong>Rotation Offset</strong>
+      </div>
+      <div class="effect-vector-grid">
+        ${["X", "Y", "Z"]
+          .map(
+            (axis, index) => `
+              <label>
+                ${axis}
+                <input type="number" step="0.1" value="${roundForInput(effect.rotationOffset[index])}" data-effect-vector="${escapeHtml(effect.id)}" data-key="rotationOffset" data-axis="${index}" />
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
+      ${renderEffectNumberControl(effect.id, "scale", "Scale", effect.scale, 0.05, 5, 0.01)}
+      ${effect.type === "particle" ? "" : renderEffectNumberControl(effect.id, "duration", "Duration", effect.duration, 0.1, 10, 0.1)}
+      <label class="effect-enabled-row">
+        <input type="checkbox" data-effect-loop="${escapeHtml(effect.id)}" ${effect.loop ? "checked" : ""} />
+        Loop
+      </label>
+      ${renderEffectTypeSettings(effect)}
+    </div>
+  `;
+}
+
+function renderEffectTransformModeButtons(effect) {
+  if (!state.effectGizmoVisible || !effect.enabled) return "";
+  return `
+    <div class="effect-transform-mode-buttons">
+      <button class="${state.effectTransformMode === "translate" ? "active" : ""}" data-effect-transform-mode="translate">Move</button>
+      <button class="${state.effectTransformMode === "rotate" ? "active" : ""}" data-effect-transform-mode="rotate">Rotate</button>
+    </div>
+  `;
+}
+
+function renderEffectNumberControl(effectId, key, label, value, min, max, step) {
+  return `
+    <label>
+      ${escapeHtml(label)}
+      <input type="number" min="${min}" max="${max}" step="${step}" value="${roundForInput(value)}" data-effect-number="${escapeHtml(effectId)}" data-key="${escapeHtml(key)}" />
+    </label>
+  `;
+}
+
+function renderEffectTypeSettings(effect) {
+  if (effect.type === "sprite") {
+    return `
+      <div class="effect-type-settings">
+        <strong>Sprite</strong>
+        ${renderEffectNumberControl(effect.id, "spriteSize", "Sprite Size", effect.sprite.size, 0.05, 5, 0.01)}
+        ${renderEffectNumberControl(effect.id, "spriteOpacity", "Opacity", effect.sprite.opacity, 0, 1, 0.01)}
+      </div>
+    `;
+  }
+  if (effect.type === "mesh") {
+    return `
+      <div class="effect-type-settings">
+        <strong>Mesh</strong>
+        <label>
+          Shape
+          <select data-effect-mesh-shape="${escapeHtml(effect.id)}">
+            ${["box", "sphere", "ring"].map((shape) => `<option value="${shape}" ${effect.mesh.shape === shape ? "selected" : ""}>${shape}</option>`).join("")}
+          </select>
+        </label>
+        ${renderEffectNumberControl(effect.id, "meshSpin", "Spin Speed", effect.mesh.spin, -10, 10, 0.1)}
+      </div>
+    `;
+  }
+  return `
+    <div class="effect-type-settings">
+      <strong>Particle</strong>
+      <label>
+        Shape
+        <select data-effect-particle-shape="${escapeHtml(effect.id)}">
+          ${PARTICLE_SHAPES.map((shape) => `<option value="${shape.value}" ${effect.particle.shape === shape.value ? "selected" : ""}>${shape.label}</option>`).join("")}
+        </select>
+      </label>
+      <label class="effect-enabled-row">
+        <input type="checkbox" data-effect-particle-billboard="${escapeHtml(effect.id)}" ${effect.particle.billboard ? "checked" : ""} />
+        Billboard
+      </label>
+      ${renderEffectColorSlots(effect)}
+      ${renderEffectCountControl(effect)}
+      ${renderEffectNumberControl(effect.id, "particleSpread", "Spread", effect.particle.spread, 0.05, 4, 0.01)}
+      ${renderEffectSpeedControl(effect)}
+      ${renderEffectNumberControl(effect.id, "particleDrag", "Drag", effect.particle.drag, 0, 30, 0.01)}
+      ${renderEffectNumberControl(effect.id, "particleGravity", "Gravity", effect.particle.gravity, -10, 10, 0.01)}
+      ${renderEffectStopWhenSlowControl(effect)}
+      ${renderEffectSizeControl(effect)}
+      ${renderParticleSizeGraph(effect)}
+      ${renderEffectLifetimeControl(effect)}
+      ${renderEffectRotationControl(effect)}
+      ${renderEffectAngularVelocityControl(effect)}
+      ${renderEffectNumberControl(effect.id, "particleAngularDrag", "Rotation Drag", effect.particle.angularDrag, 0, 30, 0.01)}
+      <label>
+        Render Queue
+        <select data-effect-render-queue="${escapeHtml(effect.id)}">
+          <option value="afterModel" ${effect.particle.renderQueue === "afterModel" ? "selected" : ""}>After Model</option>
+          <option value="beforeModel" ${effect.particle.renderQueue === "beforeModel" ? "selected" : ""}>Before Model</option>
+        </select>
+      </label>
+      <label>
+        Seed Mode
+        <select data-effect-seed-mode="${escapeHtml(effect.id)}">
+          <option value="time" ${effect.particle.seedMode === "time" ? "selected" : ""}>time HHMMSS</option>
+          <option value="fixed" ${effect.particle.seedMode === "fixed" ? "selected" : ""}>fixed</option>
+        </select>
+      </label>
+      ${renderEffectNumberControl(effect.id, "particleSeed", "Fixed Seed", effect.particle.seed, 1, 999999999, 1)}
+      ${renderParticleEmissionGraph(effect)}
+      ${renderParticleOpacityGraph(effect)}
+    </div>
+  `;
+}
+
+function renderEffectColorSlots(effect) {
+  return `
+    <div class="effect-color-slots-block">
+      <label>
+        Color Slots
+        <input type="number" min="1" max="5" step="1" value="${effect.particle.colorSlots.length}" data-effect-color-slot-count="${escapeHtml(effect.id)}" />
+      </label>
+      <div class="effect-color-slot-list">
+        ${effect.particle.colorSlots
+          .map(
+            (color, index) => `
+              <label>
+                <span>${index + 1}</span>
+                <input type="color" value="${escapeHtml(color)}" data-effect-color-slot="${escapeHtml(effect.id)}" data-index="${index}" />
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderEffectCountControl(effect) {
+  return `
+    <label class="effect-life-row">
+      <span>Count</span>
+      <span class="effect-life-inputs">
+        <input type="number" min="1" max="300" step="1" value="${roundForInput(effect.particle.count[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleCountMin" />
+        <em>~</em>
+        <input type="number" min="1" max="300" step="1" value="${roundForInput(effect.particle.count[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleCountMax" />
+      </span>
+    </label>
+  `;
+}
+
+function renderEffectSpeedControl(effect) {
+  return `
+    <label class="effect-life-row">
+      <span>Speed</span>
+      <span class="effect-life-inputs">
+        <input type="number" min="0" max="20" step="0.01" value="${roundForInput(effect.particle.speed[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSpeedMin" />
+        <em>~</em>
+        <input type="number" min="0" max="20" step="0.01" value="${roundForInput(effect.particle.speed[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSpeedMax" />
+      </span>
+    </label>
+  `;
+}
+
+function renderEffectAngularVelocityControl(effect) {
+  return `
+    <div class="effect-range-vector-block">
+      <strong>Rotation Speed</strong>
+      ${["X", "Y", "Z"]
+        .map((axis, index) => {
+          const minKey = `particleAngularVelocity${axis}Min`;
+          const maxKey = `particleAngularVelocity${axis}Max`;
+          const checked = Boolean(effect.particle.angularVelocityEnabled[index]);
+          return `
+            <label class="effect-angular-row">
+              <span class="effect-axis-toggle">
+                <input type="checkbox" data-effect-angular-axis="${escapeHtml(effect.id)}" data-axis="${index}" ${checked ? "checked" : ""} />
+                ${axis}
+              </span>
+              <span class="effect-life-inputs">
+                <input type="number" min="-720" max="720" step="1" value="${roundForInput(effect.particle.angularVelocity[index][0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="${minKey}" ${checked ? "" : "disabled"} />
+                <em>~</em>
+                <input type="number" min="-720" max="720" step="1" value="${roundForInput(effect.particle.angularVelocity[index][1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="${maxKey}" ${checked ? "" : "disabled"} />
+              </span>
+            </label>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderEffectRotationControl(effect) {
+  return `
+    <label class="effect-life-row">
+      <span>Rotation</span>
+      <span class="effect-life-inputs">
+        <input type="number" min="-360" max="360" step="1" value="${roundForInput(effect.particle.rotation[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleRotationMin" />
+        <em>~</em>
+        <input type="number" min="-360" max="360" step="1" value="${roundForInput(effect.particle.rotation[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleRotationMax" />
+      </span>
+    </label>
+    <label class="effect-enabled-row">
+      <input type="checkbox" data-effect-align-velocity="${escapeHtml(effect.id)}" ${effect.particle.alignToVelocity ? "checked" : ""} />
+      Align to Velocity
+    </label>
+  `;
+}
+
+function renderEffectStopWhenSlowControl(effect) {
+  const checked = Boolean(effect.particle.stopWhenSlow);
+  return `
+    <label class="effect-stop-slow-row">
+      <span class="effect-stop-slow-check">
+        <input type="checkbox" data-effect-stop-slow="${escapeHtml(effect.id)}" ${checked ? "checked" : ""} />
+        느려지면 제거
+      </span>
+      <span class="effect-stop-slow-threshold">
+        <span>Threshold</span>
+        <input type="number" min="0" max="1" step="0.01" value="${roundForInput(effect.particle.stopSpeedThreshold)}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleStopSpeedThreshold" ${checked ? "" : "disabled"} />
+      </span>
+    </label>
+  `;
+}
+
+function renderEffectSizeControl(effect) {
+  return `
+    <label class="effect-life-row">
+      <span>Size</span>
+      <span class="effect-life-inputs">
+        <input type="number" min="0.01" max="0.3" step="0.01" value="${roundForInput(effect.particle.size[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSizeMin" />
+        <em>~</em>
+        <input type="number" min="0.01" max="0.3" step="0.01" value="${roundForInput(effect.particle.size[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSizeMax" />
+      </span>
+    </label>
+  `;
+}
+
+function renderEffectLifetimeControl(effect) {
+  return `
+    <label class="effect-life-row">
+      <span>Life</span>
+      <span class="effect-life-inputs">
+        <input type="number" min="0.05" max="10" step="0.05" value="${roundForInput(effect.particle.lifetime[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleLifetimeMin" />
+        <em>~</em>
+        <input type="number" min="0.05" max="10" step="0.05" value="${roundForInput(effect.particle.lifetime[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleLifetimeMax" />
+      </span>
+    </label>
+  `;
+}
+
+function renderParticleSizeGraph(effect) {
+  const points = normalizeParticleSizeGraph(effect.particle.sizeGraph);
+  const selectedIndex = state.selectedEffectGraphKind === "size" ? clampNumber(Number(state.selectedEffectGraphIndex), 0, points.length - 1, 0) : -1;
+  const selectedPoint = points[selectedIndex] ?? null;
+  return `
+    <div class="effect-emission-graph-block">
+      <div class="emotion-image-graph-label">
+        <span>Size Graph</span>
+        <strong>${selectedPoint ? selectedPoint.value.toFixed(2) : ""}</strong>
+      </div>
+      <div class="effect-emission-graph-surface" data-effect-size-graph="${escapeHtml(effect.id)}">
+        <svg viewBox="0 0 ${EFFECT_GRAPH_WIDTH} ${EFFECT_GRAPH_HEIGHT}" preserveAspectRatio="none">
+          <path class="emotion-graph-grid" d="M0 ${EFFECT_GRAPH_HEIGHT / 2}H${EFFECT_GRAPH_WIDTH}" />
+          <path class="emotion-graph-line" d="${escapeHtml(buildEffectSizeGraphPath(points))}" />
+        </svg>
+        ${points
+          .map((point, index) => {
+            const x = effectGraphX(point.time);
+            const y = effectGraphY(point.value, 1);
+            return `<button class="emotion-graph-point ${index === selectedIndex ? "selected" : ""}" style="left:${((x / EFFECT_GRAPH_WIDTH) * 100).toFixed(3)}%;top:${((y / EFFECT_GRAPH_HEIGHT) * 100).toFixed(3)}%" data-effect-size-point="${index}" title="${roundForInput(point.time)} / ${point.value.toFixed(2)}"></button>`;
+          })
+          .join("")}
+      </div>
+      ${renderEffectCurveButtons(selectedPoint, selectedIndex >= 0 && selectedIndex < points.length - 1, "size")}
+    </div>
+  `;
+}
+
+function renderParticleEmissionGraph(effect) {
+  const countMax = getParticleCountMax(effect.particle);
+  const points = normalizeParticleEmissionGraph(effect.particle.emissionGraph, countMax);
+  const selectedIndex = state.selectedEffectGraphKind === "emission" ? clampNumber(Number(state.selectedEffectGraphIndex), 0, points.length - 1, 0) : -1;
+  const selectedPoint = points[selectedIndex] ?? null;
+  const burst = Boolean(effect.particle.burst);
+  return `
+    <div class="effect-emission-graph-block">
+      <div class="emotion-image-graph-label">
+        <span>Emission</span>
+        <strong>${selectedPoint ? Math.round(selectedPoint.value) : ""}</strong>
+      </div>
+      <div class="effect-emission-graph-surface ${burst ? "disabled" : ""}" data-effect-emission-graph="${escapeHtml(effect.id)}" data-effect-emission-max="${countMax}">
+        <svg viewBox="0 0 ${EFFECT_GRAPH_WIDTH} ${EFFECT_GRAPH_HEIGHT}" preserveAspectRatio="none">
+          <path class="emotion-graph-grid" d="M0 ${EFFECT_GRAPH_HEIGHT / 2}H${EFFECT_GRAPH_WIDTH}" />
+          <path class="emotion-graph-line" d="${escapeHtml(buildEffectEmissionGraphPath(points, countMax))}" />
+        </svg>
+        ${points
+          .map((point, index) => {
+            const x = effectGraphX(point.time);
+            const y = effectGraphY(point.value, countMax);
+            return `<button class="emotion-graph-point ${index === selectedIndex ? "selected" : ""}" style="left:${((x / EFFECT_GRAPH_WIDTH) * 100).toFixed(3)}%;top:${((y / EFFECT_GRAPH_HEIGHT) * 100).toFixed(3)}%" data-effect-emission-point="${index}" title="${roundForInput(point.time * effect.duration)}s / ${Math.round(point.value)}" ${burst ? "disabled" : ""}></button>`;
+          })
+          .join("")}
+      </div>
+      <div class="effect-emission-graph-footer">
+        <label class="effect-enabled-row">
+          <input type="checkbox" data-effect-burst="${escapeHtml(effect.id)}" ${burst ? "checked" : ""} />
+          Burst
+        </label>
+        <label class="effect-duration-inline">
+          <span>Duration</span>
+          <input type="number" min="0.1" max="10" step="0.1" value="${roundForInput(effect.duration)}" data-effect-number="${escapeHtml(effect.id)}" data-key="duration" />
+        </label>
+      </div>
+      ${renderEffectCurveButtons(selectedPoint, !burst && selectedIndex >= 0 && selectedIndex < points.length - 1, "emission")}
+    </div>
+  `;
+}
+
+function renderParticleOpacityGraph(effect) {
+  const points = normalizeParticleOpacityGraph(effect.particle.opacityGraph);
+  const selectedIndex = state.selectedEffectGraphKind === "opacity" ? clampNumber(Number(state.selectedEffectGraphIndex), 0, points.length - 1, 0) : -1;
+  const selectedPoint = points[selectedIndex] ?? null;
+  return `
+    <div class="effect-emission-graph-block">
+      <div class="emotion-image-graph-label">
+        <span>Opacity</span>
+        <strong>${selectedPoint ? selectedPoint.value.toFixed(2) : ""}</strong>
+      </div>
+      <div class="effect-emission-graph-surface" data-effect-opacity-graph="${escapeHtml(effect.id)}">
+        <svg viewBox="0 0 ${EFFECT_GRAPH_WIDTH} ${EFFECT_GRAPH_HEIGHT}" preserveAspectRatio="none">
+          <path class="emotion-graph-grid" d="M0 ${EFFECT_GRAPH_HEIGHT / 2}H${EFFECT_GRAPH_WIDTH}" />
+          <path class="emotion-graph-line" d="${escapeHtml(buildEffectOpacityGraphPath(points))}" />
+        </svg>
+        ${points
+          .map((point, index) => {
+            const x = effectGraphX(point.time);
+            const y = effectGraphY(point.value, 1);
+            return `<button class="emotion-graph-point ${index === selectedIndex ? "selected" : ""}" style="left:${((x / EFFECT_GRAPH_WIDTH) * 100).toFixed(3)}%;top:${((y / EFFECT_GRAPH_HEIGHT) * 100).toFixed(3)}%" data-effect-opacity-point="${index}" title="${roundForInput(point.time)} / ${point.value.toFixed(2)}"></button>`;
+          })
+          .join("")}
+      </div>
+      ${renderEffectCurveButtons(selectedPoint, selectedIndex >= 0 && selectedIndex < points.length - 1, "opacity")}
+    </div>
+  `;
+}
+
+function renderEffectCurveButtons(selectedPoint, canEdit = false, graphKind = "emission") {
+  const curve = selectedPoint?.curve ?? "linear";
+  const buttons = [
+    ["linear", "M4 20L20 4"],
+    ["easeOut", "M4 20C5 8 12 4 20 4"],
+    ["easeIn", "M4 20C13 20 18 12 20 4"],
+    ["easeInOut", "M4 19C8 19 8 5 12 12C16 19 16 5 20 5"],
+    ["step", "M5 19H13V5H20"],
+  ]
+    .map(
+      ([type, path]) =>
+        `<button class="emotion-curve-button ${curve === type ? "active" : ""}" data-effect-curve="${type}" data-effect-curve-kind="${graphKind}" ${canEdit ? "" : "disabled"} title="${type}"><svg viewBox="0 0 24 24"><path d="${path}" /></svg></button>`,
+    )
+    .join("");
+  return `<div class="emotion-curve-buttons effect-curve-buttons">${buttons}</div>`;
 }
 
 function renderMotionSlotCard(slot, index = 0, total = 1) {
@@ -3504,6 +4072,119 @@ function bindUi() {
   });
   document.querySelector("#saveCorrection")?.addEventListener("click", saveCorrection);
   document.querySelector("#saveExpressionMeta")?.addEventListener("click", saveCorrection);
+  document.querySelector("#saveEffects")?.addEventListener("click", saveEffectsMeta);
+  document.querySelector("#addEffectSlot")?.addEventListener("click", addEffectSlot);
+  document.querySelector("#toggleEffectModelVisible")?.addEventListener("change", (event) => {
+    state.effectShowModel = event.target.checked;
+    applyEffectModelVisibility();
+  });
+  document.querySelector("#toggleEffectGizmo")?.addEventListener("change", (event) => {
+    state.effectGizmoVisible = event.target.checked;
+    syncSelectedEffectPreview();
+    renderPreservingScrollableUi();
+  });
+  document.querySelector("#restartEffectPreview")?.addEventListener("click", restartSelectedEffectPreview);
+  for (const button of document.querySelectorAll("[data-effect-transform-mode]")) {
+    button.addEventListener("click", () => updateEffectTransformMode(button.dataset.effectTransformMode));
+  }
+  for (const button of document.querySelectorAll("[data-effect-select]")) {
+    button.addEventListener("click", () => {
+      state.selectedEffectId = button.dataset.effectSelect;
+      renderPreservingScrollableUi();
+    });
+  }
+  for (const input of document.querySelectorAll("[data-effect-name]")) {
+    input.addEventListener("input", () => updateEffectSlot(input.dataset.effectName, { name: input.value }, false));
+    input.addEventListener("change", () => renderPreservingScrollableUi());
+  }
+  for (const select of document.querySelectorAll("[data-effect-type]")) {
+    select.addEventListener("change", () => updateEffectSlot(select.dataset.effectType, { type: select.value }, true));
+  }
+  for (const select of document.querySelectorAll("[data-effect-bone]")) {
+    select.addEventListener("change", () => updateEffectSlot(select.dataset.effectBone, { attachBone: select.value }, true));
+  }
+  for (const input of document.querySelectorAll("[data-effect-enabled]")) {
+    input.addEventListener("change", () => updateEffectSlot(input.dataset.effectEnabled, { enabled: input.checked }, true));
+  }
+  for (const input of document.querySelectorAll("[data-effect-loop]")) {
+    input.addEventListener("change", () => updateEffectSlot(input.dataset.effectLoop, { loop: input.checked }, true));
+  }
+  for (const input of document.querySelectorAll("[data-effect-stop-slow]")) {
+    input.addEventListener("change", () =>
+      updateEffectSlotNested(input.dataset.effectStopSlow, "particle", { stopWhenSlow: input.checked }, true),
+    );
+  }
+  for (const input of document.querySelectorAll("[data-effect-angular-axis]")) {
+    input.addEventListener("change", () =>
+      updateEffectAngularVelocityAxis(input.dataset.effectAngularAxis, Number(input.dataset.axis), input.checked),
+    );
+  }
+  for (const input of document.querySelectorAll("[data-effect-color]")) {
+    input.addEventListener("input", () => updateEffectSlot(input.dataset.effectColor, { color: input.value }, false));
+  }
+  for (const input of document.querySelectorAll("[data-effect-color-slot-count]")) {
+    input.addEventListener("input", () => {
+      if (!isCompleteNumberInput(input.value)) return;
+      updateEffectColorSlotCount(input.dataset.effectColorSlotCount, Number(input.value));
+    });
+    input.addEventListener("change", () => {
+      updateEffectColorSlotCount(input.dataset.effectColorSlotCount, Number(input.value));
+      renderPreservingScrollableUi();
+    });
+  }
+  for (const input of document.querySelectorAll("[data-effect-color-slot]")) {
+    input.addEventListener("input", () => updateEffectColorSlot(input.dataset.effectColorSlot, Number(input.dataset.index), input.value));
+  }
+  for (const input of document.querySelectorAll("[data-effect-vector]")) {
+    input.addEventListener("input", () =>
+      updateEffectSlotVector(input.dataset.effectVector, input.dataset.key, Number(input.dataset.axis), Number(input.value)),
+    );
+  }
+  for (const input of document.querySelectorAll("[data-effect-number]")) {
+    input.addEventListener("input", () => {
+      if (isEffectRangeNumberKey(input.dataset.key)) return;
+      if (!isCompleteNumberInput(input.value)) return;
+      updateEffectSlotNumber(input.dataset.effectNumber, input.dataset.key, Number(input.value));
+    });
+    input.addEventListener("change", () => finalizeEffectNumberInput(input));
+  }
+  for (const select of document.querySelectorAll("[data-effect-mesh-shape]")) {
+    select.addEventListener("change", () => updateEffectSlotNested(select.dataset.effectMeshShape, "mesh", { shape: select.value }, true));
+  }
+  for (const select of document.querySelectorAll("[data-effect-seed-mode]")) {
+    select.addEventListener("change", () => updateEffectSlotNested(select.dataset.effectSeedMode, "particle", { seedMode: select.value }, true));
+  }
+  for (const select of document.querySelectorAll("[data-effect-render-queue]")) {
+    select.addEventListener("change", () => updateEffectSlotNested(select.dataset.effectRenderQueue, "particle", { renderQueue: select.value }, false));
+  }
+  for (const select of document.querySelectorAll("[data-effect-particle-shape]")) {
+    select.addEventListener("change", () => updateEffectSlotNested(select.dataset.effectParticleShape, "particle", { shape: select.value }, false));
+  }
+  for (const input of document.querySelectorAll("[data-effect-particle-billboard]")) {
+    input.addEventListener("change", () =>
+      updateEffectSlotNested(input.dataset.effectParticleBillboard, "particle", { billboard: input.checked }, true),
+    );
+  }
+  for (const input of document.querySelectorAll("[data-effect-align-velocity]")) {
+    input.addEventListener("change", () =>
+      updateEffectSlotNested(input.dataset.effectAlignVelocity, "particle", { alignToVelocity: input.checked }, true),
+    );
+  }
+  for (const input of document.querySelectorAll("[data-effect-burst]")) {
+    input.addEventListener("change", () => updateEffectSlotNested(input.dataset.effectBurst, "particle", { burst: input.checked }, true));
+  }
+  for (const button of document.querySelectorAll("[data-effect-curve]")) {
+    button.addEventListener("click", () => setSelectedEffectGraphCurve(button.dataset.effectCurve, button.dataset.effectCurveKind));
+  }
+  document.querySelector("[data-effect-emission-graph]")?.addEventListener("contextmenu", (event) => event.preventDefault());
+  document.querySelector("[data-effect-emission-graph]")?.addEventListener("pointerdown", handleEffectEmissionGraphPointerDown);
+  document.querySelector("[data-effect-opacity-graph]")?.addEventListener("contextmenu", (event) => event.preventDefault());
+  document.querySelector("[data-effect-opacity-graph]")?.addEventListener("pointerdown", handleEffectOpacityGraphPointerDown);
+  document.querySelector("[data-effect-size-graph]")?.addEventListener("contextmenu", (event) => event.preventDefault());
+  document.querySelector("[data-effect-size-graph]")?.addEventListener("pointerdown", handleEffectSizeGraphPointerDown);
+  for (const button of document.querySelectorAll("[data-effect-delete]")) {
+    button.addEventListener("click", () => deleteEffectSlot(button.dataset.effectDelete));
+  }
   document.querySelector("#addExtraBoneFollow")?.addEventListener("click", addExtraBoneFollowSetting);
   document.querySelector("#saveSelectedParameters")?.addEventListener("click", saveSelectedExpressionParameters);
   document.querySelector("#toggleParameterFilter")?.addEventListener("click", () => {
@@ -3917,6 +4598,10 @@ function bindUi() {
       } else {
         updateVisiblePropsForSelectedAnimation();
       }
+      if (state.mode !== "effect") {
+        clearEffectPreview();
+      }
+      applyEffectModelVisibility();
       applyCameraPresetForMode(state.mode);
       render();
     });
@@ -5241,6 +5926,9 @@ function renderPreservingScrollableUi() {
     ".emotion-linker-panel",
     ".emotion-map-preset-list",
     ".emotion-map-slot-list",
+    ".effect-editor-panel",
+    ".effect-slot-list",
+    ".effect-settings-area",
     ".material-outline-list",
     ".props-list",
     ".props-settings-area",
@@ -5338,7 +6026,7 @@ async function ensureBlushOverlay(blush, options = {}) {
   const imageWidth = texture.image?.width || 1;
   const imageHeight = texture.image?.height || 1;
   const aspect = imageWidth / Math.max(imageHeight, 1);
-  const geometry = new THREE.PlaneGeometry(aspect, 1);
+  const geometry = new THREE.PlaneGeometry(aspect * BLUSH_OVERLAY_BASE_HEIGHT, BLUSH_OVERLAY_BASE_HEIGHT);
   const material = new THREE.MeshBasicMaterial({
     map: texture,
     transparent: true,
@@ -5482,8 +6170,8 @@ async function ensureEmotionImageOverlay(settings, options = {}) {
   const imageWidth = texture.image?.width || 1;
   const imageHeight = texture.image?.height || 1;
   const aspect = imageWidth / Math.max(imageHeight, 1);
-  const width = aspect * 0.45;
-  const height = 0.45;
+  const width = aspect * EMOTION_IMAGE_BASE_HEIGHT;
+  const height = EMOTION_IMAGE_BASE_HEIGHT;
   const geometry = new THREE.PlaneGeometry(width, height);
   const material = new THREE.MeshBasicMaterial({
     map: texture,
@@ -7936,6 +8624,7 @@ async function loadVrm(bytes) {
   applyAllExpressionPreviews();
   applySelectedEmotionPreset();
   applyMotionCorrectionPreview();
+  applyEffectModelVisibility();
 }
 
 function frameModel(root) {
@@ -8726,6 +9415,14 @@ function createEmptyEmotionLinker2Meta() {
   };
 }
 
+function createEmptyEffectsMeta() {
+  return {
+    schemaVersion: 1,
+    type: "vrm-effects-meta",
+    effects: [],
+  };
+}
+
 function createEmptyBoneCorrection() {
   return {
     positionOffset: [0, 0, 0],
@@ -9081,6 +9778,8 @@ function syncSaveMetaButton() {
   if (correctionButton) correctionButton.disabled = !(state.correctionPath && state.correctionDirty);
   const expressionButton = document.querySelector("#saveExpressionMeta");
   if (expressionButton) expressionButton.disabled = !(state.correctionPath && state.expressionDirty);
+  const effectsButton = document.querySelector("#saveEffects");
+  if (effectsButton) effectsButton.disabled = !state.effectsDirty;
 }
 
 function isEmotionControlElement(target) {
@@ -9181,6 +9880,7 @@ async function loadOrCreateVrmMeta(vrmPath, vrmName) {
     rawMeta = initial;
     await window.vrmFiles.saveMeta(result.filePath, JSON.stringify(initial, null, 2));
   }
+  const needsOverlayBaseHeightSave = hasMissingOverlayBaseHeight(rawMeta);
   state.correction = normalizeCorrectionJson(rawMeta);
   await refreshAnimationCatalog();
   await migrateAnimationInfoFromCharacterMeta(rawMeta);
@@ -9193,7 +9893,7 @@ async function loadOrCreateVrmMeta(vrmPath, vrmName) {
   const migratedLinkerMeta = await loadEmotionLinkerMetas(rawMeta);
   loadSelectedExpressionParameterDraft();
   state.correctionPath = result.filePath;
-  state.correctionDirty = Boolean(migratedLinkerMeta);
+  state.correctionDirty = Boolean(migratedLinkerMeta || needsOverlayBaseHeightSave);
   state.expressionDirty = false;
   const names = getAnimationNames();
   state.selectedAnimationName = getDefaultAnimationName() ?? (names.includes(state.selectedAnimationName) ? state.selectedAnimationName : (names[0] ?? null));
@@ -9243,6 +9943,1763 @@ async function loadEmotionLinkerMetas(characterMeta = {}) {
     }
   }
   return migrated;
+}
+
+function hasMissingOverlayBaseHeight(meta) {
+  if (!meta || typeof meta !== "object") return false;
+  if (meta.blush?.image && !hasOwnField(meta.blush, "baseHeight")) return true;
+  for (const preset of Array.isArray(meta.expressionPresets) ? meta.expressionPresets : []) {
+    if (preset?.emotionImage?.image && !hasOwnField(preset.emotionImage, "baseHeight")) return true;
+    for (const slot of Array.isArray(preset?.rangeSlots) ? preset.rangeSlots : []) {
+      if (slot?.emotionImage?.image && !hasOwnField(slot.emotionImage, "baseHeight")) return true;
+    }
+  }
+  return false;
+}
+
+function hasOwnField(target, key) {
+  return Object.prototype.hasOwnProperty.call(target, key);
+}
+
+async function loadEffectsMeta() {
+  const fallback = createEmptyEffectsMeta();
+  state.effects = fallback;
+  state.effectsPath = null;
+  state.effectsDirty = false;
+  state.selectedEffectId = null;
+  const result = await window.vrmFiles.loadOrCreateEffectsMeta?.(JSON.stringify(fallback, null, 2));
+  if (!result?.data) return;
+  state.effectsPath = result.filePath;
+  state.effects = normalizeEffectsMeta(parseJsonBuffer(result.data, fallback));
+  state.selectedEffectId = state.effects.effects[0]?.id ?? null;
+}
+
+function normalizeEffectsMeta(json) {
+  return {
+    schemaVersion: 1,
+    type: "vrm-effects-meta",
+    effects: normalizeEffectSlots(json?.effects),
+  };
+}
+
+function normalizeEffectSlots(effects) {
+  if (!Array.isArray(effects)) return [];
+  return effects.map((effect, index) => normalizeEffectSlot(effect, index)).filter((effect) => effect.id);
+}
+
+function normalizeEffectSlot(effect, index = 0) {
+  const type = ["particle", "sprite", "mesh"].includes(effect?.type) ? effect.type : "particle";
+  const attachBone = effect?.attachBone === "world" || HUMAN_BONE_SET.has(effect?.attachBone) ? effect.attachBone : "world";
+  return {
+    id: String(effect?.id || `effect-${Date.now()}-${index}`),
+    name: String(effect?.name || `Effect ${index + 1}`),
+    type,
+    attachBone,
+    positionOffset: normalizeEffectNumberArray(effect?.positionOffset, [0, 1.5, 0], 3),
+    rotationOffset: normalizeEffectNumberArray(effect?.rotationOffset, [0, 0, 0], 3).map((value) => Math.min(180, Math.max(-180, value))),
+    scale: Math.min(5, Math.max(0.05, normalizeFiniteNumber(effect?.scale, 1))),
+    color: normalizeHexColor(effect?.color) ?? "#ffd166",
+    duration: Math.min(10, Math.max(0.1, normalizeFiniteNumber(effect?.duration, 1))),
+    loop: effect?.loop !== false,
+    enabled: Boolean(effect?.enabled),
+    particle: normalizeParticleEffectSettings(effect?.particle),
+    sprite: normalizeSpriteEffectSettings(effect?.sprite),
+    mesh: normalizeMeshEffectSettings(effect?.mesh),
+    version: 1,
+  };
+}
+
+function serializeEffectsMeta() {
+  return normalizeEffectsMeta(state.effects);
+}
+
+function normalizeParticleEffectSettings(settings = {}) {
+  const countSource = Array.isArray(settings.count) ? settings.count : [settings.count, settings.count];
+  const countMin = Math.round(Math.min(300, Math.max(1, normalizeFiniteNumber(countSource[0], 80))));
+  const countMax = Math.round(Math.min(300, Math.max(countMin, normalizeFiniteNumber(countSource[1], countMin))));
+  const emissionValueMax = Math.max(
+    countMax,
+    ...(Array.isArray(settings.emissionGraph)
+      ? settings.emissionGraph.map((point) => normalizeFiniteNumber(point?.value, 0))
+      : []),
+  );
+  const speedSource = Array.isArray(settings.speed) ? settings.speed : [settings.speed, settings.speed];
+  const speedMin = Math.min(20, Math.max(0, normalizeFiniteNumber(speedSource[0], 1.4)));
+  const speedMax = Math.min(20, Math.max(speedMin, normalizeFiniteNumber(speedSource[1], speedMin)));
+  const sizeSource = Array.isArray(settings.size) ? settings.size : [settings.sizeMin ?? settings.size, settings.sizeMax ?? settings.size];
+  const sizeMin = Math.min(0.3, Math.max(0.01, normalizeFiniteNumber(sizeSource[0], 0.06)));
+  const sizeMax = Math.min(0.3, Math.max(sizeMin, normalizeFiniteNumber(sizeSource[1], sizeMin)));
+  const lifetimeMin = Math.min(10, Math.max(0.05, normalizeFiniteNumber(settings.lifetime?.[0], settings.lifetimeMin ?? 0.6)));
+  const lifetimeMax = Math.min(10, Math.max(lifetimeMin, normalizeFiniteNumber(settings.lifetime?.[1], settings.lifetimeMax ?? 1.2)));
+  const rotationSource = Array.isArray(settings.rotation) ? settings.rotation : [settings.rotationMin ?? 0, settings.rotationMax ?? 360];
+  const rotationMin = Math.min(360, Math.max(-360, normalizeFiniteNumber(rotationSource[0], 0)));
+  const rotationMax = Math.min(360, Math.max(rotationMin, normalizeFiniteNumber(rotationSource[1], rotationMin)));
+  const angularVelocity = normalizeParticleAngularVelocity(settings.angularVelocity);
+  const angularVelocityEnabled = normalizeParticleAngularVelocityEnabled(settings.angularVelocityEnabled);
+  const shape = PARTICLE_SHAPE_INDEX.has(settings.shape) ? settings.shape : "dot";
+  const defaultBillboard = shape === "dot" || shape === "softCircle";
+  const colorSlots = normalizeParticleColorSlots(settings.colorSlots, settings.color);
+  return {
+    count: [countMin, countMax],
+    shape,
+    billboard: hasOwnField(settings, "billboard") ? Boolean(settings.billboard) : defaultBillboard,
+    burst: Boolean(settings.burst),
+    colorSlots,
+    spread: Math.min(4, Math.max(0.05, normalizeFiniteNumber(settings.spread, 1.2))),
+    speed: [speedMin, speedMax],
+    drag: Math.min(30, Math.max(0, normalizeFiniteNumber(settings.drag, 0))),
+    gravity: Math.min(10, Math.max(-10, normalizeFiniteNumber(settings.gravity, 0))),
+    rotation: [rotationMin, rotationMax],
+    alignToVelocity: Boolean(settings.alignToVelocity),
+    angularVelocity,
+    angularVelocityEnabled,
+    angularDrag: Math.min(30, Math.max(0, normalizeFiniteNumber(settings.angularDrag, 0))),
+    stopWhenSlow: Boolean(settings.stopWhenSlow),
+    stopSpeedThreshold: Math.min(1, Math.max(0, normalizeFiniteNumber(settings.stopSpeedThreshold, 0.01))),
+    size: [sizeMin, sizeMax],
+    lifetime: [lifetimeMin, lifetimeMax],
+    renderQueue: settings.renderQueue === "beforeModel" ? "beforeModel" : "afterModel",
+    seedMode: settings.seedMode === "fixed" ? "fixed" : "time",
+    seed: Math.max(1, Math.round(normalizeFiniteNumber(settings.seed, 12345))),
+    emissionGraph: normalizeParticleEmissionGraph(settings.emissionGraph, emissionValueMax),
+    sizeGraph: normalizeParticleSizeGraph(settings.sizeGraph),
+    opacityGraph: normalizeParticleOpacityGraph(settings.opacityGraph),
+  };
+}
+
+function normalizeParticleColorSlots(slots, fallback = "#ffd166") {
+  const fallbackColor = normalizeHexColor(fallback) ?? "#ffd166";
+  const source = Array.isArray(slots) && slots.length ? slots : [fallbackColor];
+  const colors = source.slice(0, 5).map((color) => normalizeHexColor(color) ?? fallbackColor);
+  return colors.length ? colors : [fallbackColor];
+}
+
+function getParticleCountMax(settings = {}) {
+  const normalized = normalizeParticleEffectSettings(settings);
+  return normalized.count[1];
+}
+
+function getRandomParticleCount(settings, rng) {
+  const min = settings.count[0];
+  const max = settings.count[1];
+  return Math.round(lerp(min, max, rng()));
+}
+
+function normalizeParticleAngularVelocityEnabled(value) {
+  const source = Array.isArray(value) ? value : [];
+  return [0, 1, 2].map((axis) => Boolean(source[axis]));
+}
+
+function normalizeParticleAngularVelocity(value) {
+  const source = Array.isArray(value) ? value : [];
+  return [0, 1, 2].map((axis) => {
+    const range = Array.isArray(source[axis]) ? source[axis] : [0, 0];
+    const min = Math.min(720, Math.max(-720, normalizeFiniteNumber(range[0], 0)));
+    const max = Math.min(720, Math.max(min, normalizeFiniteNumber(range[1], min)));
+    return [min, max];
+  });
+}
+
+function normalizeParticleEmissionGraph(graph, maxValue = 80) {
+  const source = Array.isArray(graph) && graph.length ? graph : [
+    { time: 0, value: maxValue, curve: "linear" },
+    { time: 1, value: maxValue, curve: "linear" },
+  ];
+  const points = source
+    .map((point) => ({
+      time: Math.min(1, Math.max(0, normalizeFiniteNumber(point?.time, 0))),
+      value: Math.round(Math.min(maxValue, Math.max(0, normalizeFiniteNumber(point?.value, maxValue)))),
+      curve: ["linear", "easeOut", "easeIn", "easeInOut", "step"].includes(point?.curve) ? point.curve : "linear",
+    }))
+    .sort((a, b) => a.time - b.time);
+  if (!points.some((point) => point.time === 0)) points.unshift({ time: 0, value: points[0]?.value ?? maxValue, curve: "linear" });
+  if (!points.some((point) => point.time === 1)) points.push({ time: 1, value: points[points.length - 1]?.value ?? maxValue, curve: "linear" });
+  points[0].time = 0;
+  points[points.length - 1].time = 1;
+  points[points.length - 1].curve = "linear";
+  return points.slice(0, 12);
+}
+
+function effectGraphX(time) {
+  return Math.min(1, Math.max(0, time)) * EFFECT_GRAPH_WIDTH;
+}
+
+function effectGraphY(value, maxValue) {
+  const max = Math.max(1, maxValue);
+  return EFFECT_GRAPH_HEIGHT - (Math.min(max, Math.max(0, value)) / max) * EFFECT_GRAPH_HEIGHT;
+}
+
+function buildEffectEmissionGraphPath(graph, maxValue) {
+  const points = normalizeParticleEmissionGraph(graph, maxValue);
+  let path = `M${effectGraphX(points[0].time)} ${effectGraphY(points[0].value, maxValue)}`;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    const x1 = effectGraphX(current.time);
+    const y1 = effectGraphY(current.value, maxValue);
+    const x2 = effectGraphX(next.time);
+    const y2 = effectGraphY(next.value, maxValue);
+    if (current.curve === "step") {
+      path += ` L${x2} ${y1} L${x2} ${y2}`;
+    } else if (current.curve === "easeOut") {
+      path += ` C${x1 + (x2 - x1) * 0.16} ${y2} ${x1 + (x2 - x1) * 0.44} ${y2} ${x2} ${y2}`;
+    } else if (current.curve === "easeIn") {
+      path += ` C${x1 + (x2 - x1) * 0.56} ${y1} ${x1 + (x2 - x1) * 0.84} ${y1} ${x2} ${y2}`;
+    } else if (current.curve === "easeInOut") {
+      path += ` C${x1 + (x2 - x1) * 0.42} ${y1} ${x1 + (x2 - x1) * 0.58} ${y2} ${x2} ${y2}`;
+    } else {
+      path += ` L${x2} ${y2}`;
+    }
+  }
+  return path;
+}
+
+function evaluateParticleEmissionGraph(graph, time, maxValue) {
+  const points = normalizeParticleEmissionGraph(graph, maxValue);
+  const t = Math.min(1, Math.max(0, time));
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    if (t < current.time || t > next.time) continue;
+    const span = Math.max(0.000001, next.time - current.time);
+    const local = (t - current.time) / span;
+    const eased = evaluateEmotionImageCurve(current.curve, local);
+    return Math.round(lerp(current.value, next.value, eased));
+  }
+  return Math.round(points[points.length - 1]?.value ?? maxValue);
+}
+
+function normalizeParticleOpacityGraph(graph) {
+  const source = Array.isArray(graph) && graph.length ? graph : [
+    { time: 0, value: 1, curve: "linear" },
+    { time: 1, value: 1, curve: "linear" },
+  ];
+  const points = source
+    .map((point) => ({
+      time: Math.min(1, Math.max(0, normalizeFiniteNumber(point?.time, 0))),
+      value: Math.min(1, Math.max(0, normalizeFiniteNumber(point?.value, 1))),
+      curve: ["linear", "easeOut", "easeIn", "easeInOut", "step"].includes(point?.curve) ? point.curve : "linear",
+    }))
+    .sort((a, b) => a.time - b.time);
+  if (!points.some((point) => point.time === 0)) points.unshift({ time: 0, value: points[0]?.value ?? 1, curve: "linear" });
+  if (!points.some((point) => point.time === 1)) points.push({ time: 1, value: points[points.length - 1]?.value ?? 1, curve: "linear" });
+  points[0].time = 0;
+  points[points.length - 1].time = 1;
+  points[points.length - 1].curve = "linear";
+  return points.slice(0, 12);
+}
+
+function normalizeParticleSizeGraph(graph) {
+  return normalizeParticleUnitGraph(graph, 1);
+}
+
+function normalizeParticleUnitGraph(graph, fallbackValue = 1) {
+  const source = Array.isArray(graph) && graph.length ? graph : [
+    { time: 0, value: fallbackValue, curve: "linear" },
+    { time: 1, value: fallbackValue, curve: "linear" },
+  ];
+  const points = source
+    .map((point) => ({
+      time: Math.min(1, Math.max(0, normalizeFiniteNumber(point?.time, 0))),
+      value: Math.min(1, Math.max(0, normalizeFiniteNumber(point?.value, fallbackValue))),
+      curve: ["linear", "easeOut", "easeIn", "easeInOut", "step"].includes(point?.curve) ? point.curve : "linear",
+    }))
+    .sort((a, b) => a.time - b.time);
+  if (!points.some((point) => point.time === 0)) points.unshift({ time: 0, value: points[0]?.value ?? fallbackValue, curve: "linear" });
+  if (!points.some((point) => point.time === 1)) points.push({ time: 1, value: points[points.length - 1]?.value ?? fallbackValue, curve: "linear" });
+  points[0].time = 0;
+  points[points.length - 1].time = 1;
+  points[points.length - 1].curve = "linear";
+  return points.slice(0, 12);
+}
+
+function buildEffectOpacityGraphPath(graph) {
+  const points = normalizeParticleOpacityGraph(graph);
+  let path = `M${effectGraphX(points[0].time)} ${effectGraphY(points[0].value, 1)}`;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    const x1 = effectGraphX(current.time);
+    const y1 = effectGraphY(current.value, 1);
+    const x2 = effectGraphX(next.time);
+    const y2 = effectGraphY(next.value, 1);
+    if (current.curve === "step") {
+      path += ` L${x2} ${y1} L${x2} ${y2}`;
+    } else if (current.curve === "easeOut") {
+      path += ` C${x1 + (x2 - x1) * 0.16} ${y2} ${x1 + (x2 - x1) * 0.44} ${y2} ${x2} ${y2}`;
+    } else if (current.curve === "easeIn") {
+      path += ` C${x1 + (x2 - x1) * 0.56} ${y1} ${x1 + (x2 - x1) * 0.84} ${y1} ${x2} ${y2}`;
+    } else if (current.curve === "easeInOut") {
+      path += ` C${x1 + (x2 - x1) * 0.42} ${y1} ${x1 + (x2 - x1) * 0.58} ${y2} ${x2} ${y2}`;
+    } else {
+      path += ` L${x2} ${y2}`;
+    }
+  }
+  return path;
+}
+
+function buildEffectSizeGraphPath(graph) {
+  return buildEffectOpacityGraphPath(normalizeParticleSizeGraph(graph));
+}
+
+function evaluateParticleOpacityGraph(graph, time) {
+  const points = normalizeParticleOpacityGraph(graph);
+  const t = Math.min(1, Math.max(0, time));
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    if (t < current.time || t > next.time) continue;
+    const span = Math.max(0.000001, next.time - current.time);
+    const local = (t - current.time) / span;
+    const eased = evaluateEmotionImageCurve(current.curve, local);
+    return lerp(current.value, next.value, eased);
+  }
+  return points[points.length - 1]?.value ?? 1;
+}
+
+function evaluateParticleSizeGraph(graph, time) {
+  return evaluateParticleOpacityGraph(normalizeParticleSizeGraph(graph), time);
+}
+
+function normalizeSpriteEffectSettings(settings = {}) {
+  return {
+    size: Math.min(5, Math.max(0.05, normalizeFiniteNumber(settings.size, 0.8))),
+    opacity: Math.min(1, Math.max(0, normalizeFiniteNumber(settings.opacity, 1))),
+  };
+}
+
+function normalizeMeshEffectSettings(settings = {}) {
+  return {
+    shape: ["box", "sphere", "ring"].includes(settings.shape) ? settings.shape : "box",
+    spin: Math.min(10, Math.max(-10, normalizeFiniteNumber(settings.spin, 1))),
+  };
+}
+
+function normalizeEffectNumberArray(values, fallback, length) {
+  const source = Array.isArray(values) ? values : fallback;
+  return Array.from({ length }, (_, index) => normalizeFiniteNumber(source[index], fallback[index] ?? 0));
+}
+
+async function saveEffectsMeta() {
+  const result = await window.vrmFiles.saveEffectsMeta?.(JSON.stringify(serializeEffectsMeta(), null, 2));
+  if (!result) return;
+  state.effectsPath = result.filePath;
+  state.effectsDirty = false;
+  syncSaveMetaButton();
+  renderPreservingScrollableUi();
+}
+
+function addEffectSlot() {
+  const effects = normalizeEffectSlots(state.effects.effects);
+  const slot = normalizeEffectSlot(
+    {
+      id: `effect-${Date.now()}-${effects.length}`,
+      name: `Effect ${effects.length + 1}`,
+      type: "particle",
+      attachBone: "world",
+      enabled: false,
+    },
+    effects.length,
+  );
+  state.effects = normalizeEffectsMeta({ ...state.effects, effects: [...effects, slot] });
+  state.selectedEffectId = slot.id;
+  state.effectsDirty = true;
+  renderPreservingScrollableUi();
+}
+
+function updateEffectSlot(effectId, patch, shouldRender = true) {
+  const effects = normalizeEffectSlots(state.effects.effects);
+  state.effects.effects = effects.map((effect, index) => {
+    if (effect.id !== effectId) return effect;
+    const normalized = normalizeEffectSlot({ ...effect, ...patch }, index);
+    if (!hasOwnField(patch, "particle")) {
+      normalized.particle.emissionGraph = effect.particle.emissionGraph;
+      normalized.particle.sizeGraph = effect.particle.sizeGraph;
+      normalized.particle.opacityGraph = effect.particle.opacityGraph;
+    }
+    return normalized;
+  });
+  state.effectsDirty = true;
+  syncSaveMetaButton();
+  syncSelectedEffectPreview();
+  if (shouldRender) renderPreservingScrollableUi();
+}
+
+function updateEffectSlotNested(effectId, key, patch, shouldRender = true) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect || !["particle", "sprite", "mesh"].includes(key)) return;
+  updateEffectSlot(effectId, { [key]: { ...effect[key], ...patch } }, shouldRender);
+}
+
+function updateEffectSlotVector(effectId, key, axis, value) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect || !["positionOffset", "rotationOffset"].includes(key) || !Number.isFinite(axis) || !Number.isFinite(value)) return;
+  const next = [...effect.positionOffset];
+  if (key === "positionOffset") {
+    next[axis] = Math.min(10, Math.max(-10, value));
+    updateEffectSlot(effectId, { positionOffset: next }, false);
+    return;
+  }
+  const rotations = [...effect.rotationOffset];
+  rotations[axis] = Math.min(180, Math.max(-180, value));
+  updateEffectSlot(effectId, { rotationOffset: rotations }, false);
+}
+
+function updateEffectAngularVelocityAxis(effectId, axis, enabled) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect || !Number.isInteger(axis) || axis < 0 || axis > 2) return;
+  const particle = normalizeParticleEffectSettings(effect.particle);
+  const angularVelocityEnabled = [...particle.angularVelocityEnabled];
+  angularVelocityEnabled[axis] = Boolean(enabled);
+  updateEffectSlotNested(effectId, "particle", { angularVelocityEnabled }, true);
+}
+
+function updateEffectColorSlotCount(effectId, value) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect || !Number.isFinite(value)) return;
+  const count = Math.min(5, Math.max(1, Math.round(value)));
+  const particle = normalizeParticleEffectSettings(effect.particle);
+  const colorSlots = [...particle.colorSlots];
+  while (colorSlots.length < count) colorSlots.push(colorSlots[colorSlots.length - 1] ?? effect.color);
+  updateEffectSlotNested(effectId, "particle", { colorSlots: colorSlots.slice(0, count) }, false);
+}
+
+function updateEffectColorSlot(effectId, index, value) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  const color = normalizeHexColor(value);
+  if (!effect || !color || !Number.isInteger(index)) return;
+  const colorSlots = [...normalizeParticleEffectSettings(effect.particle).colorSlots];
+  if (index < 0 || index >= colorSlots.length) return;
+  colorSlots[index] = color;
+  updateEffectSlotNested(effectId, "particle", { colorSlots }, false);
+}
+
+function updateEffectRangePair(range, value, changedSide, transform = (next) => next) {
+  const nextValue = transform(value);
+  const current = Array.isArray(range) ? range : [nextValue, nextValue];
+  if (changedSide === "min") {
+    return [nextValue, Math.max(nextValue, current[1])];
+  }
+  return [Math.min(current[0], nextValue), nextValue];
+}
+
+function updateEffectSlotNumber(effectId, key, value) {
+  if (!Number.isFinite(value)) return;
+  const commonKeys = new Set(["scale", "duration"]);
+  if (commonKeys.has(key)) {
+    updateEffectSlot(effectId, { [key]: value }, false);
+    return;
+  }
+  if (key.startsWith("particle")) {
+    const map = {
+      particleSpread: "spread",
+      particleDrag: "drag",
+      particleGravity: "gravity",
+      particleAngularDrag: "angularDrag",
+      particleStopSpeedThreshold: "stopSpeedThreshold",
+      particleSeed: "seed",
+    };
+    const angularMatch = key.match(/^particleAngularVelocity([XYZ])(Min|Max)$/);
+    if (angularMatch) {
+      const effect = state.effects.effects.find((item) => item.id === effectId);
+      const angularVelocity = normalizeParticleEffectSettings(effect?.particle).angularVelocity.map((range) => [...range]);
+      const axisIndex = { X: 0, Y: 1, Z: 2 }[angularMatch[1]];
+      angularVelocity[axisIndex] = updateEffectRangePair(angularVelocity[axisIndex], value, angularMatch[2] === "Min" ? "min" : "max");
+      updateEffectSlotNested(effectId, "particle", { angularVelocity }, false);
+      syncEffectRangeInputs(
+        effectId,
+        angularVelocity[axisIndex],
+        `particleAngularVelocity${angularMatch[1]}Min`,
+        `particleAngularVelocity${angularMatch[1]}Max`,
+        key,
+      );
+    } else if (key === "particleCountMin" || key === "particleCountMax") {
+      const effect = state.effects.effects.find((item) => item.id === effectId);
+      const count = normalizeParticleEffectSettings(effect?.particle).count;
+      const next = updateEffectRangePair(count, value, key === "particleCountMin" ? "min" : "max", Math.round);
+      updateEffectSlotNested(effectId, "particle", { count: next }, false);
+      syncEffectRangeInputs(effectId, next, "particleCountMin", "particleCountMax", key);
+      updateEffectEmissionGraphDom(effectId, normalizeParticleEmissionGraph(effect?.particle?.emissionGraph, next[1]), next[1]);
+    } else if (key === "particleSpeedMin" || key === "particleSpeedMax") {
+      const effect = state.effects.effects.find((item) => item.id === effectId);
+      const speed = normalizeParticleEffectSettings(effect?.particle).speed;
+      const next = updateEffectRangePair(speed, value, key === "particleSpeedMin" ? "min" : "max");
+      updateEffectSlotNested(effectId, "particle", { speed: next }, false);
+      syncEffectRangeInputs(effectId, next, "particleSpeedMin", "particleSpeedMax", key);
+    } else if (key === "particleSizeMin" || key === "particleSizeMax") {
+      const effect = state.effects.effects.find((item) => item.id === effectId);
+      const size = normalizeParticleEffectSettings(effect?.particle).size;
+      const next = updateEffectRangePair(size, value, key === "particleSizeMin" ? "min" : "max");
+      updateEffectSlotNested(effectId, "particle", { size: next }, false);
+      syncEffectRangeInputs(effectId, next, "particleSizeMin", "particleSizeMax", key);
+    } else if (key === "particleLifetimeMin" || key === "particleLifetimeMax") {
+      const effect = state.effects.effects.find((item) => item.id === effectId);
+      const lifetime = normalizeParticleEffectSettings(effect?.particle).lifetime;
+      const next = updateEffectRangePair(lifetime, value, key === "particleLifetimeMin" ? "min" : "max");
+      updateEffectSlotNested(effectId, "particle", { lifetime: next }, false);
+      syncEffectRangeInputs(effectId, next, "particleLifetimeMin", "particleLifetimeMax", key);
+    } else if (key === "particleRotationMin" || key === "particleRotationMax") {
+      const effect = state.effects.effects.find((item) => item.id === effectId);
+      const rotation = normalizeParticleEffectSettings(effect?.particle).rotation;
+      const next = updateEffectRangePair(rotation, value, key === "particleRotationMin" ? "min" : "max");
+      updateEffectSlotNested(effectId, "particle", { rotation: next }, false);
+      syncEffectRangeInputs(effectId, next, "particleRotationMin", "particleRotationMax", key);
+    } else {
+      updateEffectSlotNested(effectId, "particle", { [map[key]]: value }, false);
+    }
+    return;
+  }
+  if (key.startsWith("sprite")) {
+    const map = {
+      spriteSize: "size",
+      spriteOpacity: "opacity",
+    };
+    updateEffectSlotNested(effectId, "sprite", { [map[key]]: value }, false);
+    return;
+  }
+  if (key === "meshSpin") {
+    updateEffectSlotNested(effectId, "mesh", { spin: value }, false);
+  }
+}
+
+function handleEffectEmissionGraphPointerDown(event) {
+  const surface = event.currentTarget;
+  const effectId = surface.dataset.effectEmissionGraph;
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect || effect.type !== "particle") return;
+  if (normalizeParticleEffectSettings(effect.particle).burst) return;
+  event.preventDefault();
+  const pointButton = event.target.closest?.("[data-effect-emission-point]");
+  if (event.button === 2) {
+    if (pointButton) deleteEffectEmissionGraphPoint(effectId, Number(pointButton.dataset.effectEmissionPoint));
+    return;
+  }
+  let pointIndex;
+  if (pointButton) {
+    pointIndex = Number(pointButton.dataset.effectEmissionPoint);
+  } else {
+    pointIndex = addEffectEmissionGraphPoint(effectId, event, surface);
+  }
+  if (!Number.isFinite(pointIndex)) return;
+  state.selectedEffectGraphIndex = pointIndex;
+  state.selectedEffectGraphKind = "emission";
+  beginEffectEmissionGraphPointDrag(event, surface, effectId, pointIndex);
+}
+
+function handleEffectOpacityGraphPointerDown(event) {
+  const surface = event.currentTarget;
+  const effectId = surface.dataset.effectOpacityGraph;
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect || effect.type !== "particle") return;
+  event.preventDefault();
+  const pointButton = event.target.closest?.("[data-effect-opacity-point]");
+  if (event.button === 2) {
+    if (pointButton) deleteEffectOpacityGraphPoint(effectId, Number(pointButton.dataset.effectOpacityPoint));
+    return;
+  }
+  let pointIndex;
+  if (pointButton) {
+    pointIndex = Number(pointButton.dataset.effectOpacityPoint);
+  } else {
+    pointIndex = addEffectOpacityGraphPoint(effectId, event, surface);
+  }
+  if (!Number.isFinite(pointIndex)) return;
+  state.selectedEffectGraphIndex = pointIndex;
+  state.selectedEffectGraphKind = "opacity";
+  beginEffectOpacityGraphPointDrag(event, surface, effectId, pointIndex);
+}
+
+function handleEffectSizeGraphPointerDown(event) {
+  const surface = event.currentTarget;
+  const effectId = surface.dataset.effectSizeGraph;
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect || effect.type !== "particle") return;
+  event.preventDefault();
+  const pointButton = event.target.closest?.("[data-effect-size-point]");
+  if (event.button === 2) {
+    if (pointButton) deleteEffectSizeGraphPoint(effectId, Number(pointButton.dataset.effectSizePoint));
+    return;
+  }
+  let pointIndex;
+  if (pointButton) {
+    pointIndex = Number(pointButton.dataset.effectSizePoint);
+  } else {
+    pointIndex = addEffectSizeGraphPoint(effectId, event, surface);
+  }
+  if (!Number.isFinite(pointIndex)) return;
+  state.selectedEffectGraphIndex = pointIndex;
+  state.selectedEffectGraphKind = "size";
+  beginEffectSizeGraphPointDrag(event, surface, effectId, pointIndex);
+}
+
+function addEffectEmissionGraphPoint(effectId, event, surface) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect) return -1;
+  const countMax = getParticleCountMax(effect.particle);
+  const point = getEffectEmissionPointFromEvent(event, surface, countMax);
+  const graph = normalizeParticleEmissionGraph(effect.particle.emissionGraph, countMax);
+  graph.push(point);
+  graph.sort((a, b) => a.time - b.time);
+  const index = graph.findIndex((item) => item === point);
+  updateEffectSlotNested(effectId, "particle", { emissionGraph: graph }, false);
+  return index;
+}
+
+function beginEffectEmissionGraphPointDrag(event, surface, effectId, pointIndex) {
+  const pointerId = event.pointerId;
+  surface.setPointerCapture?.(pointerId);
+  const move = (moveEvent) => moveEffectEmissionGraphPoint(effectId, pointIndex, moveEvent, surface);
+  const up = () => {
+    surface.releasePointerCapture?.(pointerId);
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    renderPreservingScrollableUi();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up, { once: true });
+  move(event);
+}
+
+function moveEffectEmissionGraphPoint(effectId, pointIndex, event, surface) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect) return;
+  const countMax = getParticleCountMax(effect.particle);
+  const graph = normalizeParticleEmissionGraph(effect.particle.emissionGraph, countMax);
+  if (!graph[pointIndex]) return;
+  const point = getEffectEmissionPointFromEvent(event, surface, countMax);
+  const targetTime = pointIndex === 0 ? 0 : pointIndex === graph.length - 1 ? 1 : point.time;
+  graph[pointIndex] = {
+    time: targetTime,
+    value: point.value,
+    curve: graph[pointIndex].curve ?? "linear",
+  };
+  graph.sort((a, b) => a.time - b.time);
+  state.selectedEffectGraphIndex = Math.max(
+    0,
+    graph.findIndex((item) => Math.abs(item.time - targetTime) < 0.000001 && item.value === point.value),
+  );
+  updateEffectSlotNested(effectId, "particle", { emissionGraph: graph }, false);
+  updateEffectEmissionGraphDom(effectId, graph, countMax);
+}
+
+function deleteEffectEmissionGraphPoint(effectId, pointIndex) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect) return;
+  const graph = normalizeParticleEmissionGraph(effect.particle.emissionGraph, getParticleCountMax(effect.particle));
+  if (pointIndex <= 0 || pointIndex >= graph.length - 1) return;
+  graph.splice(pointIndex, 1);
+  state.selectedEffectGraphIndex = Math.min(pointIndex, graph.length - 1);
+  updateEffectSlotNested(effectId, "particle", { emissionGraph: graph }, true);
+}
+
+function addEffectOpacityGraphPoint(effectId, event, surface) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect) return -1;
+  const point = getEffectOpacityPointFromEvent(event, surface);
+  const graph = normalizeParticleOpacityGraph(effect.particle.opacityGraph);
+  graph.push(point);
+  graph.sort((a, b) => a.time - b.time);
+  const index = graph.findIndex((item) => item === point);
+  updateEffectSlotNested(effectId, "particle", { opacityGraph: graph }, false);
+  return index;
+}
+
+function beginEffectOpacityGraphPointDrag(event, surface, effectId, pointIndex) {
+  const pointerId = event.pointerId;
+  surface.setPointerCapture?.(pointerId);
+  const move = (moveEvent) => moveEffectOpacityGraphPoint(effectId, pointIndex, moveEvent, surface);
+  const up = () => {
+    surface.releasePointerCapture?.(pointerId);
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    renderPreservingScrollableUi();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up, { once: true });
+  move(event);
+}
+
+function moveEffectOpacityGraphPoint(effectId, pointIndex, event, surface) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect) return;
+  const graph = normalizeParticleOpacityGraph(effect.particle.opacityGraph);
+  if (!graph[pointIndex]) return;
+  const point = getEffectOpacityPointFromEvent(event, surface);
+  const targetTime = pointIndex === 0 ? 0 : pointIndex === graph.length - 1 ? 1 : point.time;
+  graph[pointIndex] = {
+    time: targetTime,
+    value: point.value,
+    curve: graph[pointIndex].curve ?? "linear",
+  };
+  graph.sort((a, b) => a.time - b.time);
+  state.selectedEffectGraphIndex = Math.max(
+    0,
+    graph.findIndex((item) => Math.abs(item.time - targetTime) < 0.000001 && Math.abs(item.value - point.value) < 0.000001),
+  );
+  state.selectedEffectGraphKind = "opacity";
+  updateEffectSlotNested(effectId, "particle", { opacityGraph: graph }, false);
+  updateEffectOpacityGraphDom(effectId, graph);
+}
+
+function deleteEffectOpacityGraphPoint(effectId, pointIndex) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect) return;
+  const graph = normalizeParticleOpacityGraph(effect.particle.opacityGraph);
+  if (pointIndex <= 0 || pointIndex >= graph.length - 1) return;
+  graph.splice(pointIndex, 1);
+  state.selectedEffectGraphIndex = Math.min(pointIndex, graph.length - 1);
+  state.selectedEffectGraphKind = "opacity";
+  updateEffectSlotNested(effectId, "particle", { opacityGraph: graph }, true);
+}
+
+function addEffectSizeGraphPoint(effectId, event, surface) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect) return -1;
+  const point = getEffectUnitGraphPointFromEvent(event, surface);
+  const graph = normalizeParticleSizeGraph(effect.particle.sizeGraph);
+  graph.push(point);
+  graph.sort((a, b) => a.time - b.time);
+  const index = graph.findIndex((item) => item === point);
+  updateEffectSlotNested(effectId, "particle", { sizeGraph: graph }, false);
+  return index;
+}
+
+function beginEffectSizeGraphPointDrag(event, surface, effectId, pointIndex) {
+  const pointerId = event.pointerId;
+  surface.setPointerCapture?.(pointerId);
+  const move = (moveEvent) => moveEffectSizeGraphPoint(effectId, pointIndex, moveEvent, surface);
+  const up = () => {
+    surface.releasePointerCapture?.(pointerId);
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    renderPreservingScrollableUi();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up, { once: true });
+  move(event);
+}
+
+function moveEffectSizeGraphPoint(effectId, pointIndex, event, surface) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect) return;
+  const graph = normalizeParticleSizeGraph(effect.particle.sizeGraph);
+  if (!graph[pointIndex]) return;
+  const point = getEffectUnitGraphPointFromEvent(event, surface);
+  const targetTime = pointIndex === 0 ? 0 : pointIndex === graph.length - 1 ? 1 : point.time;
+  graph[pointIndex] = {
+    time: targetTime,
+    value: point.value,
+    curve: graph[pointIndex].curve ?? "linear",
+  };
+  graph.sort((a, b) => a.time - b.time);
+  state.selectedEffectGraphIndex = Math.max(
+    0,
+    graph.findIndex((item) => Math.abs(item.time - targetTime) < 0.000001 && Math.abs(item.value - point.value) < 0.000001),
+  );
+  state.selectedEffectGraphKind = "size";
+  updateEffectSlotNested(effectId, "particle", { sizeGraph: graph }, false);
+  updateEffectSizeGraphDom(effectId, graph);
+}
+
+function deleteEffectSizeGraphPoint(effectId, pointIndex) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect) return;
+  const graph = normalizeParticleSizeGraph(effect.particle.sizeGraph);
+  if (pointIndex <= 0 || pointIndex >= graph.length - 1) return;
+  graph.splice(pointIndex, 1);
+  state.selectedEffectGraphIndex = Math.min(pointIndex, graph.length - 1);
+  state.selectedEffectGraphKind = "size";
+  updateEffectSlotNested(effectId, "particle", { sizeGraph: graph }, true);
+}
+
+function setSelectedEffectGraphCurve(curve, graphKind = state.selectedEffectGraphKind) {
+  if (!["linear", "easeOut", "easeIn", "easeInOut", "step"].includes(curve)) return;
+  const effect = getSelectedEffectSlot();
+  if (!effect || effect.type !== "particle") return;
+  const kind = ["opacity", "size", "emission"].includes(graphKind) ? graphKind : "emission";
+  const graph =
+    kind === "opacity"
+      ? normalizeParticleOpacityGraph(effect.particle.opacityGraph)
+      : kind === "size"
+      ? normalizeParticleSizeGraph(effect.particle.sizeGraph)
+      : normalizeParticleEmissionGraph(effect.particle.emissionGraph, getParticleCountMax(effect.particle));
+  const pointIndex = clampNumber(Number(state.selectedEffectGraphIndex), 0, graph.length - 1, 0);
+  if (!graph[pointIndex] || pointIndex >= graph.length - 1) return;
+  graph[pointIndex] = { ...graph[pointIndex], curve };
+  state.selectedEffectGraphKind = kind;
+  const key = kind === "opacity" ? "opacityGraph" : kind === "size" ? "sizeGraph" : "emissionGraph";
+  updateEffectSlotNested(effect.id, "particle", { [key]: graph }, true);
+}
+
+function getEffectEmissionPointFromEvent(event, surface, maxValue) {
+  const rect = surface.getBoundingClientRect();
+  const x = Math.min(1, Math.max(0, (event.clientX - rect.left) / Math.max(rect.width, 1)));
+  const y = Math.min(1, Math.max(0, (event.clientY - rect.top) / Math.max(rect.height, 1)));
+  return {
+    time: Math.round(x * 100) / 100,
+    value: Math.round((1 - y) * maxValue),
+    curve: "linear",
+  };
+}
+
+function getEffectOpacityPointFromEvent(event, surface) {
+  return getEffectUnitGraphPointFromEvent(event, surface);
+}
+
+function getEffectUnitGraphPointFromEvent(event, surface) {
+  const rect = surface.getBoundingClientRect();
+  const x = Math.min(1, Math.max(0, (event.clientX - rect.left) / Math.max(rect.width, 1)));
+  const y = Math.min(1, Math.max(0, (event.clientY - rect.top) / Math.max(rect.height, 1)));
+  return {
+    time: Math.round(x * 100) / 100,
+    value: Math.round((1 - y) * 100) / 100,
+    curve: "linear",
+  };
+}
+
+function updateEffectEmissionGraphDom(effectId, graph, maxValue) {
+  const surface = document.querySelector(`[data-effect-emission-graph="${cssEscape(effectId)}"]`);
+  if (!surface) return;
+  const path = surface.querySelector(".emotion-graph-line");
+  if (path) path.setAttribute("d", buildEffectEmissionGraphPath(graph, maxValue));
+  const valueLabel = surface.parentElement?.querySelector(".emotion-image-graph-label strong");
+  const selectedPoint = graph[state.selectedEffectGraphIndex];
+  if (valueLabel) valueLabel.textContent = selectedPoint ? Math.round(selectedPoint.value) : "";
+  for (const button of surface.querySelectorAll("[data-effect-emission-point]")) {
+    const index = Number(button.dataset.effectEmissionPoint);
+    const point = graph[index];
+    if (!point) continue;
+    button.style.left = `${((effectGraphX(point.time) / EFFECT_GRAPH_WIDTH) * 100).toFixed(3)}%`;
+    button.style.top = `${((effectGraphY(point.value, maxValue) / EFFECT_GRAPH_HEIGHT) * 100).toFixed(3)}%`;
+    button.classList.toggle("selected", index === state.selectedEffectGraphIndex);
+  }
+}
+
+function updateEffectOpacityGraphDom(effectId, graph) {
+  const surface = document.querySelector(`[data-effect-opacity-graph="${cssEscape(effectId)}"]`);
+  if (!surface) return;
+  const path = surface.querySelector(".emotion-graph-line");
+  if (path) path.setAttribute("d", buildEffectOpacityGraphPath(graph));
+  const valueLabel = surface.parentElement?.querySelector(".emotion-image-graph-label strong");
+  const selectedPoint = graph[state.selectedEffectGraphIndex];
+  if (valueLabel) valueLabel.textContent = selectedPoint ? selectedPoint.value.toFixed(2) : "";
+  for (const button of surface.querySelectorAll("[data-effect-opacity-point]")) {
+    const index = Number(button.dataset.effectOpacityPoint);
+    const point = graph[index];
+    if (!point) continue;
+    button.style.left = `${((effectGraphX(point.time) / EFFECT_GRAPH_WIDTH) * 100).toFixed(3)}%`;
+    button.style.top = `${((effectGraphY(point.value, 1) / EFFECT_GRAPH_HEIGHT) * 100).toFixed(3)}%`;
+    button.classList.toggle("selected", index === state.selectedEffectGraphIndex);
+  }
+}
+
+function updateEffectSizeGraphDom(effectId, graph) {
+  const surface = document.querySelector(`[data-effect-size-graph="${cssEscape(effectId)}"]`);
+  if (!surface) return;
+  const path = surface.querySelector(".emotion-graph-line");
+  if (path) path.setAttribute("d", buildEffectSizeGraphPath(graph));
+  const valueLabel = surface.parentElement?.querySelector(".emotion-image-graph-label strong");
+  const selectedPoint = graph[state.selectedEffectGraphIndex];
+  if (valueLabel) valueLabel.textContent = selectedPoint ? selectedPoint.value.toFixed(2) : "";
+  for (const button of surface.querySelectorAll("[data-effect-size-point]")) {
+    const index = Number(button.dataset.effectSizePoint);
+    const point = graph[index];
+    if (!point) continue;
+    button.style.left = `${((effectGraphX(point.time) / EFFECT_GRAPH_WIDTH) * 100).toFixed(3)}%`;
+    button.style.top = `${((effectGraphY(point.value, 1) / EFFECT_GRAPH_HEIGHT) * 100).toFixed(3)}%`;
+    button.classList.toggle("selected", index === state.selectedEffectGraphIndex);
+  }
+}
+
+function finalizeEffectNumberInput(input) {
+  if (!isCompleteNumberInput(input.value)) {
+    syncEffectNumberInputFromState(input);
+    return;
+  }
+  updateEffectSlotNumber(input.dataset.effectNumber, input.dataset.key, Number(input.value));
+  syncEffectNumberInputFromState(input);
+}
+
+function syncEffectNumberInputFromState(input) {
+  const effect = state.effects.effects.find((item) => item.id === input.dataset.effectNumber);
+  if (!effect) return;
+  const key = input.dataset.key;
+  const valueMap = {
+    scale: effect.scale,
+    duration: effect.duration,
+    particleSpread: effect.particle.spread,
+    particleDrag: effect.particle.drag,
+    particleGravity: effect.particle.gravity,
+    particleAngularDrag: effect.particle.angularDrag,
+    particleStopSpeedThreshold: effect.particle.stopSpeedThreshold,
+    particleCountMin: effect.particle.count[0],
+    particleCountMax: effect.particle.count[1],
+    particleSpeedMin: effect.particle.speed[0],
+    particleSpeedMax: effect.particle.speed[1],
+    particleSizeMin: effect.particle.size[0],
+    particleSizeMax: effect.particle.size[1],
+    particleLifetimeMin: effect.particle.lifetime[0],
+    particleLifetimeMax: effect.particle.lifetime[1],
+    particleRotationMin: effect.particle.rotation[0],
+    particleRotationMax: effect.particle.rotation[1],
+    particleAngularVelocityXMin: effect.particle.angularVelocity[0][0],
+    particleAngularVelocityXMax: effect.particle.angularVelocity[0][1],
+    particleAngularVelocityYMin: effect.particle.angularVelocity[1][0],
+    particleAngularVelocityYMax: effect.particle.angularVelocity[1][1],
+    particleAngularVelocityZMin: effect.particle.angularVelocity[2][0],
+    particleAngularVelocityZMax: effect.particle.angularVelocity[2][1],
+    particleSeed: effect.particle.seed,
+    spriteSize: effect.sprite.size,
+    spriteOpacity: effect.sprite.opacity,
+    meshSpin: effect.mesh.spin,
+  };
+  if (!hasOwnField(valueMap, key)) return;
+  input.value = roundForInput(valueMap[key]);
+}
+
+function isEffectRangeNumberKey(key) {
+  return (
+    key === "particleCountMin" ||
+    key === "particleCountMax" ||
+    key === "particleSpeedMin" ||
+    key === "particleSpeedMax" ||
+    key === "particleSizeMin" ||
+    key === "particleSizeMax" ||
+    key === "particleLifetimeMin" ||
+    key === "particleLifetimeMax" ||
+    key === "particleRotationMin" ||
+    key === "particleRotationMax" ||
+    /^particleAngularVelocity[XYZ](Min|Max)$/.test(key ?? "")
+  );
+}
+
+function syncEffectRangeInputs(effectId, values, minKey, maxKey, editedKey = null) {
+  for (const key of [minKey, maxKey]) {
+    if (key === editedKey) continue;
+    const input = document.querySelector(`[data-effect-number="${cssEscape(effectId)}"][data-key="${key}"]`);
+    if (!input) continue;
+    input.value = roundForInput(key === minKey ? values[0] : values[1]);
+  }
+}
+
+function deleteEffectSlot(effectId) {
+  const target = state.effects.effects.find((effect) => effect.id === effectId);
+  if (!target || !window.confirm(`"${target.name}" 효과 슬롯을 삭제할까요?`)) return;
+  const effects = state.effects.effects.filter((effect) => effect.id !== effectId);
+  state.effects = normalizeEffectsMeta({ ...state.effects, effects });
+  state.selectedEffectId = effects[0]?.id ?? null;
+  state.effectsDirty = true;
+  syncSelectedEffectPreview();
+  renderPreservingScrollableUi();
+}
+
+function applyEffectModelVisibility() {
+  if (!currentVrm?.scene) return;
+  currentVrm.scene.visible = state.mode === "effect" ? state.effectShowModel : true;
+}
+
+function getSelectedEffectSlot() {
+  const effects = normalizeEffectSlots(state.effects.effects);
+  if (!effects.length) return null;
+  return effects.find((effect) => effect.id === state.selectedEffectId) ?? effects[0] ?? null;
+}
+
+function syncSelectedEffectPreview() {
+  if (state.mode !== "effect") {
+    clearEffectPreview();
+    return;
+  }
+  const effect = getSelectedEffectSlot();
+  if (!effect?.enabled) {
+    clearEffectPreview();
+    return;
+  }
+  const signature = getEffectPreviewSignature(effect);
+  if (effectPreview?.id !== effect.id || effectPreview?.type !== effect.type || effectPreview?.signature !== signature) {
+    createEffectPreview(effect);
+  }
+  applyEffectPreviewSettings(effect);
+  attachEffectTransformControls();
+}
+
+function getEffectPreviewSignature(effect) {
+  if (!effect) return "";
+  if (effect.type === "particle") return effect.type;
+  if (effect.type === "mesh") {
+    return `${effect.type}:${effect.mesh.shape}`;
+  }
+  return effect.type;
+}
+
+function createEffectPreview(effect) {
+  clearEffectPreview();
+  const group = new THREE.Group();
+  group.name = `ExpressionEditor_EffectPreview_${effect.id}`;
+  let object = null;
+  if (effect.type === "sprite") object = createSpriteEffectPreview(effect);
+  else if (effect.type === "mesh") object = createMeshEffectPreview(effect);
+  else object = createParticleEffectPreview(effect);
+  group.add(object);
+  scene.add(group);
+  const seed = getParticleEffectSeed(effect.particle);
+  effectPreview = {
+    id: effect.id,
+    type: effect.type,
+    signature: getEffectPreviewSignature(effect),
+    group,
+    object,
+    elapsed: 0,
+    burstCycle: -1,
+    emitCarry: 0,
+    seed,
+    rng: createSeededRandom(seed),
+    seedSignature: getParticleSeedSignature(effect.particle),
+  };
+}
+
+function clearEffectPreview() {
+  detachEffectTransformControls();
+  if (!effectPreview?.group) return;
+  scene.remove(effectPreview.group);
+  effectPreview.group.traverse((object) => {
+    object.geometry?.dispose?.();
+    if (Array.isArray(object.material)) {
+      for (const material of object.material) disposeEffectMaterial(material);
+    } else {
+      disposeEffectMaterial(object.material);
+    }
+  });
+  effectPreview = null;
+}
+
+function restartSelectedEffectPreview() {
+  if (!effectPreview) {
+    syncSelectedEffectPreview();
+    return;
+  }
+  effectPreview.elapsed = 0;
+  effectPreview.burstCycle = -1;
+  effectPreview.emitCarry = 0;
+  if (effectPreview.type === "particle") resetParticleEffectPreview(effectPreview.object);
+}
+
+function resetParticleEffectPreview(object) {
+  const geometry = object?.geometry;
+  if (!geometry) return;
+  const positions = geometry.attributes.position.array;
+  const opacities = geometry.attributes.particleOpacity?.array;
+  const colors = geometry.attributes.particleColor?.array;
+  const sizes = geometry.attributes.particleSize?.array;
+  const centers = geometry.userData.centers;
+  const velocities = geometry.userData.velocities;
+  const rotations = geometry.userData.rotations;
+  const angularVelocities = geometry.userData.angularVelocities;
+  const ages = geometry.userData.ages;
+  const lifetimes = geometry.userData.lifetimes;
+  const alive = geometry.userData.alive;
+  const capacity = alive?.length ?? 0;
+  for (let index = 0; index < capacity; index += 1) {
+    hideParticleQuad(positions, index);
+    setParticleQuadOpacity(opacities, index, 0);
+    setParticleQuadColor(colors, index, "#000000");
+    if (sizes) sizes[index] = 0;
+    if (centers) {
+      centers[index * 3] = 0;
+      centers[index * 3 + 1] = 0;
+      centers[index * 3 + 2] = 0;
+    }
+    if (velocities) {
+      velocities[index * 3] = 0;
+      velocities[index * 3 + 1] = 0;
+      velocities[index * 3 + 2] = 0;
+    }
+    if (rotations) {
+      rotations[index * 3] = 0;
+      rotations[index * 3 + 1] = 0;
+      rotations[index * 3 + 2] = 0;
+    }
+    if (angularVelocities) {
+      angularVelocities[index * 3] = 0;
+      angularVelocities[index * 3 + 1] = 0;
+      angularVelocities[index * 3 + 2] = 0;
+    }
+    if (ages) ages[index] = 0;
+    if (lifetimes) lifetimes[index] = 0;
+    if (alive) alive[index] = 0;
+  }
+  geometry.attributes.position.needsUpdate = true;
+  if (geometry.attributes.particleOpacity) geometry.attributes.particleOpacity.needsUpdate = true;
+  if (geometry.attributes.particleColor) geometry.attributes.particleColor.needsUpdate = true;
+}
+
+function disposeEffectMaterial(material) {
+  if (!material) return;
+  material.map?.dispose?.();
+  material.dispose?.();
+}
+
+function hideParticleQuad(positions, index) {
+  const start = index * 12;
+  for (let offset = 0; offset < 12; offset += 3) {
+    positions[start + offset] = 9999;
+    positions[start + offset + 1] = 9999;
+    positions[start + offset + 2] = 9999;
+  }
+}
+
+function writeParticleQuadUvs(uvs, index) {
+  const start = index * 8;
+  uvs[start] = 0;
+  uvs[start + 1] = 0;
+  uvs[start + 2] = 1;
+  uvs[start + 3] = 0;
+  uvs[start + 4] = 1;
+  uvs[start + 5] = 1;
+  uvs[start + 6] = 0;
+  uvs[start + 7] = 1;
+}
+
+function setParticleQuadOpacity(opacities, index, value) {
+  if (!opacities) return;
+  const start = index * 4;
+  opacities[start] = value;
+  opacities[start + 1] = value;
+  opacities[start + 2] = value;
+  opacities[start + 3] = value;
+}
+
+function setParticleQuadColor(colors, index, color) {
+  if (!colors) return;
+  effectParticleColor.set(color);
+  const start = index * 12;
+  for (let offset = 0; offset < 12; offset += 3) {
+    colors[start + offset] = effectParticleColor.r;
+    colors[start + offset + 1] = effectParticleColor.g;
+    colors[start + offset + 2] = effectParticleColor.b;
+  }
+}
+
+function writeParticleQuadPositions(positions, centers, rotations, sizes, index, billboard = false, sizeMultiplier = 1, alignToVelocity = false, velocities = null) {
+  const centerStart = index * 3;
+  const vertexStart = index * 12;
+  const halfSize = (sizes[index] ?? 0) * Math.max(0, sizeMultiplier) * 0.5;
+  const corners = [
+    [-halfSize, -halfSize, 0],
+    [halfSize, -halfSize, 0],
+    [halfSize, halfSize, 0],
+    [-halfSize, halfSize, 0],
+  ];
+  if (billboard) {
+    effectPreview.group.updateMatrixWorld(true);
+    effectPreview.group.getWorldQuaternion(effectWorldQuaternion);
+    effectParticleLocalCameraQuaternion.copy(camera.quaternion).premultiply(effectWorldQuaternion.invert());
+    let roll = rotations[centerStart + 2];
+    if (alignToVelocity && velocities) {
+      effectParticleVelocity.set(velocities[centerStart], velocities[centerStart + 1], velocities[centerStart + 2]);
+      effectParticleInverseBillboardQuaternion.copy(effectParticleLocalCameraQuaternion).invert();
+      effectParticleCameraPlaneVelocity.copy(effectParticleVelocity).applyQuaternion(effectParticleInverseBillboardQuaternion);
+      if (effectParticleCameraPlaneVelocity.lengthSq() > 0.000001) {
+        roll = Math.atan2(effectParticleCameraPlaneVelocity.y, effectParticleCameraPlaneVelocity.x);
+      }
+    }
+    effectParticleSpinQuaternion.setFromAxisAngle(effectParticleZAxis, roll);
+    effectParticleBillboardQuaternion.copy(effectParticleLocalCameraQuaternion).multiply(effectParticleSpinQuaternion);
+  } else {
+    if (alignToVelocity && velocities) {
+      const vx = velocities[centerStart];
+      const vy = velocities[centerStart + 1];
+      if (vx * vx + vy * vy > 0.000001) rotations[centerStart + 2] = Math.atan2(vy, vx);
+    }
+    effectParticleEuler.set(rotations[centerStart], rotations[centerStart + 1], rotations[centerStart + 2], "XYZ");
+  }
+  for (let cornerIndex = 0; cornerIndex < corners.length; cornerIndex += 1) {
+    const corner = corners[cornerIndex];
+    effectParticleCorner.set(corner[0], corner[1], corner[2]);
+    if (billboard) effectParticleCorner.applyQuaternion(effectParticleBillboardQuaternion);
+    else effectParticleCorner.applyEuler(effectParticleEuler);
+    const offset = vertexStart + cornerIndex * 3;
+    positions[offset] = centers[centerStart] + effectParticleCorner.x;
+    positions[offset + 1] = centers[centerStart + 1] + effectParticleCorner.y;
+    positions[offset + 2] = centers[centerStart + 2] + effectParticleCorner.z;
+  }
+}
+
+function createParticleEffectPreview(effect) {
+  const settings = normalizeParticleEffectSettings(effect.particle);
+  const capacity = 300;
+  const positions = new Float32Array(capacity * 4 * 3);
+  const uvs = new Float32Array(capacity * 4 * 2);
+  const opacities = new Float32Array(capacity * 4);
+  const colors = new Float32Array(capacity * 4 * 3);
+  const sizes = new Float32Array(capacity);
+  const centers = new Float32Array(capacity * 3);
+  const velocities = new Float32Array(capacity * 3);
+  const rotations = new Float32Array(capacity * 3);
+  const angularVelocities = new Float32Array(capacity * 3);
+  const ages = new Float32Array(capacity);
+  const lifetimes = new Float32Array(capacity);
+  const alive = new Uint8Array(capacity);
+  const indices = new Uint16Array(capacity * 6);
+  for (let index = 0; index < capacity; index += 1) {
+    hideParticleQuad(positions, index);
+    writeParticleQuadUvs(uvs, index);
+    const vertex = index * 4;
+    const triangle = index * 6;
+    indices[triangle] = vertex;
+    indices[triangle + 1] = vertex + 1;
+    indices[triangle + 2] = vertex + 2;
+    indices[triangle + 3] = vertex;
+    indices[triangle + 4] = vertex + 2;
+    indices[triangle + 5] = vertex + 3;
+    ages[index] = 0;
+    lifetimes[index] = 0;
+    setParticleQuadOpacity(opacities, index, 0);
+    setParticleQuadColor(colors, index, effect.color);
+    sizes[index] = settings.size[0];
+    alive[index] = 0;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  geometry.setAttribute("particleOpacity", new THREE.BufferAttribute(opacities, 1));
+  geometry.setAttribute("particleColor", new THREE.BufferAttribute(colors, 3));
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  geometry.userData.centers = centers;
+  geometry.userData.velocities = velocities;
+  geometry.userData.rotations = rotations;
+  geometry.userData.angularVelocities = angularVelocities;
+  geometry.userData.ages = ages;
+  geometry.userData.lifetimes = lifetimes;
+  geometry.userData.sizes = sizes;
+  geometry.userData.alive = alive;
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      shape: { value: PARTICLE_SHAPE_INDEX.get(settings.shape) ?? 0 },
+    },
+    vertexShader: `
+      attribute float particleOpacity;
+      attribute vec3 particleColor;
+      varying float vOpacity;
+      varying vec3 vColor;
+      varying vec2 vUv;
+      void main() {
+        vOpacity = particleOpacity;
+        vColor = particleColor;
+        vUv = uv;
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform int shape;
+      varying float vOpacity;
+      varying vec3 vColor;
+      varying vec2 vUv;
+
+      float sdSegment(vec2 p, vec2 a, vec2 b) {
+        vec2 pa = p - a;
+        vec2 ba = b - a;
+        float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+        return length(pa - ba * h);
+      }
+
+      float triangleMask(vec2 p) {
+        vec2 a = vec2(0.0, 0.48);
+        vec2 b = vec2(-0.46, -0.34);
+        vec2 c = vec2(0.46, -0.34);
+        vec2 v0 = c - a;
+        vec2 v1 = b - a;
+        vec2 v2 = p - a;
+        float dot00 = dot(v0, v0);
+        float dot01 = dot(v0, v1);
+        float dot02 = dot(v0, v2);
+        float dot11 = dot(v1, v1);
+        float dot12 = dot(v1, v2);
+        float invDenom = 1.0 / max(dot00 * dot11 - dot01 * dot01, 0.000001);
+        float u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+        float v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+        if (u < 0.0 || v < 0.0 || u + v > 1.0) return 0.0;
+        float edgeDistance = min(sdSegment(p, a, b), min(sdSegment(p, b, c), sdSegment(p, c, a)));
+        return smoothstep(0.0, 0.025, edgeDistance);
+      }
+
+      float starMask(vec2 p) {
+        vec2 vertices[10];
+        for (int i = 0; i < 10; i++) {
+          float angle = -1.5707963 + float(i) * 0.6283185;
+          float radius = mod(float(i), 2.0) < 0.5 ? 0.5 : 0.22;
+          vertices[i] = vec2(cos(angle), sin(angle)) * radius;
+        }
+        bool inside = false;
+        for (int i = 0, j = 9; i < 10; j = i++) {
+          vec2 vi = vertices[i];
+          vec2 vj = vertices[j];
+          bool intersect = ((vi.y > p.y) != (vj.y > p.y)) && (p.x < (vj.x - vi.x) * (p.y - vi.y) / max(vj.y - vi.y, 0.000001) + vi.x);
+          if (intersect) inside = !inside;
+        }
+        if (!inside) return 0.0;
+        float edgeDistance = 1.0;
+        for (int i = 0; i < 10; i++) {
+          edgeDistance = min(edgeDistance, sdSegment(p, vertices[i], vertices[(i + 1) % 10]));
+        }
+        return smoothstep(0.0, 0.025, edgeDistance);
+      }
+
+      void main() {
+        vec2 centered = vUv - vec2(0.5);
+        float dist = length(centered);
+        float mask = smoothstep(0.5, 0.36, dist);
+        if (shape == 1) {
+          mask = smoothstep(0.5, 0.08, dist) * 0.55;
+        } else if (shape == 2) {
+          mask = 1.0;
+        } else if (shape == 3) {
+          mask = step(abs(centered.x) + abs(centered.y), 0.5);
+        } else if (shape == 4) {
+          mask = triangleMask(centered);
+        } else if (shape == 5) {
+          mask = starMask(centered);
+        } else if (shape == 6) {
+          float d = min(sdSegment(centered, vec2(-0.42, 0.0), vec2(0.42, 0.0)), sdSegment(centered, vec2(0.0, -0.42), vec2(0.0, 0.42)));
+          mask = smoothstep(0.08, 0.04, d);
+        } else if (shape == 7) {
+          mask = smoothstep(0.5, 0.46, dist) * smoothstep(0.28, 0.32, dist);
+        } else if (shape == 8) {
+          float d = sdSegment(centered, vec2(-0.45, 0.0), vec2(0.45, 0.0));
+          mask = smoothstep(0.08, 0.04, d);
+        }
+        float alpha = mask * vOpacity;
+        if (alpha <= 0.001) discard;
+        gl_FragColor = vec4(vColor, alpha);
+      }
+    `,
+    transparent: true,
+    blending: THREE.NormalBlending,
+    depthTest: false,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = settings.renderQueue === "beforeModel" ? -30 : 30;
+  return mesh;
+}
+
+function createSpriteEffectPreview(effect) {
+  const map = createEffectSpriteTexture(effect.color);
+  const material = new THREE.SpriteMaterial({
+    map,
+    color: 0xffffff,
+    transparent: true,
+    opacity: effect.sprite.opacity,
+    depthWrite: false,
+  });
+  return new THREE.Sprite(material);
+}
+
+function createEffectSpriteTexture(color) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext("2d");
+  context.clearRect(0, 0, 256, 256);
+  context.strokeStyle = color;
+  context.fillStyle = color;
+  context.lineWidth = 20;
+  context.lineCap = "round";
+  context.beginPath();
+  context.arc(128, 128, 82, 0, Math.PI * 2);
+  context.stroke();
+  context.beginPath();
+  context.moveTo(128, 72);
+  context.lineTo(128, 145);
+  context.stroke();
+  context.beginPath();
+  context.arc(128, 190, 10, 0, Math.PI * 2);
+  context.fill();
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createMeshEffectPreview(effect) {
+  const shape = normalizeMeshEffectSettings(effect.mesh).shape;
+  let geometry;
+  if (shape === "sphere") geometry = new THREE.SphereGeometry(0.35, 24, 16);
+  else if (shape === "ring") geometry = new THREE.TorusGeometry(0.28, 0.07, 12, 32);
+  else geometry = new THREE.BoxGeometry(0.45, 0.45, 0.45);
+  const material = new THREE.MeshStandardMaterial({
+    color: effect.color,
+    emissive: effect.color,
+    emissiveIntensity: 0.35,
+    roughness: 0.42,
+    metalness: 0.05,
+  });
+  return new THREE.Mesh(geometry, material);
+}
+
+function applyEffectPreviewSettings(effect = getSelectedEffectSlot()) {
+  if (!effectPreview?.group || !effect) return;
+  if (effectPreview.type !== effect.type) {
+    createEffectPreview(effect);
+    return;
+  }
+  if (!effectTransformDragging) updateEffectPreviewAnchor(effect);
+  effectPreview.group.rotation.set(
+    THREE.MathUtils.degToRad(effect.rotationOffset[0]),
+    THREE.MathUtils.degToRad(effect.rotationOffset[1]),
+    THREE.MathUtils.degToRad(effect.rotationOffset[2]),
+    "XYZ",
+  );
+  effectPreview.group.scale.setScalar(effect.scale);
+  if (effectPreview.object?.material) {
+    const material = effectPreview.object.material;
+    if (material.color) material.color.set(effect.color);
+    if (material.emissive) material.emissive.set(effect.color);
+    if (effect.type === "particle") {
+      if (material.uniforms?.shape) material.uniforms.shape.value = PARTICLE_SHAPE_INDEX.get(effect.particle.shape) ?? 0;
+      material.depthTest = false;
+      effectPreview.object.renderOrder = effect.particle.renderQueue === "beforeModel" ? -30 : 30;
+      const seedSignature = getParticleSeedSignature(effect.particle);
+      if (effectPreview.seedSignature !== seedSignature) {
+        effectPreview.seedSignature = seedSignature;
+        effectPreview.seed = getParticleEffectSeed(effect.particle);
+        effectPreview.rng = createSeededRandom(effectPreview.seed);
+      }
+    }
+    if (effect.type === "sprite") {
+      material.opacity = effect.sprite.opacity;
+      effectPreview.object.scale.setScalar(effect.sprite.size);
+    }
+  }
+}
+
+function updateEffectPreviewAnchor(effect = getSelectedEffectSlot()) {
+  if (!effectPreview?.group || !effect) return;
+  const parent = effect.attachBone !== "world" ? getRawBoneNode(effect.attachBone) : null;
+  if (parent) {
+    parent.updateMatrixWorld(true);
+    parent.getWorldPosition(effectAnchorPosition);
+    effectPreview.group.position.set(
+      effectAnchorPosition.x + effect.positionOffset[0],
+      effectAnchorPosition.y + effect.positionOffset[1],
+      effectAnchorPosition.z + effect.positionOffset[2],
+    );
+  } else {
+    effectPreview.group.position.set(...effect.positionOffset);
+  }
+}
+
+function updateEffectPreviewRuntime(delta) {
+  if (state.mode !== "effect") {
+    clearEffectPreview();
+    return;
+  }
+  syncSelectedEffectPreview();
+  const effect = getSelectedEffectSlot();
+  if (!effectPreview || !effect?.enabled) return;
+  effectPreview.elapsed += delta;
+  const duration = Math.max(0.1, effect.duration);
+  const rawT = effect.loop ? (effectPreview.elapsed % duration) / duration : Math.min(1, effectPreview.elapsed / duration);
+  const shouldEmit = effect.loop || effectPreview.elapsed <= duration;
+  if (!effectTransformDragging) updateEffectPreviewAnchor(effect);
+  if (effect.type === "particle") updateParticleEffectPreview(effect, rawT, delta, shouldEmit);
+  if (effect.type === "mesh") {
+    effectPreview.object.rotation.y += delta * effect.mesh.spin;
+    effectPreview.object.rotation.x += delta * effect.mesh.spin * 0.35;
+  }
+  if (effect.type === "sprite") {
+    effectPreview.object.quaternion.copy(camera.quaternion);
+  }
+}
+
+function ensureEffectTransformControls() {
+  if (effectTransformControls) return effectTransformControls;
+  effectTransformControls = new TransformControls(camera, renderer.domElement);
+  effectTransformControls.setMode("translate");
+  effectTransformControls.setSize(0.78);
+  const helper = effectTransformControls.getHelper();
+  helper.name = "ExpressionEditor_EffectTransformControls";
+  scene.add(helper);
+  effectTransformControls.addEventListener("dragging-changed", (event) => {
+    effectTransformDragging = Boolean(event.value);
+    controls.enabled = !event.value;
+  });
+  effectTransformControls.addEventListener("objectChange", () => updateEffectOffsetFromGizmo());
+  return effectTransformControls;
+}
+
+function attachEffectTransformControls() {
+  if (state.mode !== "effect" || !state.effectGizmoVisible || !effectPreview?.group || !getSelectedEffectSlot()?.enabled) {
+    detachEffectTransformControls();
+    return;
+  }
+  const transform = ensureEffectTransformControls();
+  transform.setMode(state.effectTransformMode === "rotate" ? "rotate" : "translate");
+  transform.setSpace?.("local");
+  transform.attach(effectPreview.group);
+  transform.getHelper().visible = true;
+}
+
+function detachEffectTransformControls() {
+  if (!effectTransformControls) return;
+  effectTransformControls.detach();
+  effectTransformControls.getHelper().visible = false;
+  effectTransformDragging = false;
+  controls.enabled = true;
+}
+
+function updateEffectTransformMode(mode) {
+  state.effectTransformMode = mode === "rotate" ? "rotate" : "translate";
+  attachEffectTransformControls();
+  renderPreservingScrollableUi();
+}
+
+function updateEffectOffsetFromGizmo() {
+  const effect = getSelectedEffectSlot();
+  if (!effectPreview?.group || !effect) return;
+  const next = [...effectPreview.group.position.toArray()];
+  const rotation = effectPreview.group.rotation;
+  const parent = effect.attachBone !== "world" ? getRawBoneNode(effect.attachBone) : null;
+  if (parent) {
+    parent.updateMatrixWorld(true);
+    parent.getWorldPosition(effectAnchorPosition);
+    next[0] -= effectAnchorPosition.x;
+    next[1] -= effectAnchorPosition.y;
+    next[2] -= effectAnchorPosition.z;
+  }
+  const rotationOffset = [
+    THREE.MathUtils.radToDeg(rotation.x),
+    THREE.MathUtils.radToDeg(rotation.y),
+    THREE.MathUtils.radToDeg(rotation.z),
+  ].map((value) => Math.round(value * 1000) / 1000);
+  updateEffectSlot(effect.id, { positionOffset: next.map((value) => Math.round(value * 1000) / 1000), rotationOffset }, false);
+  syncEffectPositionInputs(next);
+  syncEffectRotationInputs(rotationOffset);
+}
+
+function syncEffectPositionInputs(values) {
+  for (const input of document.querySelectorAll('[data-effect-vector][data-key="positionOffset"]')) {
+    const axis = Number(input.dataset.axis);
+    if (!Number.isFinite(axis)) continue;
+    input.value = roundForInput(values[axis] ?? 0);
+  }
+}
+
+function syncEffectRotationInputs(values) {
+  for (const input of document.querySelectorAll('[data-effect-vector][data-key="rotationOffset"]')) {
+    const axis = Number(input.dataset.axis);
+    if (!Number.isFinite(axis)) continue;
+    input.value = roundForInput(values[axis] ?? 0);
+  }
+}
+
+function updateParticleEffectPreview(effect, t, delta, shouldEmit = true) {
+  const object = effectPreview?.object;
+  const geometry = object?.geometry;
+  if (!geometry) return;
+  const positions = geometry.attributes.position.array;
+  const opacities = geometry.attributes.particleOpacity.array;
+  const colors = geometry.attributes.particleColor.array;
+  const centers = geometry.userData.centers;
+  const sizes = geometry.userData.sizes;
+  const velocities = geometry.userData.velocities;
+  const rotations = geometry.userData.rotations;
+  const angularVelocities = geometry.userData.angularVelocities;
+  const ages = geometry.userData.ages;
+  const lifetimes = geometry.userData.lifetimes;
+  const alive = geometry.userData.alive;
+  const settings = normalizeParticleEffectSettings(effect.particle);
+  const countMax = settings.count[1];
+  const duration = Math.max(0.1, effect.duration);
+  const burstCycle = effect.loop ? Math.floor(effectPreview.elapsed / duration) : 0;
+  let spawnCount = 0;
+  if (settings.burst) {
+    if (shouldEmit && effectPreview.burstCycle !== burstCycle) {
+      spawnCount = getRandomParticleCount(settings, effectPreview.rng);
+      effectPreview.burstCycle = burstCycle;
+    }
+  } else {
+    const emissionPerSecond = shouldEmit ? evaluateParticleEmissionGraph(settings.emissionGraph, t, countMax) : 0;
+    effectPreview.emitCarry += emissionPerSecond * delta;
+    spawnCount = Math.floor(effectPreview.emitCarry);
+    effectPreview.emitCarry -= spawnCount;
+  }
+  const dragFactor = Math.exp(-settings.drag * delta);
+  const angularDragFactor = Math.exp(-settings.angularDrag * delta);
+  effectPreview.group.updateMatrixWorld(true);
+  effectPreview.group.getWorldQuaternion(effectWorldQuaternion);
+  effectLocalGravity
+    .copy(effectWorldGravity)
+    .applyQuaternion(effectWorldQuaternion.invert())
+    .multiplyScalar(settings.gravity * delta);
+  while (spawnCount > 0) {
+    const index = findDeadParticleIndex(alive, countMax);
+    if (index < 0) break;
+    spawnEffectParticle(index, positions, opacities, colors, centers, velocities, rotations, angularVelocities, ages, lifetimes, sizes, alive, settings, effectPreview.rng);
+    spawnCount -= 1;
+  }
+  for (let index = 0; index < alive.length; index += 1) {
+    if (index >= countMax) alive[index] = 0;
+    if (!alive[index]) {
+      hideParticleQuad(positions, index);
+      setParticleQuadOpacity(opacities, index, 0);
+      sizes[index] = settings.size[0];
+      continue;
+    }
+    ages[index] += delta;
+    if (ages[index] >= lifetimes[index]) {
+      alive[index] = 0;
+      hideParticleQuad(positions, index);
+      setParticleQuadOpacity(opacities, index, 0);
+      continue;
+    }
+    setParticleQuadOpacity(opacities, index, evaluateParticleOpacityGraph(settings.opacityGraph, ages[index] / Math.max(lifetimes[index], 0.000001)));
+    velocities[index * 3] += effectLocalGravity.x;
+    velocities[index * 3 + 1] += effectLocalGravity.y;
+    velocities[index * 3 + 2] += effectLocalGravity.z;
+    velocities[index * 3] *= dragFactor;
+    velocities[index * 3 + 1] *= dragFactor;
+    velocities[index * 3 + 2] *= dragFactor;
+    if (
+      settings.stopWhenSlow &&
+      Math.hypot(velocities[index * 3], velocities[index * 3 + 1], velocities[index * 3 + 2]) <= settings.stopSpeedThreshold
+    ) {
+      alive[index] = 0;
+      hideParticleQuad(positions, index);
+      setParticleQuadOpacity(opacities, index, 0);
+      continue;
+    }
+    angularVelocities[index * 3] *= angularDragFactor;
+    angularVelocities[index * 3 + 1] *= angularDragFactor;
+    angularVelocities[index * 3 + 2] *= angularDragFactor;
+    rotations[index * 3] += angularVelocities[index * 3] * delta;
+    rotations[index * 3 + 1] += angularVelocities[index * 3 + 1] * delta;
+    rotations[index * 3 + 2] += angularVelocities[index * 3 + 2] * delta;
+    centers[index * 3] += velocities[index * 3] * delta;
+    centers[index * 3 + 1] += velocities[index * 3 + 1] * delta;
+    centers[index * 3 + 2] += velocities[index * 3 + 2] * delta;
+    const lifeRatio = ages[index] / Math.max(lifetimes[index], 0.000001);
+    writeParticleQuadPositions(
+      positions,
+      centers,
+      rotations,
+      sizes,
+      index,
+      settings.billboard,
+      evaluateParticleSizeGraph(settings.sizeGraph, lifeRatio),
+      settings.alignToVelocity,
+      velocities,
+    );
+  }
+  geometry.attributes.position.needsUpdate = true;
+  geometry.attributes.particleOpacity.needsUpdate = true;
+  geometry.attributes.particleColor.needsUpdate = true;
+}
+
+function findDeadParticleIndex(alive, maxCount = alive.length) {
+  for (let index = 0; index < Math.min(alive.length, maxCount); index += 1) {
+    if (!alive[index]) return index;
+  }
+  return -1;
+}
+
+function spawnEffectParticle(index, positions, opacities, colors, centers, velocities, rotations, angularVelocities, ages, lifetimes, sizes, alive, settings, rng) {
+  const angle = rng() * Math.PI * 2;
+  const spreadRadius = settings.spread * 0.12;
+  const radius = Math.sqrt(rng()) * spreadRadius;
+  const lift = (rng() - 0.25) * settings.spread * 0.18;
+  centers[index * 3] = Math.cos(angle) * radius;
+  centers[index * 3 + 1] = lift * 0.2;
+  centers[index * 3 + 2] = Math.sin(angle) * radius;
+  const lateral = settings.spread * (0.12 + rng() * 0.28);
+  const upward = 0.35 + rng() * 0.65;
+  const speed = lerp(settings.speed[0], settings.speed[1], rng());
+  velocities[index * 3] = Math.cos(angle) * speed * lateral;
+  velocities[index * 3 + 1] = upward * speed;
+  velocities[index * 3 + 2] = Math.sin(angle) * speed * lateral;
+  rotations[index * 3] = 0;
+  rotations[index * 3 + 1] = 0;
+  rotations[index * 3 + 2] = THREE.MathUtils.degToRad(lerp(settings.rotation[0], settings.rotation[1], rng()));
+  angularVelocities[index * 3] = settings.angularVelocityEnabled[0]
+    ? THREE.MathUtils.degToRad(lerp(settings.angularVelocity[0][0], settings.angularVelocity[0][1], rng()))
+    : 0;
+  angularVelocities[index * 3 + 1] = settings.angularVelocityEnabled[1]
+    ? THREE.MathUtils.degToRad(lerp(settings.angularVelocity[1][0], settings.angularVelocity[1][1], rng()))
+    : 0;
+  angularVelocities[index * 3 + 2] = settings.angularVelocityEnabled[2]
+    ? THREE.MathUtils.degToRad(lerp(settings.angularVelocity[2][0], settings.angularVelocity[2][1], rng()))
+    : 0;
+  ages[index] = 0;
+  lifetimes[index] = lerp(settings.lifetime[0], settings.lifetime[1], rng());
+  sizes[index] = lerp(settings.size[0], settings.size[1], rng());
+  alive[index] = 1;
+  const color = settings.colorSlots[Math.min(settings.colorSlots.length - 1, Math.floor(rng() * settings.colorSlots.length))] ?? "#ffd166";
+  setParticleQuadColor(colors, index, color);
+  setParticleQuadOpacity(opacities, index, 0);
+  writeParticleQuadPositions(
+    positions,
+    centers,
+    rotations,
+    sizes,
+    index,
+    settings.billboard,
+    evaluateParticleSizeGraph(settings.sizeGraph, 0),
+    settings.alignToVelocity,
+    velocities,
+  );
+}
+
+function getParticleEffectSeed(settings = {}) {
+  if (settings.seedMode === "fixed") return Math.max(1, Math.round(normalizeFiniteNumber(settings.seed, 12345)));
+  const now = new Date();
+  return now.getHours() * 10000 + now.getMinutes() * 100 + now.getSeconds();
+}
+
+function getParticleSeedSignature(settings = {}) {
+  const normalized = normalizeParticleEffectSettings(settings);
+  return normalized.seedMode === "fixed" ? `${normalized.seedMode}:${normalized.seed}` : "time";
+}
+
+function createSeededRandom(seed) {
+  let value = Math.max(1, Math.floor(Number(seed) || 1)) >>> 0;
+  return () => {
+    value = (value * 1664525 + 1013904223) >>> 0;
+    return value / 4294967296;
+  };
+}
+
+function renderViewerScene() {
+  const beforeEffect =
+    state.mode === "effect" &&
+    effectPreview?.type === "particle" &&
+    getSelectedEffectSlot()?.particle?.renderQueue === "beforeModel"
+      ? effectPreview.group
+      : null;
+  if (!beforeEffect) {
+    renderer.autoClear = true;
+    renderer.render(scene, camera);
+    return;
+  }
+
+  const hiddenObjects = [];
+  for (const child of scene.children) {
+    if (child === beforeEffect) continue;
+    hiddenObjects.push([child, child.visible]);
+    child.visible = false;
+  }
+  beforeEffect.visible = true;
+  renderer.autoClear = true;
+  renderer.render(scene, camera);
+
+  for (const [object, visible] of hiddenObjects) object.visible = visible;
+  const wasVisible = beforeEffect.visible;
+  beforeEffect.visible = false;
+  renderer.autoClear = false;
+  renderer.clearDepth();
+  renderer.render(scene, camera);
+  beforeEffect.visible = wasVisible;
+  renderer.autoClear = true;
 }
 
 function parseJsonBuffer(data, fallback) {
@@ -9493,6 +11950,7 @@ function normalizeBlushSettings(blush) {
   if (!blush || !blush.image) return null;
   return {
     image: fileNameFromPath(blush.image),
+    baseHeight: BLUSH_OVERLAY_BASE_HEIGHT,
     y: clampNumber(Number(blush.y), 0, 0.1, 0),
     z: clampNumber(Number(blush.z), 0, 0.2, 0.08),
     scale: clampNumber(Number(blush.scale), 0, 1, 0.28),
@@ -9523,6 +11981,7 @@ function normalizeEmotionImageSettings(settings) {
   if (!settings || !settings.image) return null;
   return {
     image: fileNameFromPath(settings.image),
+    baseHeight: EMOTION_IMAGE_BASE_HEIGHT,
     x: clampNumber(Number(settings.x), -2, 2, 0),
     y: clampNumber(Number(settings.y), -1, 3, 1.5),
     z: clampNumber(Number(settings.z), -2, 2, 0),
@@ -10936,6 +13395,7 @@ function formatModeName(value) {
   if (value === "correction") return "Motion Correction";
   if (value === "expression") return "Expression Editor";
   if (value === "emotionMap") return "Emotion Map";
+  if (value === "effect") return "Effect Editor";
   if (value === "linker") return "Emotion Linker (view only)";
   if (value === "linker2") return "Emotion Linker 2 (view only)";
   if (value === "extraBone") return "Extra Bone Follow";
@@ -10966,6 +13426,11 @@ function escapeHtml(value) {
 
 window.addEventListener("resize", resize);
 window.addEventListener("keydown", (event) => {
+  if (shouldCommitControlOnEnter(event)) {
+    event.preventDefault();
+    event.target.blur();
+    return;
+  }
   if (isEditableElement(event.target)) return;
   if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "z") {
     event.preventDefault();
@@ -10975,7 +13440,16 @@ window.addEventListener("keydown", (event) => {
     event.preventDefault();
     redo();
   }
-});
+}, true);
+
+function shouldCommitControlOnEnter(event) {
+  if (event.key !== "Enter" || event.isComposing || event.ctrlKey || event.altKey || event.metaKey) return false;
+  const target = event.target;
+  if (target instanceof HTMLInputElement) {
+    return ["text", "number", "search", "email", "url", "tel"].includes(target.type);
+  }
+  return target instanceof HTMLSelectElement;
+}
 
 function resize() {
   const host = document.querySelector(".viewer");
@@ -11022,13 +13496,14 @@ function tick() {
   updateRandomBlink(delta);
   updateLipSyncPreview(delta);
   updatePropOverlayRuntime();
+  updateEffectPreviewRuntime(delta);
   updateEmotionImageAnimation(delta);
   applyMotionCorrectionPreview();
   applyExtraBoneFollowPreview();
   applyEditDraftMorphPreview();
   applyEmotionImageHeadRotation();
   updateEmotionImageBillboard();
-  renderer.render(scene, camera);
+  renderViewerScene();
   updateExtraBoneGizmoOverlay();
 }
 

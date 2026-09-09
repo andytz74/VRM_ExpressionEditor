@@ -1,0 +1,300 @@
+{
+  "schemaVersion": 1,
+  "type": "vrm-effects-meta",
+  "effects": [
+    {
+      "id": "effect-1788320005398-0",
+      "name": "testEffect",
+      "type": "particle",
+      "attachBone": "world",
+      "positionOffset": [
+        -0.504,
+        0.612,
+        0
+      ],
+      "rotationOffset": [
+        0,
+        0,
+        -32.233
+      ],
+      "scale": 1,
+      "color": "#00ffbf",
+      "duration": 3,
+      "loop": true,
+      "enabled": true,
+      "particle": {
+        "count": [
+          50,
+          50
+        ],
+        "shape": "line",
+        "billboard": true,
+        "burst": true,
+        "colorSlots": [
+          "#ffb300",
+          "#ff0000",
+          "#00ff40",
+          "#fbff00"
+        ],
+        "spread": 1,
+        "speed": [
+          3,
+          10
+        ],
+        "drag": 4,
+        "gravity": 1,
+        "rotation": [
+          0,
+          360
+        ],
+        "alignToVelocity": true,
+        "angularVelocity": [
+          [
+            100,
+            100
+          ],
+          [
+            100,
+            100
+          ],
+          [
+            -500,
+            720
+          ]
+        ],
+        "angularVelocityEnabled": [
+          false,
+          false,
+          true
+        ],
+        "angularDrag": 0.5,
+        "stopWhenSlow": false,
+        "stopSpeedThreshold": 0.02,
+        "size": [
+          0.01,
+          0.05
+        ],
+        "lifetime": [
+          1.5,
+          3
+        ],
+        "renderQueue": "afterModel",
+        "seedMode": "time",
+        "seed": 12345,
+        "emissionGraph": [
+          {
+            "time": 0,
+            "value": 197,
+            "curve": "step"
+          },
+          {
+            "time": 0.22,
+            "value": 0,
+            "curve": "linear"
+          },
+          {
+            "time": 1,
+            "value": 0,
+            "curve": "linear"
+          }
+        ],
+        "sizeGraph": [
+          {
+            "time": 0,
+            "value": 1,
+            "curve": "linear"
+          },
+          {
+            "time": 1,
+            "value": 1,
+            "curve": "linear"
+          }
+        ],
+        "opacityGraph": [
+          {
+            "time": 0,
+            "value": 0.98,
+            "curve": "step"
+          },
+          {
+            "time": 0.39,
+            "value": 0,
+            "curve": "step"
+          },
+          {
+            "time": 0.45,
+            "value": 1,
+            "curve": "step"
+          },
+          {
+            "time": 0.55,
+            "value": 0,
+            "curve": "step"
+          },
+          {
+            "time": 0.67,
+            "value": 0.64,
+            "curve": "step"
+          },
+          {
+            "time": 0.72,
+            "value": 0,
+            "curve": "step"
+          },
+          {
+            "time": 0.79,
+            "value": 0.35,
+            "curve": "step"
+          },
+          {
+            "time": 0.86,
+            "value": 0,
+            "curve": "step"
+          },
+          {
+            "time": 0.91,
+            "value": 0.24,
+            "curve": "step"
+          },
+          {
+            "time": 1,
+            "value": 0,
+            "curve": "linear"
+          }
+        ]
+      },
+      "sprite": {
+        "size": 0.8,
+        "opacity": 1
+      },
+      "mesh": {
+        "shape": "box",
+        "spin": 1
+      },
+      "version": 1
+    },
+    {
+      "id": "effect-1788375366145-1",
+      "name": "Effect 2",
+      "type": "particle",
+      "attachBone": "world",
+      "positionOffset": [
+        0,
+        1.019,
+        -0.349
+      ],
+      "rotationOffset": [
+        90,
+        0,
+        0
+      ],
+      "scale": 1,
+      "color": "#11ff00",
+      "duration": 1,
+      "loop": true,
+      "enabled": true,
+      "particle": {
+        "count": [
+          80,
+          80
+        ],
+        "shape": "dot",
+        "billboard": true,
+        "burst": true,
+        "colorSlots": [
+          "#11ff00"
+        ],
+        "spread": 2,
+        "speed": [
+          1.4,
+          1.4
+        ],
+        "drag": 0,
+        "gravity": 0,
+        "rotation": [
+          0,
+          360
+        ],
+        "alignToVelocity": false,
+        "angularVelocity": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "angularVelocityEnabled": [
+          false,
+          false,
+          false
+        ],
+        "angularDrag": 0,
+        "stopWhenSlow": false,
+        "stopSpeedThreshold": 0.01,
+        "size": [
+          0.01,
+          0.03
+        ],
+        "lifetime": [
+          0.6,
+          1.2
+        ],
+        "renderQueue": "beforeModel",
+        "seedMode": "time",
+        "seed": 12345,
+        "emissionGraph": [
+          {
+            "time": 0,
+            "value": 80,
+            "curve": "linear"
+          },
+          {
+            "time": 1,
+            "value": 80,
+            "curve": "linear"
+          }
+        ],
+        "sizeGraph": [
+          {
+            "time": 0,
+            "value": 0.98,
+            "curve": "easeInOut"
+          },
+          {
+            "time": 1,
+            "value": 0,
+            "curve": "linear"
+          }
+        ],
+        "opacityGraph": [
+          {
+            "time": 0,
+            "value": 1,
+            "curve": "linear"
+          },
+          {
+            "time": 1,
+            "value": 0,
+            "curve": "linear"
+          }
+        ]
+      },
+      "sprite": {
+        "size": 0.8,
+        "opacity": 1
+      },
+      "mesh": {
+        "shape": "box",
+        "spin": 1
+      },
+      "version": 1
+    }
+  ]
+}
