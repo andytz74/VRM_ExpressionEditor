@@ -90,6 +90,7 @@ const BONE_GROUPS = [
 const HUMAN_BONES = BONE_GROUPS.flatMap((group) => group.bones);
 const HUMAN_BONE_SET = new Set(HUMAN_BONES);
 const PARTICLE_SHAPES = [
+  { value: "texture", label: "Use Texture" },
   { value: "dot", label: "Dot" },
   { value: "softCircle", label: "Soft Circle" },
   { value: "square", label: "Square" },
@@ -100,7 +101,18 @@ const PARTICLE_SHAPES = [
   { value: "ring", label: "Ring" },
   { value: "line", label: "Line" },
 ];
-const PARTICLE_SHAPE_INDEX = new Map(PARTICLE_SHAPES.map((shape, index) => [shape.value, index]));
+const PARTICLE_SHAPE_INDEX = new Map([
+  ["dot", 0],
+  ["softCircle", 1],
+  ["square", 2],
+  ["diamond", 3],
+  ["triangle", 4],
+  ["star", 5],
+  ["cross", 6],
+  ["ring", 7],
+  ["line", 8],
+  ["texture", 9],
+]);
 const POSITION_MATCH_TOLERANCE = 0.0005;
 const MIRROR_AXIS_SIGNS = {
   positionOffset: [-1, 1, 1],
@@ -166,12 +178,15 @@ const state = {
   effectsPath: null,
   effectsDirty: false,
   selectedEffectId: null,
+  selectedEffectParticleId: null,
   effectShowModel: true,
   effectGizmoVisible: false,
   effectTransformMode: "translate",
   selectedEffectGraphIndex: 0,
   selectedEffectGraphKind: "emission",
   activeLinkTimeline: null,
+  activeMotionSlotEffectId: "",
+  pendingMotionSlotEffect: null,
   selectedMotionSlotId: null,
   emotionMapCursor: { x: 0, y: 0 },
   selectedEmotionMapSlotIndex: 1,
@@ -332,6 +347,10 @@ let propTransformDragging = false;
 let effectPreview = null;
 let effectTransformControls = null;
 let effectTransformDragging = false;
+const effectTextureCache = new Map();
+const effectWhiteTexture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, THREE.RGBAFormat);
+effectWhiteTexture.needsUpdate = true;
+effectWhiteTexture.colorSpace = THREE.SRGBColorSpace;
 const propWorldPosition = new THREE.Vector3();
 const effectAnchorPosition = new THREE.Vector3();
 const effectWorldGravity = new THREE.Vector3(0, -1, 0);
@@ -703,6 +722,19 @@ function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function renderMetaSaveButton(id, disabled, label, metaFileName) {
+  return `
+    <button class="primary-button meta-save-button" id="${escapeHtml(id)}" ${disabled ? "disabled" : ""}>
+      <span class="meta-save-main">${iconSvg(Save, 16)}${escapeHtml(label)}</span>
+      <small>${escapeHtml(metaFileName)}</small>
+    </button>
+  `;
+}
+
+function getCharacterMetaFileName() {
+  return state.correctionPath ? fileNameFromPath(state.correctionPath) : "character.vrm.meta";
+}
+
 function render() {
   if (!app.innerHTML) {
     app.innerHTML = "";
@@ -859,11 +891,17 @@ function renderEffectRightTray() {
 
 function renderEffectRestartControl() {
   const effect = state.mode === "effect" ? getSelectedEffectSlot() : null;
-  if (!effect || effect.type !== "particle") return "";
+  if (!effect || !effect.particles.length) return "";
   return `
-    <button class="effect-restart-control" id="restartEffectPreview" ${effect.enabled ? "" : "disabled"} title="Restart effect">
-      ${iconSvg(Play, 20)}
-    </button>
+    <div class="effect-restart-stack">
+      <button class="effect-restart-control" id="restartEffectPreview" ${effect.enabled ? "" : "disabled"} title="Restart effect">
+        ${iconSvg(Play, 20)}
+      </button>
+      <div class="effect-live-count" title="Visible particles">
+        <strong data-effect-live-count>${getEffectPreviewAliveCount()}</strong>
+        <span>particles</span>
+      </div>
+    </div>
   `;
 }
 
@@ -887,7 +925,7 @@ function renderEmotionMapPanel() {
       </div>
     </div>
     <div class="correction-footer">
-      <button class="primary-button" id="saveCorrection" ${state.correctionPath && state.correctionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
+      ${renderMetaSaveButton("saveCorrection", !(state.correctionPath && state.correctionDirty), "Save Meta", getCharacterMetaFileName())}
     </div>
   `;
 }
@@ -2445,7 +2483,7 @@ function renderEmotionExpressionPanel() {
       </div>
     </div>
     <div class="expression-editor-footer">
-      <button class="primary-button" id="saveExpressionMeta" ${state.correctionPath && state.expressionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
+      ${renderMetaSaveButton("saveExpressionMeta", !(state.correctionPath && state.expressionDirty), "Save Meta", getCharacterMetaFileName())}
     </div>
   `;
 }
@@ -2776,7 +2814,7 @@ function renderMotionCorrectionPanel() {
       }
     </div>
     <div class="correction-footer">
-      <button class="primary-button" id="saveCorrection" ${state.correctionPath && state.correctionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
+      ${renderMetaSaveButton("saveCorrection", !(state.correctionPath && state.correctionDirty), "Save Meta", getCharacterMetaFileName())}
     </div>
   `;
 }
@@ -2824,7 +2862,7 @@ function renderEmotionLinkerPanel() {
       }
     </div>
     <div class="correction-footer">
-      <button class="primary-button" id="saveCorrection" ${state.correctionPath && state.correctionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
+      ${renderMetaSaveButton("saveCorrection", !(state.correctionPath && state.correctionDirty), "Save Meta", "emotion-linker.meta")}
     </div>
   `;
 }
@@ -2850,7 +2888,7 @@ function renderEmotionLinker2Panel() {
       <button class="emotion-link-add-point motion-slot-add" id="addMotionSlot">+</button>
     </div>
     <div class="correction-footer">
-      <button class="primary-button" id="saveCorrection" ${state.correctionPath && state.correctionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
+      ${renderMetaSaveButton("saveCorrection", !(state.correctionPath && state.correctionDirty), "Save Meta", "emotion-linker2.meta")}
     </div>
   `;
 }
@@ -2883,7 +2921,7 @@ function renderEffectEditorPanel() {
       </div>
     </div>
     <div class="correction-footer">
-      <button class="primary-button" id="saveEffects" ${state.effectsDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Effects</button>
+      ${renderMetaSaveButton("saveEffects", !state.effectsDirty, "Save Effects", state.effectsPath ? fileNameFromPath(state.effectsPath) : "effects.meta")}
     </div>
   `;
 }
@@ -2891,10 +2929,13 @@ function renderEffectEditorPanel() {
 function renderEffectSlot(effect) {
   const selected = effect.id === state.selectedEffectId;
   return `
-    <button class="effect-slot ${selected ? "selected" : ""}" data-effect-select="${escapeHtml(effect.id)}">
-      <span>${escapeHtml(effect.name || "New Effect")}</span>
-      <em>${escapeHtml(effect.type)}</em>
-    </button>
+    <div class="effect-slot-row ${selected ? "selected" : ""}">
+      <button class="effect-slot" data-effect-select="${escapeHtml(effect.id)}">
+        <span>${escapeHtml(effect.name || "New Effect")}</span>
+        <em>${effect.particles.length} particle${effect.particles.length === 1 ? "" : "s"}</em>
+      </button>
+      <button class="duplicate-emotion-button effect-duplicate-button" data-effect-duplicate="${escapeHtml(effect.id)}" title="Duplicate effect">${iconSvg(Copy, 15)}</button>
+    </div>
   `;
 }
 
@@ -2910,12 +2951,6 @@ function renderEffectSlotSettings(effect) {
         <input type="text" value="${escapeHtml(effect.name)}" data-effect-name="${escapeHtml(effect.id)}" />
       </label>
       <label>
-        Effect Type
-        <select data-effect-type="${escapeHtml(effect.id)}">
-          ${["particle", "sprite", "mesh"].map((type) => `<option value="${type}" ${effect.type === type ? "selected" : ""}>${type}</option>`).join("")}
-        </select>
-      </label>
-      <label>
         Attach Bone
         <select data-effect-bone="${escapeHtml(effect.id)}">
           <option value="world" ${effect.attachBone === "world" ? "selected" : ""}>World</option>
@@ -2925,10 +2960,6 @@ function renderEffectSlotSettings(effect) {
       <label class="effect-enabled-row">
         <input type="checkbox" data-effect-enabled="${escapeHtml(effect.id)}" ${effect.enabled ? "checked" : ""} />
         Enabled in preview
-      </label>
-      <label>
-        Color
-        <input type="color" value="${escapeHtml(effect.color)}" data-effect-color="${escapeHtml(effect.id)}" />
       </label>
       <div class="effect-setting-label-row">
         <strong>Position Offset</strong>
@@ -2966,14 +2997,48 @@ function renderEffectSlotSettings(effect) {
           .join("")}
       </div>
       ${renderEffectNumberControl(effect.id, "scale", "Scale", effect.scale, 0.05, 5, 0.01)}
-      ${effect.type === "particle" ? "" : renderEffectNumberControl(effect.id, "duration", "Duration", effect.duration, 0.1, 10, 0.1)}
-      <label class="effect-enabled-row">
-        <input type="checkbox" data-effect-loop="${escapeHtml(effect.id)}" ${effect.loop ? "checked" : ""} />
-        Loop
-      </label>
-      ${renderEffectTypeSettings(effect)}
+      ${renderEffectNumberControl(effect.id, "duration", "Duration", effect.duration, 0.1, 10, 0.1)}
+      ${renderEffectParticleSlots(effect)}
     </div>
   `;
+}
+
+function renderEffectParticleSlots(effect) {
+  const selectedParticle = getSelectedEffectParticleSlot(effect);
+  return `
+    <div class="effect-particle-slot-block">
+      <div class="effect-editor-toolbar">
+        <strong>Particles</strong>
+        <button class="icon-button compact" data-effect-add-particle="${escapeHtml(effect.id)}" title="Add particle">+</button>
+      </div>
+      <div class="effect-particle-slot-list">
+        ${
+          effect.particles.length
+            ? effect.particles.map((particle, index) => renderEffectParticleSlot(effect, particle, index)).join("")
+            : `<p class="parameter-meta">+ 버튼으로 파티클을 추가하세요.</p>`
+        }
+      </div>
+      ${selectedParticle ? renderEffectParticleSettings(effect, selectedParticle) : ""}
+    </div>
+  `;
+}
+
+function renderEffectParticleSlot(effect, particle, index) {
+  const selected = particle.id === getSelectedEffectParticleId(effect);
+  return `
+    <div class="effect-particle-slot-row ${selected ? "selected" : ""}">
+      <button class="effect-particle-slot" data-effect-particle-select="${escapeHtml(effect.id)}" data-particle-id="${escapeHtml(particle.id)}">
+        <span>${escapeHtml(particle.name || `Particle ${index + 1}`)}</span>
+        <em>${particle.enabled ? "on" : "off"}</em>
+      </button>
+      <button class="duplicate-emotion-button effect-duplicate-button" data-effect-duplicate-particle="${escapeHtml(effect.id)}" data-particle-id="${escapeHtml(particle.id)}" title="Duplicate particle">${iconSvg(Copy, 15)}</button>
+    </div>
+  `;
+}
+
+function getEffectParticleCode(effect, particle) {
+  const index = effect?.particles?.findIndex((item) => item.id === particle?.id) ?? -1;
+  return `P${Math.max(0, index) + 1}`;
 }
 
 function renderEffectTransformModeButtons(effect) {
@@ -2995,86 +3060,161 @@ function renderEffectNumberControl(effectId, key, label, value, min, max, step) 
   `;
 }
 
-function renderEffectTypeSettings(effect) {
-  if (effect.type === "sprite") {
-    return `
-      <div class="effect-type-settings">
-        <strong>Sprite</strong>
-        ${renderEffectNumberControl(effect.id, "spriteSize", "Sprite Size", effect.sprite.size, 0.05, 5, 0.01)}
-        ${renderEffectNumberControl(effect.id, "spriteOpacity", "Opacity", effect.sprite.opacity, 0, 1, 0.01)}
-      </div>
-    `;
-  }
-  if (effect.type === "mesh") {
-    return `
-      <div class="effect-type-settings">
-        <strong>Mesh</strong>
-        <label>
-          Shape
-          <select data-effect-mesh-shape="${escapeHtml(effect.id)}">
-            ${["box", "sphere", "ring"].map((shape) => `<option value="${shape}" ${effect.mesh.shape === shape ? "selected" : ""}>${shape}</option>`).join("")}
-          </select>
-        </label>
-        ${renderEffectNumberControl(effect.id, "meshSpin", "Spin Speed", effect.mesh.spin, -10, 10, 0.1)}
-      </div>
-    `;
-  }
+function renderEffectParticleSettings(effect, particle) {
   return `
-    <div class="effect-type-settings">
-      <strong>Particle</strong>
+    <div class="effect-type-settings" data-effect-particle-settings="${escapeHtml(particle.id)}">
+      <div class="correction-card-head">
+        <strong>Particle Settings</strong>
+        <span class="effect-particle-code">${escapeHtml(getEffectParticleCode(effect, particle))}</span>
+        <button class="delete-emotion-button compact-delete" data-effect-delete-particle="${escapeHtml(effect.id)}" data-particle-id="${escapeHtml(particle.id)}" title="Delete">${iconSvg(X, 16)}</button>
+      </div>
+      <label>
+        Particle Name
+        <input type="text" value="${escapeHtml(particle.name)}" data-effect-particle-name="${escapeHtml(effect.id)}" data-particle-id="${escapeHtml(particle.id)}" />
+      </label>
+      <div class="effect-toggle-pair">
+        <label class="effect-enabled-row">
+          <input type="checkbox" data-effect-particle-enabled="${escapeHtml(effect.id)}" data-particle-id="${escapeHtml(particle.id)}" ${particle.enabled ? "checked" : ""} />
+          Enabled
+        </label>
+        <label class="effect-enabled-row">
+          <input type="checkbox" data-effect-particle-loop="${escapeHtml(effect.id)}" data-particle-id="${escapeHtml(particle.id)}" ${particle.loop ? "checked" : ""} />
+          Loop
+        </label>
+      </div>
+      <div class="effect-setting-label-row">
+        <strong>Particle Position</strong>
+      </div>
+      <div class="effect-vector-grid">
+        ${["X", "Y", "Z"]
+          .map(
+            (axis, index) => `
+              <label>
+                ${axis}
+                <input type="number" step="0.01" value="${roundForInput(particle.positionOffset[index])}" data-effect-particle-vector="${escapeHtml(effect.id)}" data-key="positionOffset" data-axis="${index}" />
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="effect-setting-label-row">
+        <strong>Particle Rotation</strong>
+      </div>
+      <div class="effect-vector-grid">
+        ${["X", "Y", "Z"]
+          .map(
+            (axis, index) => `
+              <label>
+                ${axis}
+                <input type="number" step="0.1" value="${roundForInput(particle.rotationOffset[index])}" data-effect-particle-vector="${escapeHtml(effect.id)}" data-key="rotationOffset" data-axis="${index}" />
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
+      ${renderEffectNumberControl(effect.id, "particleScale", "Particle Scale", particle.scale, 0.05, 5, 0.01)}
       <label>
         Shape
         <select data-effect-particle-shape="${escapeHtml(effect.id)}">
-          ${PARTICLE_SHAPES.map((shape) => `<option value="${shape.value}" ${effect.particle.shape === shape.value ? "selected" : ""}>${shape.label}</option>`).join("")}
+          ${PARTICLE_SHAPES.map((shape) => `<option value="${shape.value}" ${particle.shape === shape.value ? "selected" : ""}>${shape.label}</option>`).join("")}
         </select>
       </label>
+      ${renderEffectTextureControl(effect, particle)}
       <label class="effect-enabled-row">
-        <input type="checkbox" data-effect-particle-billboard="${escapeHtml(effect.id)}" ${effect.particle.billboard ? "checked" : ""} />
+        <input type="checkbox" data-effect-particle-billboard="${escapeHtml(effect.id)}" ${particle.billboard ? "checked" : ""} />
         Billboard
       </label>
-      ${renderEffectColorSlots(effect)}
-      ${renderEffectCountControl(effect)}
-      ${renderEffectNumberControl(effect.id, "particleSpread", "Spread", effect.particle.spread, 0.05, 4, 0.01)}
-      ${renderEffectSpeedControl(effect)}
-      ${renderEffectNumberControl(effect.id, "particleDrag", "Drag", effect.particle.drag, 0, 30, 0.01)}
-      ${renderEffectNumberControl(effect.id, "particleGravity", "Gravity", effect.particle.gravity, -10, 10, 0.01)}
-      ${renderEffectStopWhenSlowControl(effect)}
-      ${renderEffectSizeControl(effect)}
-      ${renderParticleSizeGraph(effect)}
-      ${renderEffectLifetimeControl(effect)}
-      ${renderEffectRotationControl(effect)}
-      ${renderEffectAngularVelocityControl(effect)}
-      ${renderEffectNumberControl(effect.id, "particleAngularDrag", "Rotation Drag", effect.particle.angularDrag, 0, 30, 0.01)}
+      ${renderEffectColorSlots(effect, particle)}
+      ${renderEffectCountControl(effect, particle)}
+      ${renderEffectNumberControl(effect.id, "particleSpread", "Spread", particle.spread, 0.05, 4, 0.01)}
+      ${renderEffectEmitterRadiusControl(effect, particle)}
+      ${renderEffectSpeedControl(effect, particle)}
+      ${renderEffectNumberControl(effect.id, "particleDrag", "Drag", particle.drag, 0, 30, 0.01)}
+      ${renderEffectNumberControl(effect.id, "particleGravity", "Gravity", particle.gravity, -10, 10, 0.01)}
+      ${renderEffectDriftControl(effect, particle)}
+      ${renderEffectStopWhenSlowControl(effect, particle)}
+      ${renderEffectSizeControl(effect, particle)}
+      ${renderParticleSizeGraph(effect, particle)}
+      ${renderEffectLifetimeControl(effect, particle)}
+      ${renderEffectRotationControl(effect, particle)}
+      ${renderEffectAngularVelocityControl(effect, particle)}
+      ${renderEffectNumberControl(effect.id, "particleAngularDrag", "Rotation Drag", particle.angularDrag, 0, 30, 0.01)}
       <label>
         Render Queue
         <select data-effect-render-queue="${escapeHtml(effect.id)}">
-          <option value="afterModel" ${effect.particle.renderQueue === "afterModel" ? "selected" : ""}>After Model</option>
-          <option value="beforeModel" ${effect.particle.renderQueue === "beforeModel" ? "selected" : ""}>Before Model</option>
+          <option value="afterModel" ${particle.renderQueue === "afterModel" ? "selected" : ""}>After Model</option>
+          <option value="beforeModel" ${particle.renderQueue === "beforeModel" ? "selected" : ""}>Before Model</option>
+        </select>
+      </label>
+      <label>
+        Blending
+        <select data-effect-particle-blending="${escapeHtml(effect.id)}">
+          <option value="normal" ${particle.blending === "normal" ? "selected" : ""}>Normal</option>
+          <option value="add" ${particle.blending === "add" ? "selected" : ""}>Add</option>
+          <option value="multiply" ${particle.blending === "multiply" ? "selected" : ""}>Multiply</option>
         </select>
       </label>
       <label>
         Seed Mode
         <select data-effect-seed-mode="${escapeHtml(effect.id)}">
-          <option value="time" ${effect.particle.seedMode === "time" ? "selected" : ""}>time HHMMSS</option>
-          <option value="fixed" ${effect.particle.seedMode === "fixed" ? "selected" : ""}>fixed</option>
+          <option value="time" ${particle.seedMode === "time" ? "selected" : ""}>time HHMMSS</option>
+          <option value="fixed" ${particle.seedMode === "fixed" ? "selected" : ""}>fixed</option>
         </select>
       </label>
-      ${renderEffectNumberControl(effect.id, "particleSeed", "Fixed Seed", effect.particle.seed, 1, 999999999, 1)}
-      ${renderParticleEmissionGraph(effect)}
-      ${renderParticleOpacityGraph(effect)}
+      ${renderEffectNumberControl(effect.id, "particleSeed", "Fixed Seed", particle.seed, 1, 999999999, 1)}
+      ${renderParticleEmissionGraph(effect, particle)}
+      ${renderParticleOpacityGraph(effect, particle)}
     </div>
   `;
 }
 
-function renderEffectColorSlots(effect) {
+function renderEffectTextureControl(effect, particle) {
+  const enabled = particle.shape === "texture";
+  const texture = normalizeParticleTextureSettings(particle.texture);
+  return `
+    <div class="effect-texture-control ${enabled ? "" : "disabled"}">
+      <div class="effect-texture-row">
+        <span>Texture</span>
+        <div class="effect-texture-actions">
+          <button class="secondary-button" data-effect-particle-texture="${escapeHtml(effect.id)}" ${enabled ? "" : "disabled"}>
+            ${texture.image ? escapeHtml(texture.image) : "Choose PNG/SVG"}
+          </button>
+          <button class="delete-emotion-button compact-delete" data-effect-particle-texture-clear="${escapeHtml(effect.id)}" ${enabled && texture.image ? "" : "disabled"} title="Clear texture">${iconSvg(X, 16)}</button>
+        </div>
+      </div>
+      <label>
+        Color Mode
+        <select data-effect-particle-texture-color-mode="${escapeHtml(effect.id)}" ${enabled ? "" : "disabled"}>
+          <option value="original" ${texture.colorMode === "original" ? "selected" : ""}>Original Color</option>
+          <option value="particleColor" ${texture.colorMode === "particleColor" ? "selected" : ""}>Particle Color</option>
+        </select>
+      </label>
+      <label class="effect-atlas-row">
+        <span>Sprite Grid</span>
+        <span class="effect-atlas-inputs">
+          <input type="number" min="1" max="16" step="1" value="${texture.atlas.columns}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleTextureColumns" ${enabled ? "" : "disabled"} title="Columns" />
+          <em>x</em>
+          <input type="number" min="1" max="16" step="1" value="${texture.atlas.rows}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleTextureRows" ${enabled ? "" : "disabled"} title="Rows" />
+        </span>
+      </label>
+      <label class="effect-atlas-row">
+        <span>Aspect (H/W)</span>
+        <input type="number" min="0.05" max="20" step="0.01" value="${roundForInput(texture.atlas.aspectRatio)}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleTextureAspectRatio" ${enabled ? "" : "disabled"} title="Height / Width" />
+      </label>
+      <p class="effect-texture-sprite-note">${texture.atlas.columns * texture.atlas.rows} sprites, random per particle</p>
+    </div>
+  `;
+}
+
+function renderEffectColorSlots(effect, particle) {
   return `
     <div class="effect-color-slots-block">
       <label>
         Color Slots
-        <input type="number" min="1" max="5" step="1" value="${effect.particle.colorSlots.length}" data-effect-color-slot-count="${escapeHtml(effect.id)}" />
+        <input type="number" min="1" max="5" step="1" value="${particle.colorSlots.length}" data-effect-color-slot-count="${escapeHtml(effect.id)}" />
       </label>
       <div class="effect-color-slot-list">
-        ${effect.particle.colorSlots
+        ${particle.colorSlots
           .map(
             (color, index) => `
               <label>
@@ -3089,33 +3229,46 @@ function renderEffectColorSlots(effect) {
   `;
 }
 
-function renderEffectCountControl(effect) {
+function renderEffectCountControl(effect, particle) {
   return `
     <label class="effect-life-row">
       <span>Count</span>
       <span class="effect-life-inputs">
-        <input type="number" min="1" max="300" step="1" value="${roundForInput(effect.particle.count[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleCountMin" />
+        <input type="number" min="1" max="300" step="1" value="${roundForInput(particle.count[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleCountMin" />
         <em>~</em>
-        <input type="number" min="1" max="300" step="1" value="${roundForInput(effect.particle.count[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleCountMax" />
+        <input type="number" min="1" max="300" step="1" value="${roundForInput(particle.count[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleCountMax" />
       </span>
     </label>
   `;
 }
 
-function renderEffectSpeedControl(effect) {
+function renderEffectEmitterRadiusControl(effect, particle) {
+  const checked = Boolean(particle.emitterRadiusEnabled);
+  return `
+    <label class="effect-emitter-radius-row">
+      <span class="effect-emitter-radius-check">
+        <input type="checkbox" data-effect-emitter-radius="${escapeHtml(effect.id)}" ${checked ? "checked" : ""} />
+        Emitter Radius
+      </span>
+      <input type="number" min="0" max="3" step="0.01" value="${roundForInput(particle.emitterRadius)}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleEmitterRadius" ${checked ? "" : "disabled"} />
+    </label>
+  `;
+}
+
+function renderEffectSpeedControl(effect, particle) {
   return `
     <label class="effect-life-row">
       <span>Speed</span>
       <span class="effect-life-inputs">
-        <input type="number" min="0" max="20" step="0.01" value="${roundForInput(effect.particle.speed[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSpeedMin" />
+        <input type="number" min="0" max="20" step="0.01" value="${roundForInput(particle.speed[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSpeedMin" />
         <em>~</em>
-        <input type="number" min="0" max="20" step="0.01" value="${roundForInput(effect.particle.speed[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSpeedMax" />
+        <input type="number" min="0" max="20" step="0.01" value="${roundForInput(particle.speed[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSpeedMax" />
       </span>
     </label>
   `;
 }
 
-function renderEffectAngularVelocityControl(effect) {
+function renderEffectAngularVelocityControl(effect, particle) {
   return `
     <div class="effect-range-vector-block">
       <strong>Rotation Speed</strong>
@@ -3123,7 +3276,7 @@ function renderEffectAngularVelocityControl(effect) {
         .map((axis, index) => {
           const minKey = `particleAngularVelocity${axis}Min`;
           const maxKey = `particleAngularVelocity${axis}Max`;
-          const checked = Boolean(effect.particle.angularVelocityEnabled[index]);
+          const checked = Boolean(particle.angularVelocityEnabled[index]);
           return `
             <label class="effect-angular-row">
               <span class="effect-axis-toggle">
@@ -3131,9 +3284,9 @@ function renderEffectAngularVelocityControl(effect) {
                 ${axis}
               </span>
               <span class="effect-life-inputs">
-                <input type="number" min="-720" max="720" step="1" value="${roundForInput(effect.particle.angularVelocity[index][0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="${minKey}" ${checked ? "" : "disabled"} />
+                <input type="number" min="-720" max="720" step="1" value="${roundForInput(particle.angularVelocity[index][0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="${minKey}" ${checked ? "" : "disabled"} />
                 <em>~</em>
-                <input type="number" min="-720" max="720" step="1" value="${roundForInput(effect.particle.angularVelocity[index][1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="${maxKey}" ${checked ? "" : "disabled"} />
+                <input type="number" min="-720" max="720" step="1" value="${roundForInput(particle.angularVelocity[index][1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="${maxKey}" ${checked ? "" : "disabled"} />
               </span>
             </label>
           `;
@@ -3143,25 +3296,25 @@ function renderEffectAngularVelocityControl(effect) {
   `;
 }
 
-function renderEffectRotationControl(effect) {
+function renderEffectRotationControl(effect, particle) {
   return `
     <label class="effect-life-row">
       <span>Rotation</span>
       <span class="effect-life-inputs">
-        <input type="number" min="-360" max="360" step="1" value="${roundForInput(effect.particle.rotation[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleRotationMin" />
+        <input type="number" min="-360" max="360" step="1" value="${roundForInput(particle.rotation[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleRotationMin" />
         <em>~</em>
-        <input type="number" min="-360" max="360" step="1" value="${roundForInput(effect.particle.rotation[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleRotationMax" />
+        <input type="number" min="-360" max="360" step="1" value="${roundForInput(particle.rotation[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleRotationMax" />
       </span>
     </label>
     <label class="effect-enabled-row">
-      <input type="checkbox" data-effect-align-velocity="${escapeHtml(effect.id)}" ${effect.particle.alignToVelocity ? "checked" : ""} />
+      <input type="checkbox" data-effect-align-velocity="${escapeHtml(effect.id)}" ${particle.alignToVelocity ? "checked" : ""} />
       Align to Velocity
     </label>
   `;
 }
 
-function renderEffectStopWhenSlowControl(effect) {
-  const checked = Boolean(effect.particle.stopWhenSlow);
+function renderEffectStopWhenSlowControl(effect, particle) {
+  const checked = Boolean(particle.stopWhenSlow);
   return `
     <label class="effect-stop-slow-row">
       <span class="effect-stop-slow-check">
@@ -3170,40 +3323,64 @@ function renderEffectStopWhenSlowControl(effect) {
       </span>
       <span class="effect-stop-slow-threshold">
         <span>Threshold</span>
-        <input type="number" min="0" max="1" step="0.01" value="${roundForInput(effect.particle.stopSpeedThreshold)}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleStopSpeedThreshold" ${checked ? "" : "disabled"} />
+        <input type="number" min="0" max="1" step="0.01" value="${roundForInput(particle.stopSpeedThreshold)}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleStopSpeedThreshold" ${checked ? "" : "disabled"} />
       </span>
     </label>
   `;
 }
 
-function renderEffectSizeControl(effect) {
+function renderEffectDriftControl(effect, particle) {
+  const checked = Boolean(particle.driftEnabled);
+  return `
+    <div class="effect-drift-control ${checked ? "" : "disabled"}">
+      <label class="effect-enabled-row">
+        <input type="checkbox" data-effect-drift="${escapeHtml(effect.id)}" ${checked ? "checked" : ""} />
+        Drift
+      </label>
+      <label>
+        Strength
+        <input type="number" min="0" max="5" step="0.01" value="${roundForInput(particle.driftStrength)}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleDriftStrength" ${checked ? "" : "disabled"} />
+      </label>
+      <label>
+        Fall Ref
+        <input type="number" min="0.01" max="20" step="0.01" value="${roundForInput(particle.driftFallSpeedRef)}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleDriftFallSpeedRef" ${checked ? "" : "disabled"} />
+      </label>
+      <label>
+        Frequency
+        <input type="number" min="0" max="20" step="0.01" value="${roundForInput(particle.driftFrequency)}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleDriftFrequency" ${checked ? "" : "disabled"} />
+      </label>
+    </div>
+  `;
+}
+
+function renderEffectSizeControl(effect, particle) {
   return `
     <label class="effect-life-row">
       <span>Size</span>
       <span class="effect-life-inputs">
-        <input type="number" min="0.01" max="0.3" step="0.01" value="${roundForInput(effect.particle.size[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSizeMin" />
+        <input type="number" min="0.01" max="0.3" step="0.01" value="${roundForInput(particle.size[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSizeMin" />
         <em>~</em>
-        <input type="number" min="0.01" max="0.3" step="0.01" value="${roundForInput(effect.particle.size[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSizeMax" />
+        <input type="number" min="0.01" max="0.3" step="0.01" value="${roundForInput(particle.size[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSizeMax" />
       </span>
     </label>
   `;
 }
 
-function renderEffectLifetimeControl(effect) {
+function renderEffectLifetimeControl(effect, particle) {
   return `
     <label class="effect-life-row">
       <span>Life</span>
       <span class="effect-life-inputs">
-        <input type="number" min="0.05" max="10" step="0.05" value="${roundForInput(effect.particle.lifetime[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleLifetimeMin" />
+        <input type="number" min="0.05" max="10" step="0.05" value="${roundForInput(particle.lifetime[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleLifetimeMin" />
         <em>~</em>
-        <input type="number" min="0.05" max="10" step="0.05" value="${roundForInput(effect.particle.lifetime[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleLifetimeMax" />
+        <input type="number" min="0.05" max="10" step="0.05" value="${roundForInput(particle.lifetime[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleLifetimeMax" />
       </span>
     </label>
   `;
 }
 
-function renderParticleSizeGraph(effect) {
-  const points = normalizeParticleSizeGraph(effect.particle.sizeGraph);
+function renderParticleSizeGraph(effect, particle) {
+  const points = normalizeParticleSizeGraph(particle.sizeGraph);
   const selectedIndex = state.selectedEffectGraphKind === "size" ? clampNumber(Number(state.selectedEffectGraphIndex), 0, points.length - 1, 0) : -1;
   const selectedPoint = points[selectedIndex] ?? null;
   return `
@@ -3230,12 +3407,12 @@ function renderParticleSizeGraph(effect) {
   `;
 }
 
-function renderParticleEmissionGraph(effect) {
-  const countMax = getParticleCountMax(effect.particle);
-  const points = normalizeParticleEmissionGraph(effect.particle.emissionGraph, countMax);
+function renderParticleEmissionGraph(effect, particle) {
+  const countMax = getParticleCountMax(particle);
+  const points = normalizeParticleEmissionGraph(particle.emissionGraph, countMax);
   const selectedIndex = state.selectedEffectGraphKind === "emission" ? clampNumber(Number(state.selectedEffectGraphIndex), 0, points.length - 1, 0) : -1;
   const selectedPoint = points[selectedIndex] ?? null;
-  const burst = Boolean(effect.particle.burst);
+  const burst = Boolean(particle.burst);
   return `
     <div class="effect-emission-graph-block">
       <div class="emotion-image-graph-label">
@@ -3260,18 +3437,14 @@ function renderParticleEmissionGraph(effect) {
           <input type="checkbox" data-effect-burst="${escapeHtml(effect.id)}" ${burst ? "checked" : ""} />
           Burst
         </label>
-        <label class="effect-duration-inline">
-          <span>Duration</span>
-          <input type="number" min="0.1" max="10" step="0.1" value="${roundForInput(effect.duration)}" data-effect-number="${escapeHtml(effect.id)}" data-key="duration" />
-        </label>
       </div>
       ${renderEffectCurveButtons(selectedPoint, !burst && selectedIndex >= 0 && selectedIndex < points.length - 1, "emission")}
     </div>
   `;
 }
 
-function renderParticleOpacityGraph(effect) {
-  const points = normalizeParticleOpacityGraph(effect.particle.opacityGraph);
+function renderParticleOpacityGraph(effect, particle) {
+  const points = normalizeParticleOpacityGraph(particle.opacityGraph);
   const selectedIndex = state.selectedEffectGraphKind === "opacity" ? clampNumber(Number(state.selectedEffectGraphIndex), 0, points.length - 1, 0) : -1;
   const selectedPoint = points[selectedIndex] ?? null;
   return `
@@ -3344,6 +3517,9 @@ function renderMotionSlotCard(slot, index = 0, total = 1) {
           .map((preset) => `<option value="${escapeHtml(preset.id)}" ${preset.id === slot.expressionPresetId ? "selected" : ""}>${escapeHtml(preset.name)}</option>`)
           .join("")}
       </select>
+      <select class="emotion-link-select" data-motion-slot-effect="${escapeHtml(slot.id)}">
+        ${renderMotionSlotEffectOptions(slot.effectId)}
+      </select>
       <div class="emotion-link-actions">
         <label class="emotion-link-loop">
           <input type="checkbox" data-motion-slot-loop="${escapeHtml(slot.id)}" ${slot.loop ? "checked" : ""} />
@@ -3363,17 +3539,35 @@ function renderMotionSlotCard(slot, index = 0, total = 1) {
   `;
 }
 
+function renderMotionSlotEffectOptions(selectedEffectId = "") {
+  const effects = normalizeEffectSlots(state.effects.effects);
+  const hasSelected = effects.some((effect) => effect.id === selectedEffectId);
+  return `
+    <option value="">이펙트 적용안함</option>
+    ${effects
+      .map((effect) => `<option value="${escapeHtml(effect.id)}" ${effect.id === selectedEffectId ? "selected" : ""}>${escapeHtml(effect.name)}</option>`)
+      .join("")}
+    ${selectedEffectId && !hasSelected ? `<option value="${escapeHtml(selectedEffectId)}" selected>Missing effect</option>` : ""}
+  `;
+}
+
 function renderMotionSlotTimeline(slot, duration, linkedPreset) {
   const timeline = normalizeExpressionTimeline(slot.expressionTimeline);
   const progress =
     state.selectedMotionSlotId === slot.id && state.animation.duration
       ? Math.min(100, Math.max(0, (state.animation.time / Math.max(state.animation.duration, 0.001)) * 100))
       : 0;
+  const effectStartLeft = Math.min(100, Math.max(0, (clampMotionSlotEffectStartTime(slot.effectStartTime, duration) / Math.max(duration, 0.001)) * 100));
   return `
     <div class="emotion-link-timeline">
       <div class="emotion-link-progress">
         <div class="emotion-link-progress-track">
           <span class="emotion-link-progress-cursor" data-motion-slot-progress="${escapeHtml(slot.id)}" style="left: ${progress}%;"></span>
+          ${
+            slot.effectId
+              ? `<button class="motion-slot-effect-marker" style="left: ${effectStartLeft}%;" data-motion-slot-effect-start-drag="${escapeHtml(slot.id)}" title="Effect start ${clampMotionSlotEffectStartTime(slot.effectStartTime, duration).toFixed(1)}s"><span></span></button>`
+              : ""
+          }
           ${timeline.map((timelineSlot, index) => renderMotionSlotTimelineMarker(slot.id, timelineSlot, index, duration)).join("")}
         </div>
       </div>
@@ -3563,7 +3757,7 @@ function renderExtraBoneFollowPanel() {
       </div>
     </div>
     <div class="correction-footer">
-      <button class="primary-button" id="saveCorrection" ${state.correctionPath && state.correctionDirty ? "" : "disabled"}>${iconSvg(Save, 16)}Save Meta</button>
+      ${renderMetaSaveButton("saveCorrection", !(state.correctionPath && state.correctionDirty), "Save Meta", getCharacterMetaFileName())}
     </div>
   `;
 }
@@ -4090,6 +4284,24 @@ function bindUi() {
   for (const button of document.querySelectorAll("[data-effect-select]")) {
     button.addEventListener("click", () => {
       state.selectedEffectId = button.dataset.effectSelect;
+      const effect = getSelectedEffectSlot();
+      state.selectedEffectParticleId = getSelectedEffectParticleId(effect);
+      renderPreservingScrollableUi();
+    });
+  }
+  for (const button of document.querySelectorAll("[data-effect-add-particle]")) {
+    button.addEventListener("click", () => addEffectParticleSlot(button.dataset.effectAddParticle));
+  }
+  for (const button of document.querySelectorAll("[data-effect-duplicate]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      duplicateEffectSlot(button.dataset.effectDuplicate);
+    });
+  }
+  for (const button of document.querySelectorAll("[data-effect-particle-select]")) {
+    button.addEventListener("click", () => {
+      state.selectedEffectId = button.dataset.effectParticleSelect;
+      state.selectedEffectParticleId = button.dataset.particleId;
       renderPreservingScrollableUi();
     });
   }
@@ -4097,8 +4309,11 @@ function bindUi() {
     input.addEventListener("input", () => updateEffectSlot(input.dataset.effectName, { name: input.value }, false));
     input.addEventListener("change", () => renderPreservingScrollableUi());
   }
-  for (const select of document.querySelectorAll("[data-effect-type]")) {
-    select.addEventListener("change", () => updateEffectSlot(select.dataset.effectType, { type: select.value }, true));
+  for (const input of document.querySelectorAll("[data-effect-particle-name]")) {
+    input.addEventListener("input", () =>
+      updateSelectedEffectParticle(input.dataset.effectParticleName, { name: input.value }, false, input.dataset.particleId),
+    );
+    input.addEventListener("change", () => renderPreservingScrollableUi());
   }
   for (const select of document.querySelectorAll("[data-effect-bone]")) {
     select.addEventListener("change", () => updateEffectSlot(select.dataset.effectBone, { attachBone: select.value }, true));
@@ -4106,72 +4321,115 @@ function bindUi() {
   for (const input of document.querySelectorAll("[data-effect-enabled]")) {
     input.addEventListener("change", () => updateEffectSlot(input.dataset.effectEnabled, { enabled: input.checked }, true));
   }
-  for (const input of document.querySelectorAll("[data-effect-loop]")) {
-    input.addEventListener("change", () => updateEffectSlot(input.dataset.effectLoop, { loop: input.checked }, true));
+  for (const input of document.querySelectorAll("[data-effect-particle-enabled]")) {
+    input.addEventListener("change", () => updateSelectedEffectParticle(input.dataset.effectParticleEnabled, { enabled: input.checked }, true, input.dataset.particleId));
+  }
+  for (const input of document.querySelectorAll("[data-effect-particle-loop]")) {
+    input.addEventListener("change", () => updateSelectedEffectParticle(input.dataset.effectParticleLoop, { loop: input.checked }, true, input.dataset.particleId));
   }
   for (const input of document.querySelectorAll("[data-effect-stop-slow]")) {
     input.addEventListener("change", () =>
-      updateEffectSlotNested(input.dataset.effectStopSlow, "particle", { stopWhenSlow: input.checked }, true),
+      updateEffectSlotNested(input.dataset.effectStopSlow, "particle", { stopWhenSlow: input.checked }, true, getEffectParticleIdFromControl(input)),
     );
   }
   for (const input of document.querySelectorAll("[data-effect-angular-axis]")) {
     input.addEventListener("change", () =>
-      updateEffectAngularVelocityAxis(input.dataset.effectAngularAxis, Number(input.dataset.axis), input.checked),
+      updateEffectAngularVelocityAxis(input.dataset.effectAngularAxis, Number(input.dataset.axis), input.checked, getEffectParticleIdFromControl(input)),
     );
-  }
-  for (const input of document.querySelectorAll("[data-effect-color]")) {
-    input.addEventListener("input", () => updateEffectSlot(input.dataset.effectColor, { color: input.value }, false));
   }
   for (const input of document.querySelectorAll("[data-effect-color-slot-count]")) {
     input.addEventListener("input", () => {
       if (!isCompleteNumberInput(input.value)) return;
-      updateEffectColorSlotCount(input.dataset.effectColorSlotCount, Number(input.value));
+      updateEffectColorSlotCount(input.dataset.effectColorSlotCount, Number(input.value), getEffectParticleIdFromControl(input));
     });
     input.addEventListener("change", () => {
-      updateEffectColorSlotCount(input.dataset.effectColorSlotCount, Number(input.value));
+      updateEffectColorSlotCount(input.dataset.effectColorSlotCount, Number(input.value), getEffectParticleIdFromControl(input));
       renderPreservingScrollableUi();
     });
   }
   for (const input of document.querySelectorAll("[data-effect-color-slot]")) {
-    input.addEventListener("input", () => updateEffectColorSlot(input.dataset.effectColorSlot, Number(input.dataset.index), input.value));
+    input.addEventListener("input", () =>
+      updateEffectColorSlot(input.dataset.effectColorSlot, Number(input.dataset.index), input.value, getEffectParticleIdFromControl(input)),
+    );
   }
   for (const input of document.querySelectorAll("[data-effect-vector]")) {
     input.addEventListener("input", () =>
       updateEffectSlotVector(input.dataset.effectVector, input.dataset.key, Number(input.dataset.axis), Number(input.value)),
     );
   }
+  for (const input of document.querySelectorAll("[data-effect-particle-vector]")) {
+    input.addEventListener("input", () =>
+      updateEffectParticleVector(input.dataset.effectParticleVector, input.dataset.key, Number(input.dataset.axis), Number(input.value), getEffectParticleIdFromControl(input)),
+    );
+  }
   for (const input of document.querySelectorAll("[data-effect-number]")) {
     input.addEventListener("input", () => {
       if (isEffectRangeNumberKey(input.dataset.key)) return;
       if (!isCompleteNumberInput(input.value)) return;
-      updateEffectSlotNumber(input.dataset.effectNumber, input.dataset.key, Number(input.value));
+      updateEffectSlotNumber(input.dataset.effectNumber, input.dataset.key, Number(input.value), getEffectParticleIdFromControl(input));
     });
     input.addEventListener("change", () => finalizeEffectNumberInput(input));
   }
-  for (const select of document.querySelectorAll("[data-effect-mesh-shape]")) {
-    select.addEventListener("change", () => updateEffectSlotNested(select.dataset.effectMeshShape, "mesh", { shape: select.value }, true));
+  for (const input of document.querySelectorAll('input[type="number"]')) {
+    input.addEventListener("contextmenu", handleNumberInputContextMenu);
   }
   for (const select of document.querySelectorAll("[data-effect-seed-mode]")) {
-    select.addEventListener("change", () => updateEffectSlotNested(select.dataset.effectSeedMode, "particle", { seedMode: select.value }, true));
+    select.addEventListener("change", () =>
+      updateEffectSlotNested(select.dataset.effectSeedMode, "particle", { seedMode: select.value }, true, getEffectParticleIdFromControl(select)),
+    );
   }
   for (const select of document.querySelectorAll("[data-effect-render-queue]")) {
-    select.addEventListener("change", () => updateEffectSlotNested(select.dataset.effectRenderQueue, "particle", { renderQueue: select.value }, false));
+    select.addEventListener("change", () =>
+      updateEffectSlotNested(select.dataset.effectRenderQueue, "particle", { renderQueue: select.value }, false, getEffectParticleIdFromControl(select)),
+    );
+  }
+  for (const select of document.querySelectorAll("[data-effect-particle-blending]")) {
+    select.addEventListener("change", () =>
+      updateEffectSlotNested(select.dataset.effectParticleBlending, "particle", { blending: select.value }, false, getEffectParticleIdFromControl(select)),
+    );
   }
   for (const select of document.querySelectorAll("[data-effect-particle-shape]")) {
-    select.addEventListener("change", () => updateEffectSlotNested(select.dataset.effectParticleShape, "particle", { shape: select.value }, false));
+    select.addEventListener("change", () => updateEffectParticleShape(select.dataset.effectParticleShape, select.value, getEffectParticleIdFromControl(select)));
+  }
+  for (const button of document.querySelectorAll("[data-effect-particle-texture]")) {
+    button.addEventListener("click", () => chooseEffectParticleTexture(button.dataset.effectParticleTexture, getEffectParticleIdFromControl(button)));
+  }
+  for (const button of document.querySelectorAll("[data-effect-particle-texture-clear]")) {
+    button.addEventListener("click", () =>
+      updateEffectSlotNested(button.dataset.effectParticleTextureClear, "particle", { texture: {} }, true, getEffectParticleIdFromControl(button)),
+    );
+  }
+  for (const select of document.querySelectorAll("[data-effect-particle-texture-color-mode]")) {
+    select.addEventListener("change", () => {
+      const particleId = getEffectParticleIdFromControl(select);
+      const particle = getEffectParticleSlotById(select.dataset.effectParticleTextureColorMode, particleId);
+      updateEffectSlotNested(select.dataset.effectParticleTextureColorMode, "particle", { texture: { ...particle?.texture, colorMode: select.value } }, true, particleId);
+    });
   }
   for (const input of document.querySelectorAll("[data-effect-particle-billboard]")) {
     input.addEventListener("change", () =>
-      updateEffectSlotNested(input.dataset.effectParticleBillboard, "particle", { billboard: input.checked }, true),
+      updateEffectSlotNested(input.dataset.effectParticleBillboard, "particle", { billboard: input.checked }, true, getEffectParticleIdFromControl(input)),
     );
   }
   for (const input of document.querySelectorAll("[data-effect-align-velocity]")) {
     input.addEventListener("change", () =>
-      updateEffectSlotNested(input.dataset.effectAlignVelocity, "particle", { alignToVelocity: input.checked }, true),
+      updateEffectSlotNested(input.dataset.effectAlignVelocity, "particle", { alignToVelocity: input.checked }, true, getEffectParticleIdFromControl(input)),
+    );
+  }
+  for (const input of document.querySelectorAll("[data-effect-emitter-radius]")) {
+    input.addEventListener("change", () =>
+      updateEffectSlotNested(input.dataset.effectEmitterRadius, "particle", { emitterRadiusEnabled: input.checked }, true, getEffectParticleIdFromControl(input)),
+    );
+  }
+  for (const input of document.querySelectorAll("[data-effect-drift]")) {
+    input.addEventListener("change", () =>
+      updateEffectSlotNested(input.dataset.effectDrift, "particle", { driftEnabled: input.checked }, true, getEffectParticleIdFromControl(input)),
     );
   }
   for (const input of document.querySelectorAll("[data-effect-burst]")) {
-    input.addEventListener("change", () => updateEffectSlotNested(input.dataset.effectBurst, "particle", { burst: input.checked }, true));
+    input.addEventListener("change", () =>
+      updateEffectSlotNested(input.dataset.effectBurst, "particle", { burst: input.checked }, true, getEffectParticleIdFromControl(input)),
+    );
   }
   for (const button of document.querySelectorAll("[data-effect-curve]")) {
     button.addEventListener("click", () => setSelectedEffectGraphCurve(button.dataset.effectCurve, button.dataset.effectCurveKind));
@@ -4184,6 +4442,15 @@ function bindUi() {
   document.querySelector("[data-effect-size-graph]")?.addEventListener("pointerdown", handleEffectSizeGraphPointerDown);
   for (const button of document.querySelectorAll("[data-effect-delete]")) {
     button.addEventListener("click", () => deleteEffectSlot(button.dataset.effectDelete));
+  }
+  for (const button of document.querySelectorAll("[data-effect-delete-particle]")) {
+    button.addEventListener("click", () => deleteEffectParticleSlot(button.dataset.effectDeleteParticle, button.dataset.particleId));
+  }
+  for (const button of document.querySelectorAll("[data-effect-duplicate-particle]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      duplicateEffectParticleSlot(button.dataset.effectDuplicateParticle, button.dataset.particleId);
+    });
   }
   document.querySelector("#addExtraBoneFollow")?.addEventListener("click", addExtraBoneFollowSetting);
   document.querySelector("#saveSelectedParameters")?.addEventListener("click", saveSelectedExpressionParameters);
@@ -4294,6 +4561,9 @@ function bindUi() {
   for (const select of document.querySelectorAll("[data-motion-slot-expression]")) {
     select.addEventListener("change", () => updateMotionSlotExpression(select.dataset.motionSlotExpression, select.value));
   }
+  for (const select of document.querySelectorAll("[data-motion-slot-effect]")) {
+    select.addEventListener("change", () => updateMotionSlot(select.dataset.motionSlotEffect, { effectId: select.value }));
+  }
   for (const input of document.querySelectorAll("[data-motion-slot-loop]")) {
     input.addEventListener("change", () => updateMotionSlot(input.dataset.motionSlotLoop, { loop: input.checked }));
   }
@@ -4336,6 +4606,9 @@ function bindUi() {
     node.addEventListener("pointerdown", (event) =>
       beginMotionSlotTimelineDrag(event, node.dataset.motionSlotTimelineDrag, node.dataset.slotId),
     );
+  }
+  for (const node of document.querySelectorAll("[data-motion-slot-effect-start-drag]")) {
+    node.addEventListener("pointerdown", (event) => beginMotionSlotEffectStartDrag(event, node.dataset.motionSlotEffectStartDrag));
   }
   for (const button of document.querySelectorAll("[data-motion-slot-timeline-jump]")) {
     button.addEventListener("click", () => jumpMotionSlotTimeline(button.dataset.motionSlotTimelineJump, button.dataset.slotId));
@@ -4600,6 +4873,10 @@ function bindUi() {
       }
       if (state.mode !== "effect") {
         clearEffectPreview();
+      }
+      if (state.mode !== "linker2") {
+        state.activeMotionSlotEffectId = "";
+        state.pendingMotionSlotEffect = null;
       }
       applyEffectModelVisibility();
       applyCameraPresetForMode(state.mode);
@@ -7825,6 +8102,8 @@ function addMotionSlot() {
     animationFile: "",
     expressionPresetId: "",
     expressionPresetName: "",
+    effectId: "",
+    effectStartTime: 0,
     loop: false,
     transitionSeconds: 0.2,
     expressionTimeline: [],
@@ -8022,6 +8301,52 @@ function beginMotionSlotTimelineDrag(event, slotId, pointId) {
   window.addEventListener("pointerup", onUp, { once: true });
 }
 
+function beginMotionSlotEffectStartDrag(event, slotId) {
+  event.preventDefault();
+  const slot = getMotionSlot(slotId);
+  if (!slot?.animationFile || !slot.effectId) return;
+  const track = event.currentTarget.closest(".emotion-link-progress-track");
+  const duration = getAnimationDuration(slot.animationFile, 2);
+  const move = (moveEvent) => {
+    const rect = track?.getBoundingClientRect();
+    if (!rect) return;
+    const ratio = Math.min(1, Math.max(0, (moveEvent.clientX - rect.left) / Math.max(rect.width, 1)));
+    const time = Math.round(ratio * duration * 10) / 10;
+    updateMotionSlotEffectStartTime(slotId, time, false);
+    const marker = document.querySelector(`[data-motion-slot-effect-start-drag="${cssEscape(slotId)}"]`);
+    if (marker) {
+      marker.style.left = `${Math.min(100, Math.max(0, (time / Math.max(duration, 0.001)) * 100))}%`;
+      marker.title = `Effect start ${time.toFixed(1)}s`;
+    }
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    renderPreservingEmotionLinkerScroll();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up, { once: true });
+  move(event);
+}
+
+function updateMotionSlotEffectStartTime(slotId, time, shouldRender = true) {
+  const slot = getMotionSlot(slotId);
+  if (!slot) return;
+  const duration = getAnimationDuration(slot.animationFile, 2);
+  state.emotionLinker2.motionSlots = normalizeMotionSlots(state.emotionLinker2.motionSlots).map((item) =>
+    item.id === slotId ? normalizeMotionSlot({ ...item, effectStartTime: clampMotionSlotEffectStartTime(time, duration) }) : item,
+  );
+  state.selectedMotionSlotId = slotId;
+  if (state.pendingMotionSlotEffect?.slotId === slotId) {
+    state.pendingMotionSlotEffect.startTime = clampMotionSlotEffectStartTime(time, duration);
+    state.pendingMotionSlotEffect.armed = state.animation.time < state.pendingMotionSlotEffect.startTime;
+    if (!state.pendingMotionSlotEffect.armed && !state.activeMotionSlotEffectId) activatePendingMotionSlotEffect();
+  }
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+  if (shouldRender) renderPreservingEmotionLinkerScroll();
+}
+
 function jumpMotionSlotTimeline(slotId, pointId) {
   const slot = getMotionSlot(slotId);
   if (!slot?.animationFile || !animationAction || state.selectedAnimationName !== slot.animationFile) return;
@@ -8045,9 +8370,60 @@ async function playMotionSlot(slotId) {
     previousAction: transition?.previousAction,
     transitionSeconds: transition?.previousAction ? transitionSeconds : 0,
   });
+  startMotionSlotEffectPreview(slot);
   render();
   const nextScroller = document.querySelector(".emotion-linker-panel");
   if (nextScroller) nextScroller.scrollTop = scrollTop;
+}
+
+function startMotionSlotEffectPreview(slot) {
+  if (state.mode !== "linker2") return;
+  const effect = getEffectSlotById(slot?.effectId);
+  state.activeMotionSlotEffectId = "";
+  state.pendingMotionSlotEffect = null;
+  clearEffectPreview();
+  if (!effect) {
+    return;
+  }
+  const duration = getAnimationDuration(slot.animationFile, 2);
+  const startTime = clampMotionSlotEffectStartTime(slot.effectStartTime, duration);
+  state.pendingMotionSlotEffect = {
+    slotId: slot.id,
+    effectId: effect.id,
+    startTime,
+    armed: true,
+    lastTime: 0,
+  };
+  if (startTime <= 0.001) activatePendingMotionSlotEffect();
+}
+
+function updateMotionSlotEffectTrigger() {
+  const pending = state.pendingMotionSlotEffect;
+  if (state.mode !== "linker2" || !pending) return;
+  const slot = getMotionSlot(pending.slotId);
+  if (!slot || state.selectedMotionSlotId !== slot.id || !state.animation.playing) return;
+  const currentTime = state.animation.time;
+  if (slot.loop && currentTime < pending.lastTime - 0.001) {
+    pending.armed = true;
+    state.activeMotionSlotEffectId = "";
+    clearEffectPreview();
+  }
+  if (pending.armed && currentTime >= pending.startTime) {
+    activatePendingMotionSlotEffect();
+    pending.armed = false;
+  }
+  pending.lastTime = currentTime;
+}
+
+function activatePendingMotionSlotEffect() {
+  const pending = state.pendingMotionSlotEffect;
+  if (!pending) return;
+  const effect = getEffectSlotById(pending.effectId);
+  if (!effect) return;
+  pending.armed = false;
+  state.activeMotionSlotEffectId = effect.id;
+  syncSelectedEffectPreview();
+  restartSelectedEffectPreview();
 }
 
 function startActiveMotionSlotTimeline(slot) {
@@ -9988,23 +10364,17 @@ function normalizeEffectSlots(effects) {
 }
 
 function normalizeEffectSlot(effect, index = 0) {
-  const type = ["particle", "sprite", "mesh"].includes(effect?.type) ? effect.type : "particle";
   const attachBone = effect?.attachBone === "world" || HUMAN_BONE_SET.has(effect?.attachBone) ? effect.attachBone : "world";
   return {
     id: String(effect?.id || `effect-${Date.now()}-${index}`),
     name: String(effect?.name || `Effect ${index + 1}`),
-    type,
     attachBone,
     positionOffset: normalizeEffectNumberArray(effect?.positionOffset, [0, 1.5, 0], 3),
     rotationOffset: normalizeEffectNumberArray(effect?.rotationOffset, [0, 0, 0], 3).map((value) => Math.min(180, Math.max(-180, value))),
     scale: Math.min(5, Math.max(0.05, normalizeFiniteNumber(effect?.scale, 1))),
-    color: normalizeHexColor(effect?.color) ?? "#ffd166",
     duration: Math.min(10, Math.max(0.1, normalizeFiniteNumber(effect?.duration, 1))),
-    loop: effect?.loop !== false,
     enabled: Boolean(effect?.enabled),
-    particle: normalizeParticleEffectSettings(effect?.particle),
-    sprite: normalizeSpriteEffectSettings(effect?.sprite),
-    mesh: normalizeMeshEffectSettings(effect?.mesh),
+    particles: normalizeParticleSlots(effect?.particles),
     version: 1,
   };
 }
@@ -10037,18 +10407,26 @@ function normalizeParticleEffectSettings(settings = {}) {
   const angularVelocity = normalizeParticleAngularVelocity(settings.angularVelocity);
   const angularVelocityEnabled = normalizeParticleAngularVelocityEnabled(settings.angularVelocityEnabled);
   const shape = PARTICLE_SHAPE_INDEX.has(settings.shape) ? settings.shape : "dot";
-  const defaultBillboard = shape === "dot" || shape === "softCircle";
+  const defaultBillboard = shape === "texture" || shape === "dot" || shape === "softCircle";
   const colorSlots = normalizeParticleColorSlots(settings.colorSlots, settings.color);
+  const spread = Math.min(4, Math.max(0.05, normalizeFiniteNumber(settings.spread, 1.2)));
   return {
     count: [countMin, countMax],
     shape,
+    texture: normalizeParticleTextureSettings(settings.texture),
     billboard: hasOwnField(settings, "billboard") ? Boolean(settings.billboard) : defaultBillboard,
     burst: Boolean(settings.burst),
     colorSlots,
-    spread: Math.min(4, Math.max(0.05, normalizeFiniteNumber(settings.spread, 1.2))),
+    spread,
+    emitterRadiusEnabled: Boolean(settings.emitterRadiusEnabled),
+    emitterRadius: Math.min(3, Math.max(0, normalizeFiniteNumber(settings.emitterRadius, spread * 0.12))),
     speed: [speedMin, speedMax],
     drag: Math.min(30, Math.max(0, normalizeFiniteNumber(settings.drag, 0))),
     gravity: Math.min(10, Math.max(-10, normalizeFiniteNumber(settings.gravity, 0))),
+    driftEnabled: Boolean(settings.driftEnabled),
+    driftStrength: Math.min(5, Math.max(0, normalizeFiniteNumber(settings.driftStrength, 0.2))),
+    driftFallSpeedRef: Math.min(20, Math.max(0.01, normalizeFiniteNumber(settings.driftFallSpeedRef, 2))),
+    driftFrequency: Math.min(20, Math.max(0, normalizeFiniteNumber(settings.driftFrequency, 1.5))),
     rotation: [rotationMin, rotationMax],
     alignToVelocity: Boolean(settings.alignToVelocity),
     angularVelocity,
@@ -10059,11 +10437,58 @@ function normalizeParticleEffectSettings(settings = {}) {
     size: [sizeMin, sizeMax],
     lifetime: [lifetimeMin, lifetimeMax],
     renderQueue: settings.renderQueue === "beforeModel" ? "beforeModel" : "afterModel",
+    blending: ["normal", "add", "multiply"].includes(settings.blending) ? settings.blending : "normal",
     seedMode: settings.seedMode === "fixed" ? "fixed" : "time",
     seed: Math.max(1, Math.round(normalizeFiniteNumber(settings.seed, 12345))),
     emissionGraph: normalizeParticleEmissionGraph(settings.emissionGraph, emissionValueMax),
     sizeGraph: normalizeParticleSizeGraph(settings.sizeGraph),
     opacityGraph: normalizeParticleOpacityGraph(settings.opacityGraph),
+  };
+}
+
+function normalizeParticleTextureSettings(texture) {
+  const image = fileNameFromPath(texture?.image ?? texture?.file ?? "");
+  const sourceType = image.toLowerCase().endsWith(".svg") ? "svgMask" : "bitmap";
+  const fallbackColorMode = sourceType === "svgMask" ? "particleColor" : "original";
+  const colorMode = texture?.colorMode === "particleColor" ? "particleColor" : texture?.colorMode === "original" ? "original" : fallbackColorMode;
+  const atlas = texture?.atlas && typeof texture.atlas === "object" ? texture.atlas : {};
+  const columns = Math.min(16, Math.max(1, Math.round(normalizeFiniteNumber(atlas.columns, 1))));
+  const rows = Math.min(16, Math.max(1, Math.round(normalizeFiniteNumber(atlas.rows, 1))));
+  const aspectRatio = Math.min(20, Math.max(0.05, normalizeFiniteNumber(atlas.aspectRatio, 1)));
+  return {
+    image,
+    sourceType,
+    colorMode,
+    atlas: {
+      columns,
+      rows,
+      aspectRatio,
+      spriteMode: "random",
+    },
+  };
+}
+
+function normalizeParticleSlots(particles) {
+  if (!Array.isArray(particles)) return [];
+  return particles.map((particle, index) => normalizeParticleSlot(particle, index)).filter((particle) => particle.id);
+}
+
+function getParticleThreeBlending(mode) {
+  if (mode === "add") return THREE.AdditiveBlending;
+  if (mode === "multiply") return THREE.MultiplyBlending;
+  return THREE.NormalBlending;
+}
+
+function normalizeParticleSlot(particle, index = 0) {
+  return {
+    id: String(particle?.id || `particle-${Date.now()}-${index}`),
+    name: String(particle?.name || `Particle ${index + 1}`),
+    enabled: particle?.enabled !== false,
+    positionOffset: normalizeEffectNumberArray(particle?.positionOffset, [0, 0, 0], 3),
+    rotationOffset: normalizeEffectNumberArray(particle?.rotationOffset, [0, 0, 0], 3).map((value) => Math.min(180, Math.max(-180, value))),
+    scale: Math.min(5, Math.max(0.05, normalizeFiniteNumber(particle?.scale, 1))),
+    loop: particle?.loop !== false,
+    ...normalizeParticleEffectSettings(particle),
   };
 }
 
@@ -10077,6 +10502,11 @@ function normalizeParticleColorSlots(slots, fallback = "#ffd166") {
 function getParticleCountMax(settings = {}) {
   const normalized = normalizeParticleEffectSettings(settings);
   return normalized.count[1];
+}
+
+function getParticleEmitterRadius(settings = {}) {
+  const normalized = normalizeParticleEffectSettings(settings);
+  return normalized.emitterRadiusEnabled ? normalized.emitterRadius : normalized.spread * 0.12;
 }
 
 function getRandomParticleCount(settings, rng) {
@@ -10295,14 +10725,15 @@ function addEffectSlot() {
     {
       id: `effect-${Date.now()}-${effects.length}`,
       name: `Effect ${effects.length + 1}`,
-      type: "particle",
       attachBone: "world",
       enabled: false,
+      particles: [],
     },
     effects.length,
   );
   state.effects = normalizeEffectsMeta({ ...state.effects, effects: [...effects, slot] });
   state.selectedEffectId = slot.id;
+  state.selectedEffectParticleId = null;
   state.effectsDirty = true;
   renderPreservingScrollableUi();
 }
@@ -10311,13 +10742,7 @@ function updateEffectSlot(effectId, patch, shouldRender = true) {
   const effects = normalizeEffectSlots(state.effects.effects);
   state.effects.effects = effects.map((effect, index) => {
     if (effect.id !== effectId) return effect;
-    const normalized = normalizeEffectSlot({ ...effect, ...patch }, index);
-    if (!hasOwnField(patch, "particle")) {
-      normalized.particle.emissionGraph = effect.particle.emissionGraph;
-      normalized.particle.sizeGraph = effect.particle.sizeGraph;
-      normalized.particle.opacityGraph = effect.particle.opacityGraph;
-    }
-    return normalized;
+    return normalizeEffectSlot({ ...effect, ...patch }, index);
   });
   state.effectsDirty = true;
   syncSaveMetaButton();
@@ -10325,10 +10750,76 @@ function updateEffectSlot(effectId, patch, shouldRender = true) {
   if (shouldRender) renderPreservingScrollableUi();
 }
 
-function updateEffectSlotNested(effectId, key, patch, shouldRender = true) {
+function updateEffectSlotNested(effectId, key, patch, shouldRender = true, particleId = null) {
+  if (key !== "particle") return;
+  updateSelectedEffectParticle(effectId, patch, shouldRender, particleId);
+}
+
+function addEffectParticleSlot(effectId) {
   const effect = state.effects.effects.find((item) => item.id === effectId);
-  if (!effect || !["particle", "sprite", "mesh"].includes(key)) return;
-  updateEffectSlot(effectId, { [key]: { ...effect[key], ...patch } }, shouldRender);
+  if (!effect) return;
+  const particles = normalizeParticleSlots(effect.particles);
+  const particle = normalizeParticleSlot(
+    {
+      id: `particle-${Date.now()}-${particles.length}`,
+      name: `Particle ${particles.length + 1}`,
+      enabled: true,
+    },
+    particles.length,
+  );
+  updateEffectSlot(effectId, { particles: [...particles, particle] }, false);
+  state.selectedEffectParticleId = particle.id;
+  renderPreservingScrollableUi();
+}
+
+function duplicateEffectSlot(effectId) {
+  const effects = normalizeEffectSlots(state.effects.effects);
+  const source = effects.find((effect) => effect.id === effectId);
+  if (!source) return;
+  const nextIndex = effects.length;
+  const copy = cloneJson(source);
+  copy.id = `effect-${Date.now()}-${nextIndex}`;
+  copy.name = `${source.name || `Effect ${nextIndex}`} Copy`;
+  copy.particles = normalizeParticleSlots(copy.particles).map((particle, index) => ({
+    ...particle,
+    id: `particle-${Date.now()}-${nextIndex}-${index}`,
+  }));
+  const normalized = normalizeEffectSlot(copy, nextIndex);
+  state.effects = normalizeEffectsMeta({ ...state.effects, effects: [...effects, normalized] });
+  state.selectedEffectId = normalized.id;
+  state.selectedEffectParticleId = normalized.particles[0]?.id ?? null;
+  state.effectsDirty = true;
+  syncSaveMetaButton();
+  syncSelectedEffectPreview();
+  renderPreservingScrollableUi();
+}
+
+function duplicateEffectParticleSlot(effectId, particleId) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  const source = effect?.particles?.find((particle) => particle.id === particleId);
+  if (!effect || !source) return;
+  const particles = normalizeParticleSlots(effect.particles);
+  const nextIndex = particles.length;
+  const copy = {
+    ...cloneJson(source),
+    id: `particle-${Date.now()}-${nextIndex}`,
+    name: `${source.name || `Particle ${nextIndex}`} Copy`,
+  };
+  const normalized = normalizeParticleSlot(copy, nextIndex);
+  updateEffectSlot(effectId, { particles: [...particles, normalized] }, false);
+  state.selectedEffectParticleId = normalized.id;
+  renderPreservingScrollableUi();
+}
+
+function updateSelectedEffectParticle(effectId, patch, shouldRender = true, particleId = null) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect) return;
+  const selectedId = particleId || getSelectedEffectParticleId(effect);
+  const particles = normalizeParticleSlots(effect.particles).map((particle, index) => {
+    if (particle.id !== selectedId) return particle;
+    return normalizeParticleSlot({ ...particle, ...patch }, index);
+  });
+  updateEffectSlot(effectId, { particles }, shouldRender);
 }
 
 function updateEffectSlotVector(effectId, key, axis, value) {
@@ -10345,33 +10836,94 @@ function updateEffectSlotVector(effectId, key, axis, value) {
   updateEffectSlot(effectId, { rotationOffset: rotations }, false);
 }
 
-function updateEffectAngularVelocityAxis(effectId, axis, enabled) {
+function updateEffectParticleVector(effectId, key, axis, value, particleId = null) {
   const effect = state.effects.effects.find((item) => item.id === effectId);
-  if (!effect || !Number.isInteger(axis) || axis < 0 || axis > 2) return;
-  const particle = normalizeParticleEffectSettings(effect.particle);
-  const angularVelocityEnabled = [...particle.angularVelocityEnabled];
-  angularVelocityEnabled[axis] = Boolean(enabled);
-  updateEffectSlotNested(effectId, "particle", { angularVelocityEnabled }, true);
+  const particle = getEffectParticleSlotById(effectId, particleId) ?? getSelectedEffectParticleSlot(effect);
+  if (!particle || !["positionOffset", "rotationOffset"].includes(key) || !Number.isFinite(axis) || !Number.isFinite(value)) return;
+  if (key === "positionOffset") {
+    const next = [...particle.positionOffset];
+    next[axis] = Math.min(10, Math.max(-10, value));
+    updateSelectedEffectParticle(effectId, { positionOffset: next }, false, particle.id);
+    return;
+  }
+  const rotations = [...particle.rotationOffset];
+  rotations[axis] = Math.min(180, Math.max(-180, value));
+  updateSelectedEffectParticle(effectId, { rotationOffset: rotations }, false, particle.id);
 }
 
-function updateEffectColorSlotCount(effectId, value) {
+function updateEffectAngularVelocityAxis(effectId, axis, enabled, particleId = null) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  if (!effect || !Number.isInteger(axis) || axis < 0 || axis > 2) return;
+  const particle = getEffectParticleSlotById(effectId, particleId) ?? getSelectedEffectParticleSlot(effect);
+  if (!particle) return;
+  const angularVelocityEnabled = [...particle.angularVelocityEnabled];
+  angularVelocityEnabled[axis] = Boolean(enabled);
+  updateEffectSlotNested(effectId, "particle", { angularVelocityEnabled }, true, particle.id);
+}
+
+function updateEffectColorSlotCount(effectId, value, particleId = null) {
   const effect = state.effects.effects.find((item) => item.id === effectId);
   if (!effect || !Number.isFinite(value)) return;
   const count = Math.min(5, Math.max(1, Math.round(value)));
-  const particle = normalizeParticleEffectSettings(effect.particle);
+  const particle = getEffectParticleSlotById(effectId, particleId) ?? getSelectedEffectParticleSlot(effect);
+  if (!particle) return;
   const colorSlots = [...particle.colorSlots];
-  while (colorSlots.length < count) colorSlots.push(colorSlots[colorSlots.length - 1] ?? effect.color);
-  updateEffectSlotNested(effectId, "particle", { colorSlots: colorSlots.slice(0, count) }, false);
+  while (colorSlots.length < count) colorSlots.push(colorSlots[colorSlots.length - 1] ?? "#ffd166");
+  updateEffectSlotNested(effectId, "particle", { colorSlots: colorSlots.slice(0, count) }, false, particle.id);
 }
 
-function updateEffectColorSlot(effectId, index, value) {
+function updateEffectColorSlot(effectId, index, value, particleId = null) {
   const effect = state.effects.effects.find((item) => item.id === effectId);
   const color = normalizeHexColor(value);
   if (!effect || !color || !Number.isInteger(index)) return;
-  const colorSlots = [...normalizeParticleEffectSettings(effect.particle).colorSlots];
+  const particle = getEffectParticleSlotById(effectId, particleId) ?? getSelectedEffectParticleSlot(effect);
+  if (!particle) return;
+  const colorSlots = [...particle.colorSlots];
   if (index < 0 || index >= colorSlots.length) return;
   colorSlots[index] = color;
-  updateEffectSlotNested(effectId, "particle", { colorSlots }, false);
+  updateEffectSlotNested(effectId, "particle", { colorSlots }, false, particle.id);
+}
+
+function updateEffectParticleShape(effectId, shape, particleId = null) {
+  if (!PARTICLE_SHAPE_INDEX.has(shape)) return;
+  const patch = shape === "texture" ? { shape, billboard: true } : { shape };
+  updateEffectSlotNested(effectId, "particle", patch, true, particleId);
+}
+
+async function chooseEffectParticleTexture(effectId, particleId = null) {
+  const result = await window.vrmFiles.storeParticleTexture?.();
+  if (!result?.name) return;
+  const name = fileNameFromPath(result.name);
+  if (!isSupportedParticleTextureFile(name)) {
+    window.alert?.("PNG 또는 SVG 텍스처만 사용할 수 있습니다.");
+    return;
+  }
+  const sourceType = name.toLowerCase().endsWith(".svg") ? "svgMask" : "bitmap";
+  updateEffectSlotNested(
+    effectId,
+    "particle",
+    {
+      shape: "texture",
+      billboard: true,
+      texture: {
+        image: name,
+        sourceType,
+        colorMode: sourceType === "svgMask" ? "particleColor" : "original",
+        atlas: {
+          columns: 1,
+          rows: 1,
+          aspectRatio: 1,
+          spriteMode: "random",
+        },
+      },
+    },
+    true,
+    particleId,
+  );
+}
+
+function isSupportedParticleTextureFile(fileName) {
+  return /\.(png|svg)$/i.test(String(fileName ?? ""));
 }
 
 function updateEffectRangePair(range, value, changedSide, transform = (next) => next) {
@@ -10383,7 +10935,7 @@ function updateEffectRangePair(range, value, changedSide, transform = (next) => 
   return [Math.min(current[0], nextValue), nextValue];
 }
 
-function updateEffectSlotNumber(effectId, key, value) {
+function updateEffectSlotNumber(effectId, key, value, particleId = null) {
   if (!Number.isFinite(value)) return;
   const commonKeys = new Set(["scale", "duration"]);
   if (commonKeys.has(key)) {
@@ -10393,8 +10945,13 @@ function updateEffectSlotNumber(effectId, key, value) {
   if (key.startsWith("particle")) {
     const map = {
       particleSpread: "spread",
+      particleEmitterRadius: "emitterRadius",
       particleDrag: "drag",
       particleGravity: "gravity",
+      particleDriftStrength: "driftStrength",
+      particleDriftFallSpeedRef: "driftFallSpeedRef",
+      particleDriftFrequency: "driftFrequency",
+      particleScale: "scale",
       particleAngularDrag: "angularDrag",
       particleStopSpeedThreshold: "stopSpeedThreshold",
       particleSeed: "seed",
@@ -10402,10 +10959,12 @@ function updateEffectSlotNumber(effectId, key, value) {
     const angularMatch = key.match(/^particleAngularVelocity([XYZ])(Min|Max)$/);
     if (angularMatch) {
       const effect = state.effects.effects.find((item) => item.id === effectId);
-      const angularVelocity = normalizeParticleEffectSettings(effect?.particle).angularVelocity.map((range) => [...range]);
+      const particle = getEffectParticleSlotById(effectId, particleId) ?? getSelectedEffectParticleSlot(effect);
+      if (!particle) return;
+      const angularVelocity = particle.angularVelocity.map((range) => [...range]);
       const axisIndex = { X: 0, Y: 1, Z: 2 }[angularMatch[1]];
       angularVelocity[axisIndex] = updateEffectRangePair(angularVelocity[axisIndex], value, angularMatch[2] === "Min" ? "min" : "max");
-      updateEffectSlotNested(effectId, "particle", { angularVelocity }, false);
+      updateEffectSlotNested(effectId, "particle", { angularVelocity }, false, particle.id);
       syncEffectRangeInputs(
         effectId,
         angularVelocity[axisIndex],
@@ -10415,37 +10974,56 @@ function updateEffectSlotNumber(effectId, key, value) {
       );
     } else if (key === "particleCountMin" || key === "particleCountMax") {
       const effect = state.effects.effects.find((item) => item.id === effectId);
-      const count = normalizeParticleEffectSettings(effect?.particle).count;
+      const particle = getEffectParticleSlotById(effectId, particleId) ?? getSelectedEffectParticleSlot(effect);
+      if (!particle) return;
+      const count = particle.count;
       const next = updateEffectRangePair(count, value, key === "particleCountMin" ? "min" : "max", Math.round);
-      updateEffectSlotNested(effectId, "particle", { count: next }, false);
+      updateEffectSlotNested(effectId, "particle", { count: next }, false, particle.id);
       syncEffectRangeInputs(effectId, next, "particleCountMin", "particleCountMax", key);
-      updateEffectEmissionGraphDom(effectId, normalizeParticleEmissionGraph(effect?.particle?.emissionGraph, next[1]), next[1]);
+      updateEffectEmissionGraphDom(effectId, normalizeParticleEmissionGraph(particle.emissionGraph, next[1]), next[1]);
     } else if (key === "particleSpeedMin" || key === "particleSpeedMax") {
       const effect = state.effects.effects.find((item) => item.id === effectId);
-      const speed = normalizeParticleEffectSettings(effect?.particle).speed;
+      const particle = getEffectParticleSlotById(effectId, particleId) ?? getSelectedEffectParticleSlot(effect);
+      if (!particle) return;
+      const speed = particle.speed;
       const next = updateEffectRangePair(speed, value, key === "particleSpeedMin" ? "min" : "max");
-      updateEffectSlotNested(effectId, "particle", { speed: next }, false);
+      updateEffectSlotNested(effectId, "particle", { speed: next }, false, particle.id);
       syncEffectRangeInputs(effectId, next, "particleSpeedMin", "particleSpeedMax", key);
     } else if (key === "particleSizeMin" || key === "particleSizeMax") {
       const effect = state.effects.effects.find((item) => item.id === effectId);
-      const size = normalizeParticleEffectSettings(effect?.particle).size;
+      const particle = getEffectParticleSlotById(effectId, particleId) ?? getSelectedEffectParticleSlot(effect);
+      if (!particle) return;
+      const size = particle.size;
       const next = updateEffectRangePair(size, value, key === "particleSizeMin" ? "min" : "max");
-      updateEffectSlotNested(effectId, "particle", { size: next }, false);
+      updateEffectSlotNested(effectId, "particle", { size: next }, false, particle.id);
       syncEffectRangeInputs(effectId, next, "particleSizeMin", "particleSizeMax", key);
     } else if (key === "particleLifetimeMin" || key === "particleLifetimeMax") {
       const effect = state.effects.effects.find((item) => item.id === effectId);
-      const lifetime = normalizeParticleEffectSettings(effect?.particle).lifetime;
+      const particle = getEffectParticleSlotById(effectId, particleId) ?? getSelectedEffectParticleSlot(effect);
+      if (!particle) return;
+      const lifetime = particle.lifetime;
       const next = updateEffectRangePair(lifetime, value, key === "particleLifetimeMin" ? "min" : "max");
-      updateEffectSlotNested(effectId, "particle", { lifetime: next }, false);
+      updateEffectSlotNested(effectId, "particle", { lifetime: next }, false, particle.id);
       syncEffectRangeInputs(effectId, next, "particleLifetimeMin", "particleLifetimeMax", key);
     } else if (key === "particleRotationMin" || key === "particleRotationMax") {
       const effect = state.effects.effects.find((item) => item.id === effectId);
-      const rotation = normalizeParticleEffectSettings(effect?.particle).rotation;
+      const particle = getEffectParticleSlotById(effectId, particleId) ?? getSelectedEffectParticleSlot(effect);
+      if (!particle) return;
+      const rotation = particle.rotation;
       const next = updateEffectRangePair(rotation, value, key === "particleRotationMin" ? "min" : "max");
-      updateEffectSlotNested(effectId, "particle", { rotation: next }, false);
+      updateEffectSlotNested(effectId, "particle", { rotation: next }, false, particle.id);
       syncEffectRangeInputs(effectId, next, "particleRotationMin", "particleRotationMax", key);
+    } else if (key === "particleTextureColumns" || key === "particleTextureRows" || key === "particleTextureAspectRatio") {
+      const effect = state.effects.effects.find((item) => item.id === effectId);
+      const particle = getEffectParticleSlotById(effectId, particleId) ?? getSelectedEffectParticleSlot(effect);
+      if (!particle) return;
+      const texture = normalizeParticleTextureSettings(particle.texture);
+      const atlasKey = key === "particleTextureColumns" ? "columns" : key === "particleTextureRows" ? "rows" : "aspectRatio";
+      const atlasValue = atlasKey === "aspectRatio" ? Math.min(20, Math.max(0.05, value)) : Math.min(16, Math.max(1, Math.round(value)));
+      const atlas = { ...texture.atlas, [atlasKey]: atlasValue };
+      updateEffectSlotNested(effectId, "particle", { texture: { ...texture, atlas } }, true, particle.id);
     } else {
-      updateEffectSlotNested(effectId, "particle", { [map[key]]: value }, false);
+      updateEffectSlotNested(effectId, "particle", { [map[key]]: value }, false, particleId);
     }
     return;
   }
@@ -10465,9 +11043,9 @@ function updateEffectSlotNumber(effectId, key, value) {
 function handleEffectEmissionGraphPointerDown(event) {
   const surface = event.currentTarget;
   const effectId = surface.dataset.effectEmissionGraph;
-  const effect = state.effects.effects.find((item) => item.id === effectId);
-  if (!effect || effect.type !== "particle") return;
-  if (normalizeParticleEffectSettings(effect.particle).burst) return;
+  const particle = getSelectedEffectParticleSlotByEffectId(effectId);
+  if (!particle) return;
+  if (particle.burst) return;
   event.preventDefault();
   const pointButton = event.target.closest?.("[data-effect-emission-point]");
   if (event.button === 2) {
@@ -10489,8 +11067,8 @@ function handleEffectEmissionGraphPointerDown(event) {
 function handleEffectOpacityGraphPointerDown(event) {
   const surface = event.currentTarget;
   const effectId = surface.dataset.effectOpacityGraph;
-  const effect = state.effects.effects.find((item) => item.id === effectId);
-  if (!effect || effect.type !== "particle") return;
+  const particle = getSelectedEffectParticleSlotByEffectId(effectId);
+  if (!particle) return;
   event.preventDefault();
   const pointButton = event.target.closest?.("[data-effect-opacity-point]");
   if (event.button === 2) {
@@ -10512,8 +11090,8 @@ function handleEffectOpacityGraphPointerDown(event) {
 function handleEffectSizeGraphPointerDown(event) {
   const surface = event.currentTarget;
   const effectId = surface.dataset.effectSizeGraph;
-  const effect = state.effects.effects.find((item) => item.id === effectId);
-  if (!effect || effect.type !== "particle") return;
+  const particle = getSelectedEffectParticleSlotByEffectId(effectId);
+  if (!particle) return;
   event.preventDefault();
   const pointButton = event.target.closest?.("[data-effect-size-point]");
   if (event.button === 2) {
@@ -10534,10 +11112,11 @@ function handleEffectSizeGraphPointerDown(event) {
 
 function addEffectEmissionGraphPoint(effectId, event, surface) {
   const effect = state.effects.effects.find((item) => item.id === effectId);
-  if (!effect) return -1;
-  const countMax = getParticleCountMax(effect.particle);
+  const particle = getSelectedEffectParticleSlot(effect);
+  if (!effect || !particle) return -1;
+  const countMax = getParticleCountMax(particle);
   const point = getEffectEmissionPointFromEvent(event, surface, countMax);
-  const graph = normalizeParticleEmissionGraph(effect.particle.emissionGraph, countMax);
+  const graph = normalizeParticleEmissionGraph(particle.emissionGraph, countMax);
   graph.push(point);
   graph.sort((a, b) => a.time - b.time);
   const index = graph.findIndex((item) => item === point);
@@ -10562,9 +11141,10 @@ function beginEffectEmissionGraphPointDrag(event, surface, effectId, pointIndex)
 
 function moveEffectEmissionGraphPoint(effectId, pointIndex, event, surface) {
   const effect = state.effects.effects.find((item) => item.id === effectId);
-  if (!effect) return;
-  const countMax = getParticleCountMax(effect.particle);
-  const graph = normalizeParticleEmissionGraph(effect.particle.emissionGraph, countMax);
+  const particle = getSelectedEffectParticleSlot(effect);
+  if (!effect || !particle) return;
+  const countMax = getParticleCountMax(particle);
+  const graph = normalizeParticleEmissionGraph(particle.emissionGraph, countMax);
   if (!graph[pointIndex]) return;
   const point = getEffectEmissionPointFromEvent(event, surface, countMax);
   const targetTime = pointIndex === 0 ? 0 : pointIndex === graph.length - 1 ? 1 : point.time;
@@ -10584,8 +11164,9 @@ function moveEffectEmissionGraphPoint(effectId, pointIndex, event, surface) {
 
 function deleteEffectEmissionGraphPoint(effectId, pointIndex) {
   const effect = state.effects.effects.find((item) => item.id === effectId);
-  if (!effect) return;
-  const graph = normalizeParticleEmissionGraph(effect.particle.emissionGraph, getParticleCountMax(effect.particle));
+  const particle = getSelectedEffectParticleSlot(effect);
+  if (!effect || !particle) return;
+  const graph = normalizeParticleEmissionGraph(particle.emissionGraph, getParticleCountMax(particle));
   if (pointIndex <= 0 || pointIndex >= graph.length - 1) return;
   graph.splice(pointIndex, 1);
   state.selectedEffectGraphIndex = Math.min(pointIndex, graph.length - 1);
@@ -10594,9 +11175,10 @@ function deleteEffectEmissionGraphPoint(effectId, pointIndex) {
 
 function addEffectOpacityGraphPoint(effectId, event, surface) {
   const effect = state.effects.effects.find((item) => item.id === effectId);
-  if (!effect) return -1;
+  const particle = getSelectedEffectParticleSlot(effect);
+  if (!effect || !particle) return -1;
   const point = getEffectOpacityPointFromEvent(event, surface);
-  const graph = normalizeParticleOpacityGraph(effect.particle.opacityGraph);
+  const graph = normalizeParticleOpacityGraph(particle.opacityGraph);
   graph.push(point);
   graph.sort((a, b) => a.time - b.time);
   const index = graph.findIndex((item) => item === point);
@@ -10621,8 +11203,9 @@ function beginEffectOpacityGraphPointDrag(event, surface, effectId, pointIndex) 
 
 function moveEffectOpacityGraphPoint(effectId, pointIndex, event, surface) {
   const effect = state.effects.effects.find((item) => item.id === effectId);
-  if (!effect) return;
-  const graph = normalizeParticleOpacityGraph(effect.particle.opacityGraph);
+  const particle = getSelectedEffectParticleSlot(effect);
+  if (!effect || !particle) return;
+  const graph = normalizeParticleOpacityGraph(particle.opacityGraph);
   if (!graph[pointIndex]) return;
   const point = getEffectOpacityPointFromEvent(event, surface);
   const targetTime = pointIndex === 0 ? 0 : pointIndex === graph.length - 1 ? 1 : point.time;
@@ -10643,8 +11226,9 @@ function moveEffectOpacityGraphPoint(effectId, pointIndex, event, surface) {
 
 function deleteEffectOpacityGraphPoint(effectId, pointIndex) {
   const effect = state.effects.effects.find((item) => item.id === effectId);
-  if (!effect) return;
-  const graph = normalizeParticleOpacityGraph(effect.particle.opacityGraph);
+  const particle = getSelectedEffectParticleSlot(effect);
+  if (!effect || !particle) return;
+  const graph = normalizeParticleOpacityGraph(particle.opacityGraph);
   if (pointIndex <= 0 || pointIndex >= graph.length - 1) return;
   graph.splice(pointIndex, 1);
   state.selectedEffectGraphIndex = Math.min(pointIndex, graph.length - 1);
@@ -10654,9 +11238,10 @@ function deleteEffectOpacityGraphPoint(effectId, pointIndex) {
 
 function addEffectSizeGraphPoint(effectId, event, surface) {
   const effect = state.effects.effects.find((item) => item.id === effectId);
-  if (!effect) return -1;
+  const particle = getSelectedEffectParticleSlot(effect);
+  if (!effect || !particle) return -1;
   const point = getEffectUnitGraphPointFromEvent(event, surface);
-  const graph = normalizeParticleSizeGraph(effect.particle.sizeGraph);
+  const graph = normalizeParticleSizeGraph(particle.sizeGraph);
   graph.push(point);
   graph.sort((a, b) => a.time - b.time);
   const index = graph.findIndex((item) => item === point);
@@ -10681,8 +11266,9 @@ function beginEffectSizeGraphPointDrag(event, surface, effectId, pointIndex) {
 
 function moveEffectSizeGraphPoint(effectId, pointIndex, event, surface) {
   const effect = state.effects.effects.find((item) => item.id === effectId);
-  if (!effect) return;
-  const graph = normalizeParticleSizeGraph(effect.particle.sizeGraph);
+  const particle = getSelectedEffectParticleSlot(effect);
+  if (!effect || !particle) return;
+  const graph = normalizeParticleSizeGraph(particle.sizeGraph);
   if (!graph[pointIndex]) return;
   const point = getEffectUnitGraphPointFromEvent(event, surface);
   const targetTime = pointIndex === 0 ? 0 : pointIndex === graph.length - 1 ? 1 : point.time;
@@ -10703,8 +11289,9 @@ function moveEffectSizeGraphPoint(effectId, pointIndex, event, surface) {
 
 function deleteEffectSizeGraphPoint(effectId, pointIndex) {
   const effect = state.effects.effects.find((item) => item.id === effectId);
-  if (!effect) return;
-  const graph = normalizeParticleSizeGraph(effect.particle.sizeGraph);
+  const particle = getSelectedEffectParticleSlot(effect);
+  if (!effect || !particle) return;
+  const graph = normalizeParticleSizeGraph(particle.sizeGraph);
   if (pointIndex <= 0 || pointIndex >= graph.length - 1) return;
   graph.splice(pointIndex, 1);
   state.selectedEffectGraphIndex = Math.min(pointIndex, graph.length - 1);
@@ -10715,14 +11302,15 @@ function deleteEffectSizeGraphPoint(effectId, pointIndex) {
 function setSelectedEffectGraphCurve(curve, graphKind = state.selectedEffectGraphKind) {
   if (!["linear", "easeOut", "easeIn", "easeInOut", "step"].includes(curve)) return;
   const effect = getSelectedEffectSlot();
-  if (!effect || effect.type !== "particle") return;
+  const particle = getSelectedEffectParticleSlot(effect);
+  if (!effect || !particle) return;
   const kind = ["opacity", "size", "emission"].includes(graphKind) ? graphKind : "emission";
   const graph =
     kind === "opacity"
-      ? normalizeParticleOpacityGraph(effect.particle.opacityGraph)
+      ? normalizeParticleOpacityGraph(particle.opacityGraph)
       : kind === "size"
-      ? normalizeParticleSizeGraph(effect.particle.sizeGraph)
-      : normalizeParticleEmissionGraph(effect.particle.emissionGraph, getParticleCountMax(effect.particle));
+      ? normalizeParticleSizeGraph(particle.sizeGraph)
+      : normalizeParticleEmissionGraph(particle.emissionGraph, getParticleCountMax(particle));
   const pointIndex = clampNumber(Number(state.selectedEffectGraphIndex), 0, graph.length - 1, 0);
   if (!graph[pointIndex] || pointIndex >= graph.length - 1) return;
   graph[pointIndex] = { ...graph[pointIndex], curve };
@@ -10816,44 +11404,59 @@ function finalizeEffectNumberInput(input) {
     syncEffectNumberInputFromState(input);
     return;
   }
-  updateEffectSlotNumber(input.dataset.effectNumber, input.dataset.key, Number(input.value));
+  updateEffectSlotNumber(input.dataset.effectNumber, input.dataset.key, Number(input.value), getEffectParticleIdFromControl(input));
   syncEffectNumberInputFromState(input);
+}
+
+function handleNumberInputContextMenu(event) {
+  const input = event.currentTarget;
+  if (!(input instanceof HTMLInputElement) || input.disabled || input.readOnly) return;
+  event.preventDefault();
+  input.value = "0";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  input.blur();
 }
 
 function syncEffectNumberInputFromState(input) {
   const effect = state.effects.effects.find((item) => item.id === input.dataset.effectNumber);
   if (!effect) return;
   const key = input.dataset.key;
+  const particle = getEffectParticleSlotById(effect.id, getEffectParticleIdFromControl(input)) ?? getSelectedEffectParticleSlot(effect);
   const valueMap = {
     scale: effect.scale,
-    duration: effect.duration,
-    particleSpread: effect.particle.spread,
-    particleDrag: effect.particle.drag,
-    particleGravity: effect.particle.gravity,
-    particleAngularDrag: effect.particle.angularDrag,
-    particleStopSpeedThreshold: effect.particle.stopSpeedThreshold,
-    particleCountMin: effect.particle.count[0],
-    particleCountMax: effect.particle.count[1],
-    particleSpeedMin: effect.particle.speed[0],
-    particleSpeedMax: effect.particle.speed[1],
-    particleSizeMin: effect.particle.size[0],
-    particleSizeMax: effect.particle.size[1],
-    particleLifetimeMin: effect.particle.lifetime[0],
-    particleLifetimeMax: effect.particle.lifetime[1],
-    particleRotationMin: effect.particle.rotation[0],
-    particleRotationMax: effect.particle.rotation[1],
-    particleAngularVelocityXMin: effect.particle.angularVelocity[0][0],
-    particleAngularVelocityXMax: effect.particle.angularVelocity[0][1],
-    particleAngularVelocityYMin: effect.particle.angularVelocity[1][0],
-    particleAngularVelocityYMax: effect.particle.angularVelocity[1][1],
-    particleAngularVelocityZMin: effect.particle.angularVelocity[2][0],
-    particleAngularVelocityZMax: effect.particle.angularVelocity[2][1],
-    particleSeed: effect.particle.seed,
-    spriteSize: effect.sprite.size,
-    spriteOpacity: effect.sprite.opacity,
-    meshSpin: effect.mesh.spin,
+    particleScale: particle?.scale,
+    particleSpread: particle?.spread,
+    particleEmitterRadius: particle?.emitterRadius,
+    particleDrag: particle?.drag,
+    particleGravity: particle?.gravity,
+    particleDriftStrength: particle?.driftStrength,
+    particleDriftFallSpeedRef: particle?.driftFallSpeedRef,
+    particleDriftFrequency: particle?.driftFrequency,
+    particleAngularDrag: particle?.angularDrag,
+    particleStopSpeedThreshold: particle?.stopSpeedThreshold,
+    particleCountMin: particle?.count?.[0],
+    particleCountMax: particle?.count?.[1],
+    particleSpeedMin: particle?.speed?.[0],
+    particleSpeedMax: particle?.speed?.[1],
+    particleSizeMin: particle?.size?.[0],
+    particleSizeMax: particle?.size?.[1],
+    particleLifetimeMin: particle?.lifetime?.[0],
+    particleLifetimeMax: particle?.lifetime?.[1],
+    particleRotationMin: particle?.rotation?.[0],
+    particleRotationMax: particle?.rotation?.[1],
+    particleAngularVelocityXMin: particle?.angularVelocity?.[0]?.[0],
+    particleAngularVelocityXMax: particle?.angularVelocity?.[0]?.[1],
+    particleAngularVelocityYMin: particle?.angularVelocity?.[1]?.[0],
+    particleAngularVelocityYMax: particle?.angularVelocity?.[1]?.[1],
+    particleAngularVelocityZMin: particle?.angularVelocity?.[2]?.[0],
+    particleAngularVelocityZMax: particle?.angularVelocity?.[2]?.[1],
+    particleTextureColumns: particle?.texture?.atlas?.columns,
+    particleTextureRows: particle?.texture?.atlas?.rows,
+    particleTextureAspectRatio: particle?.texture?.atlas?.aspectRatio,
+    particleSeed: particle?.seed,
   };
-  if (!hasOwnField(valueMap, key)) return;
+  if (!hasOwnField(valueMap, key) || valueMap[key] == null) return;
   input.value = roundForInput(valueMap[key]);
 }
 
@@ -10888,9 +11491,19 @@ function deleteEffectSlot(effectId) {
   const effects = state.effects.effects.filter((effect) => effect.id !== effectId);
   state.effects = normalizeEffectsMeta({ ...state.effects, effects });
   state.selectedEffectId = effects[0]?.id ?? null;
+  state.selectedEffectParticleId = getSelectedEffectParticleId(effects[0]);
   state.effectsDirty = true;
   syncSelectedEffectPreview();
   renderPreservingScrollableUi();
+}
+
+function deleteEffectParticleSlot(effectId, particleId) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  const target = effect?.particles?.find((particle) => particle.id === particleId);
+  if (!effect || !target || !window.confirm(`"${target.name}" 파티클 슬롯을 삭제할까요?`)) return;
+  const particles = effect.particles.filter((particle) => particle.id !== particleId);
+  state.selectedEffectParticleId = particles[0]?.id ?? null;
+  updateEffectSlot(effectId, { particles }, true);
 }
 
 function applyEffectModelVisibility() {
@@ -10904,62 +11517,112 @@ function getSelectedEffectSlot() {
   return effects.find((effect) => effect.id === state.selectedEffectId) ?? effects[0] ?? null;
 }
 
+function getEffectSlotById(effectId) {
+  if (!effectId) return null;
+  const effects = normalizeEffectSlots(state.effects.effects);
+  return effects.find((effect) => effect.id === effectId) ?? null;
+}
+
+function getSelectedEffectParticleId(effect = getSelectedEffectSlot()) {
+  if (!effect?.particles?.length) return null;
+  if (effect.particles.some((particle) => particle.id === state.selectedEffectParticleId)) return state.selectedEffectParticleId;
+  return effect.particles[0].id;
+}
+
+function getSelectedEffectParticleSlot(effect = getSelectedEffectSlot()) {
+  if (!effect?.particles?.length) return null;
+  const selectedId = getSelectedEffectParticleId(effect);
+  return effect.particles.find((particle) => particle.id === selectedId) ?? effect.particles[0] ?? null;
+}
+
+function getEffectParticleSlotById(effectId, particleId) {
+  if (!effectId || !particleId) return null;
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  return effect?.particles?.find((particle) => particle.id === particleId) ?? null;
+}
+
+function getEffectParticleIdFromControl(control) {
+  return control?.closest?.("[data-effect-particle-settings]")?.dataset?.effectParticleSettings ?? null;
+}
+
+function getSelectedEffectParticleSlotByEffectId(effectId) {
+  const effect = state.effects.effects.find((item) => item.id === effectId);
+  return effect ? getSelectedEffectParticleSlot(effect) : null;
+}
+
 function syncSelectedEffectPreview() {
-  if (state.mode !== "effect") {
+  const effect = getActiveEffectPreviewSlot();
+  if (!effect) {
     clearEffectPreview();
     return;
   }
-  const effect = getSelectedEffectSlot();
-  if (!effect?.enabled) {
+  if (!effect.particles.length) {
     clearEffectPreview();
     return;
   }
   const signature = getEffectPreviewSignature(effect);
-  if (effectPreview?.id !== effect.id || effectPreview?.type !== effect.type || effectPreview?.signature !== signature) {
+  if (effectPreview?.id !== effect.id || effectPreview?.signature !== signature) {
     createEffectPreview(effect);
   }
   applyEffectPreviewSettings(effect);
-  attachEffectTransformControls();
+  if (state.mode === "effect") attachEffectTransformControls();
+}
+
+function getActiveEffectPreviewSlot() {
+  if (state.mode === "effect") {
+    const effect = getSelectedEffectSlot();
+    return effect?.enabled ? effect : null;
+  }
+  if (state.mode === "linker2" && state.activeMotionSlotEffectId) {
+    const effect = getEffectSlotById(state.activeMotionSlotEffectId);
+    return effect ? { ...effect, enabled: true } : null;
+  }
+  return null;
 }
 
 function getEffectPreviewSignature(effect) {
   if (!effect) return "";
-  if (effect.type === "particle") return effect.type;
-  if (effect.type === "mesh") {
-    return `${effect.type}:${effect.mesh.shape}`;
-  }
-  return effect.type;
+  return effect.particles.map((particle) => `${particle.id}:${particle.shape}:${particle.renderQueue}`).join("|");
 }
 
 function createEffectPreview(effect) {
   clearEffectPreview();
   const group = new THREE.Group();
   group.name = `ExpressionEditor_EffectPreview_${effect.id}`;
-  let object = null;
-  if (effect.type === "sprite") object = createSpriteEffectPreview(effect);
-  else if (effect.type === "mesh") object = createMeshEffectPreview(effect);
-  else object = createParticleEffectPreview(effect);
-  group.add(object);
+  const particles = effect.particles.map((particle, index) => {
+    const object = createParticleEffectPreview(particle);
+    group.add(object);
+    const marker = createParticleEmitterMarker(`P${index + 1}`);
+    group.add(marker);
+    const seed = getParticleEffectSeed(particle);
+    return {
+      id: particle.id,
+      object,
+      marker,
+      elapsed: 0,
+      burstCycle: -1,
+      emitCarry: 0,
+      seed,
+      rng: createSeededRandom(seed),
+      seedSignature: getParticleSeedSignature(particle),
+    };
+  });
   scene.add(group);
-  const seed = getParticleEffectSeed(effect.particle);
   effectPreview = {
     id: effect.id,
-    type: effect.type,
     signature: getEffectPreviewSignature(effect),
     group,
-    object,
+    particles,
     elapsed: 0,
-    burstCycle: -1,
-    emitCarry: 0,
-    seed,
-    rng: createSeededRandom(seed),
-    seedSignature: getParticleSeedSignature(effect.particle),
   };
 }
 
 function clearEffectPreview() {
   detachEffectTransformControls();
-  if (!effectPreview?.group) return;
+  if (!effectPreview?.group) {
+    syncEffectPreviewAliveCount();
+    return;
+  }
   scene.remove(effectPreview.group);
   effectPreview.group.traverse((object) => {
     object.geometry?.dispose?.();
@@ -10970,6 +11633,7 @@ function clearEffectPreview() {
     }
   });
   effectPreview = null;
+  syncEffectPreviewAliveCount();
 }
 
 function restartSelectedEffectPreview() {
@@ -10978,9 +11642,13 @@ function restartSelectedEffectPreview() {
     return;
   }
   effectPreview.elapsed = 0;
-  effectPreview.burstCycle = -1;
-  effectPreview.emitCarry = 0;
-  if (effectPreview.type === "particle") resetParticleEffectPreview(effectPreview.object);
+  for (const particlePreview of effectPreview.particles ?? []) {
+    particlePreview.elapsed = 0;
+    particlePreview.burstCycle = -1;
+    particlePreview.emitCarry = 0;
+    resetParticleEffectPreview(particlePreview.object);
+  }
+  syncEffectPreviewAliveCount();
 }
 
 function resetParticleEffectPreview(object) {
@@ -10992,6 +11660,7 @@ function resetParticleEffectPreview(object) {
   const sizes = geometry.attributes.particleSize?.array;
   const centers = geometry.userData.centers;
   const velocities = geometry.userData.velocities;
+  const drift = geometry.userData.drift;
   const rotations = geometry.userData.rotations;
   const angularVelocities = geometry.userData.angularVelocities;
   const ages = geometry.userData.ages;
@@ -11013,6 +11682,11 @@ function resetParticleEffectPreview(object) {
       velocities[index * 3 + 1] = 0;
       velocities[index * 3 + 2] = 0;
     }
+    if (drift) {
+      drift[index * 3] = 0;
+      drift[index * 3 + 1] = 0;
+      drift[index * 3 + 2] = 0;
+    }
     if (rotations) {
       rotations[index * 3] = 0;
       rotations[index * 3 + 1] = 0;
@@ -11032,10 +11706,152 @@ function resetParticleEffectPreview(object) {
   if (geometry.attributes.particleColor) geometry.attributes.particleColor.needsUpdate = true;
 }
 
+function createParticleEmitterMarker(label) {
+  const group = new THREE.Group();
+  group.name = `ExpressionEditor_ParticleEmitterMarker_${label}`;
+  const circle = createParticleEmitterRadiusCircle();
+  group.add(circle);
+  group.userData.radiusCircle = circle;
+  const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0), 0.36, 0x7dd3fc, 0.1, 0.055);
+  arrow.name = "ParticleEmitterDirection";
+  group.add(arrow);
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: createParticleEmitterLabelTexture(label),
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    }),
+  );
+  sprite.name = "ParticleEmitterLabel";
+  sprite.position.set(0, -0.14, 0);
+  sprite.scale.set(0.2, 0.08, 1);
+  sprite.renderOrder = 50;
+  group.add(sprite);
+  group.visible = false;
+  return group;
+}
+
+function createParticleEmitterRadiusCircle() {
+  const segments = 64;
+  const points = [];
+  for (let index = 0; index < segments; index += 1) {
+    const angle = (index / segments) * Math.PI * 2;
+    points.push(new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle)));
+  }
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({
+    color: 0x7dd3fc,
+    transparent: true,
+    opacity: 0.82,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const circle = new THREE.LineLoop(geometry, material);
+  circle.name = "ParticleEmitterRadius";
+  circle.renderOrder = 49;
+  return circle;
+}
+
+function createParticleEmitterLabelTexture(label) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 48;
+  const context = canvas.getContext("2d");
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "rgba(10, 14, 20, 0.78)";
+  context.strokeStyle = "rgba(125, 211, 252, 0.95)";
+  context.lineWidth = 3;
+  roundRectPath(context, 18, 7, 92, 34, 8);
+  context.fill();
+  context.stroke();
+  context.fillStyle = "#e8f6ff";
+  context.font = "700 22px Arial, sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(label, 64, 24);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function roundRectPath(context, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(x + r, y);
+  context.lineTo(x + width - r, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + r);
+  context.lineTo(x + width, y + height - r);
+  context.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  context.lineTo(x + r, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - r);
+  context.lineTo(x, y + r);
+  context.quadraticCurveTo(x, y, x + r, y);
+  context.closePath();
+}
+
 function disposeEffectMaterial(material) {
   if (!material) return;
   material.map?.dispose?.();
   material.dispose?.();
+}
+
+function syncParticleTextureUniform(particle, material) {
+  if (!material?.uniforms) return;
+  const texture = normalizeParticleTextureSettings(particle?.texture);
+  const shouldUseTexture = particle?.shape === "texture" && Boolean(texture.image);
+  material.uniforms.useTexture.value = false;
+  material.uniforms.textureColorMode.value = texture.colorMode === "particleColor" ? 1 : 0;
+  if (!shouldUseTexture) {
+    material.uniforms.textureMap.value = effectWhiteTexture;
+    material.userData.particleTextureImage = "";
+    material.userData.particleTextureReady = false;
+    return;
+  }
+  if (material.userData.particleTextureImage === texture.image && material.userData.particleTextureReady) {
+    material.uniforms.useTexture.value = true;
+    return;
+  }
+  if (material.userData.particleTextureImage === texture.image) return;
+  material.userData.particleTextureImage = texture.image;
+  material.userData.particleTextureReady = false;
+  void loadParticleTexture(texture.image)
+    .then((loadedTexture) => {
+      if (material.userData.particleTextureImage !== texture.image) return;
+      material.uniforms.textureMap.value = loadedTexture;
+      material.uniforms.useTexture.value = true;
+      material.userData.particleTextureReady = true;
+      material.needsUpdate = true;
+    })
+    .catch(() => {
+      if (material.userData.particleTextureImage !== texture.image) return;
+      material.uniforms.textureMap.value = effectWhiteTexture;
+      material.uniforms.useTexture.value = false;
+      material.userData.particleTextureReady = false;
+    });
+}
+
+async function loadParticleTexture(fileName) {
+  const name = fileNameFromPath(fileName);
+  if (!isSupportedParticleTextureFile(name)) throw new Error("Unsupported particle texture");
+  if (effectTextureCache.has(name)) return effectTextureCache.get(name);
+  const promise = (async () => {
+    const result = await window.vrmFiles.openStoredImage(name);
+    const blob = new Blob([new Uint8Array(result.data)], { type: getImageMimeType(result.name) });
+    const url = URL.createObjectURL(blob);
+    try {
+      const texture = await new THREE.TextureLoader().loadAsync(url);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      texture.needsUpdate = true;
+      return texture;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  })();
+  effectTextureCache.set(name, promise);
+  return promise;
 }
 
 function hideParticleQuad(positions, index) {
@@ -11047,16 +11863,37 @@ function hideParticleQuad(positions, index) {
   }
 }
 
-function writeParticleQuadUvs(uvs, index) {
+function writeParticleQuadUvs(uvs, index, sprite = null) {
   const start = index * 8;
-  uvs[start] = 0;
-  uvs[start + 1] = 0;
-  uvs[start + 2] = 1;
-  uvs[start + 3] = 0;
-  uvs[start + 4] = 1;
-  uvs[start + 5] = 1;
-  uvs[start + 6] = 0;
-  uvs[start + 7] = 1;
+  const u0 = sprite?.u0 ?? 0;
+  const v0 = sprite?.v0 ?? 0;
+  const u1 = sprite?.u1 ?? 1;
+  const v1 = sprite?.v1 ?? 1;
+  uvs[start] = u0;
+  uvs[start + 1] = v0;
+  uvs[start + 2] = u1;
+  uvs[start + 3] = v0;
+  uvs[start + 4] = u1;
+  uvs[start + 5] = v1;
+  uvs[start + 6] = u0;
+  uvs[start + 7] = v1;
+}
+
+function getRandomParticleAtlasCell(settings, rng) {
+  if (settings.shape !== "texture") return null;
+  const atlas = normalizeParticleTextureSettings(settings.texture).atlas;
+  const columns = Math.max(1, atlas.columns);
+  const rows = Math.max(1, atlas.rows);
+  const count = columns * rows;
+  const spriteIndex = Math.min(count - 1, Math.floor(rng() * count));
+  const column = spriteIndex % columns;
+  const row = Math.floor(spriteIndex / columns);
+  return {
+    u0: column / columns,
+    u1: (column + 1) / columns,
+    v0: 1 - (row + 1) / rows,
+    v1: 1 - row / rows,
+  };
 }
 
 function setParticleQuadOpacity(opacities, index, value) {
@@ -11079,19 +11916,35 @@ function setParticleQuadColor(colors, index, color) {
   }
 }
 
-function writeParticleQuadPositions(positions, centers, rotations, sizes, index, billboard = false, sizeMultiplier = 1, alignToVelocity = false, velocities = null) {
+function writeParticleQuadPositions(
+  positions,
+  centers,
+  rotations,
+  sizes,
+  index,
+  billboard = false,
+  sizeMultiplier = 1,
+  alignToVelocity = false,
+  velocities = null,
+  hostObject = effectPreview?.group,
+  aspectRatio = 1,
+) {
   const centerStart = index * 3;
   const vertexStart = index * 12;
-  const halfSize = (sizes[index] ?? 0) * Math.max(0, sizeMultiplier) * 0.5;
+  const baseHalfSize = (sizes[index] ?? 0) * Math.max(0, sizeMultiplier) * 0.5;
+  const safeAspectRatio = Math.max(0.05, aspectRatio);
+  const aspectScale = Math.sqrt(safeAspectRatio);
+  const halfWidth = baseHalfSize / aspectScale;
+  const halfHeight = baseHalfSize * aspectScale;
   const corners = [
-    [-halfSize, -halfSize, 0],
-    [halfSize, -halfSize, 0],
-    [halfSize, halfSize, 0],
-    [-halfSize, halfSize, 0],
+    [-halfWidth, -halfHeight, 0],
+    [halfWidth, -halfHeight, 0],
+    [halfWidth, halfHeight, 0],
+    [-halfWidth, halfHeight, 0],
   ];
   if (billboard) {
-    effectPreview.group.updateMatrixWorld(true);
-    effectPreview.group.getWorldQuaternion(effectWorldQuaternion);
+    hostObject?.updateMatrixWorld(true);
+    hostObject?.getWorldQuaternion(effectWorldQuaternion);
     effectParticleLocalCameraQuaternion.copy(camera.quaternion).premultiply(effectWorldQuaternion.invert());
     let roll = rotations[centerStart + 2];
     if (alignToVelocity && velocities) {
@@ -11124,8 +11977,8 @@ function writeParticleQuadPositions(positions, centers, rotations, sizes, index,
   }
 }
 
-function createParticleEffectPreview(effect) {
-  const settings = normalizeParticleEffectSettings(effect.particle);
+function createParticleEffectPreview(particle) {
+  const settings = normalizeParticleEffectSettings(particle);
   const capacity = 300;
   const positions = new Float32Array(capacity * 4 * 3);
   const uvs = new Float32Array(capacity * 4 * 2);
@@ -11134,6 +11987,7 @@ function createParticleEffectPreview(effect) {
   const sizes = new Float32Array(capacity);
   const centers = new Float32Array(capacity * 3);
   const velocities = new Float32Array(capacity * 3);
+  const drift = new Float32Array(capacity * 3);
   const rotations = new Float32Array(capacity * 3);
   const angularVelocities = new Float32Array(capacity * 3);
   const ages = new Float32Array(capacity);
@@ -11154,7 +12008,7 @@ function createParticleEffectPreview(effect) {
     ages[index] = 0;
     lifetimes[index] = 0;
     setParticleQuadOpacity(opacities, index, 0);
-    setParticleQuadColor(colors, index, effect.color);
+    setParticleQuadColor(colors, index, settings.colorSlots[0] ?? "#ffd166");
     sizes[index] = settings.size[0];
     alive[index] = 0;
   }
@@ -11166,6 +12020,7 @@ function createParticleEffectPreview(effect) {
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
   geometry.userData.centers = centers;
   geometry.userData.velocities = velocities;
+  geometry.userData.drift = drift;
   geometry.userData.rotations = rotations;
   geometry.userData.angularVelocities = angularVelocities;
   geometry.userData.ages = ages;
@@ -11175,6 +12030,9 @@ function createParticleEffectPreview(effect) {
   const material = new THREE.ShaderMaterial({
     uniforms: {
       shape: { value: PARTICLE_SHAPE_INDEX.get(settings.shape) ?? 0 },
+      textureMap: { value: effectWhiteTexture },
+      useTexture: { value: false },
+      textureColorMode: { value: 0 },
     },
     vertexShader: `
       attribute float particleOpacity;
@@ -11192,6 +12050,9 @@ function createParticleEffectPreview(effect) {
     `,
     fragmentShader: `
       uniform int shape;
+      uniform sampler2D textureMap;
+      uniform bool useTexture;
+      uniform int textureColorMode;
       varying float vOpacity;
       varying vec3 vColor;
       varying vec2 vUv;
@@ -11249,7 +12110,12 @@ function createParticleEffectPreview(effect) {
         vec2 centered = vUv - vec2(0.5);
         float dist = length(centered);
         float mask = smoothstep(0.5, 0.36, dist);
-        if (shape == 1) {
+        vec3 finalColor = vColor;
+        if (shape == 9 && useTexture) {
+          vec4 texel = texture2D(textureMap, vUv);
+          mask = texel.a;
+          finalColor = textureColorMode == 1 ? vColor : texel.rgb;
+        } else if (shape == 1) {
           mask = smoothstep(0.5, 0.08, dist) * 0.55;
         } else if (shape == 2) {
           mask = 1.0;
@@ -11270,11 +12136,11 @@ function createParticleEffectPreview(effect) {
         }
         float alpha = mask * vOpacity;
         if (alpha <= 0.001) discard;
-        gl_FragColor = vec4(vColor, alpha);
+        gl_FragColor = vec4(finalColor, alpha);
       }
     `,
     transparent: true,
-    blending: THREE.NormalBlending,
+    blending: getParticleThreeBlending(settings.blending),
     depthTest: false,
     depthWrite: false,
     side: THREE.DoubleSide,
@@ -11340,10 +12206,6 @@ function createMeshEffectPreview(effect) {
 
 function applyEffectPreviewSettings(effect = getSelectedEffectSlot()) {
   if (!effectPreview?.group || !effect) return;
-  if (effectPreview.type !== effect.type) {
-    createEffectPreview(effect);
-    return;
-  }
   if (!effectTransformDragging) updateEffectPreviewAnchor(effect);
   effectPreview.group.rotation.set(
     THREE.MathUtils.degToRad(effect.rotationOffset[0]),
@@ -11352,24 +12214,43 @@ function applyEffectPreviewSettings(effect = getSelectedEffectSlot()) {
     "XYZ",
   );
   effectPreview.group.scale.setScalar(effect.scale);
-  if (effectPreview.object?.material) {
-    const material = effectPreview.object.material;
-    if (material.color) material.color.set(effect.color);
-    if (material.emissive) material.emissive.set(effect.color);
-    if (effect.type === "particle") {
-      if (material.uniforms?.shape) material.uniforms.shape.value = PARTICLE_SHAPE_INDEX.get(effect.particle.shape) ?? 0;
-      material.depthTest = false;
-      effectPreview.object.renderOrder = effect.particle.renderQueue === "beforeModel" ? -30 : 30;
-      const seedSignature = getParticleSeedSignature(effect.particle);
-      if (effectPreview.seedSignature !== seedSignature) {
-        effectPreview.seedSignature = seedSignature;
-        effectPreview.seed = getParticleEffectSeed(effect.particle);
-        effectPreview.rng = createSeededRandom(effectPreview.seed);
-      }
+  for (const particlePreview of effectPreview.particles ?? []) {
+    const particle = effect.particles.find((item) => item.id === particlePreview.id);
+    const material = particlePreview.object?.material;
+    if (!particle || !material) {
+      if (particlePreview.marker) particlePreview.marker.visible = false;
+      continue;
     }
-    if (effect.type === "sprite") {
-      material.opacity = effect.sprite.opacity;
-      effectPreview.object.scale.setScalar(effect.sprite.size);
+    if (material.uniforms?.shape) material.uniforms.shape.value = PARTICLE_SHAPE_INDEX.get(particle.shape) ?? 0;
+    syncParticleTextureUniform(particle, material);
+    const nextBlending = getParticleThreeBlending(particle.blending);
+    if (material.blending !== nextBlending) {
+      material.blending = nextBlending;
+      material.needsUpdate = true;
+    }
+    material.depthTest = false;
+    particlePreview.object.renderOrder = particle.renderQueue === "beforeModel" ? -30 : 30;
+    particlePreview.object.visible = particle.enabled;
+    particlePreview.object.position.set(...particle.positionOffset);
+    particlePreview.object.rotation.set(
+      THREE.MathUtils.degToRad(particle.rotationOffset[0]),
+      THREE.MathUtils.degToRad(particle.rotationOffset[1]),
+      THREE.MathUtils.degToRad(particle.rotationOffset[2]),
+      "XYZ",
+    );
+    particlePreview.object.scale.setScalar(particle.scale);
+    if (particlePreview.marker) {
+      particlePreview.marker.visible = Boolean(state.effectGizmoVisible && particle.enabled);
+      particlePreview.marker.position.copy(particlePreview.object.position);
+      particlePreview.marker.rotation.copy(particlePreview.object.rotation);
+      const radiusCircle = particlePreview.marker.userData?.radiusCircle;
+      if (radiusCircle) radiusCircle.scale.setScalar(Math.max(0.001, getParticleEmitterRadius(particle) * particle.scale));
+    }
+    const seedSignature = getParticleSeedSignature(particle);
+    if (particlePreview.seedSignature !== seedSignature) {
+      particlePreview.seedSignature = seedSignature;
+      particlePreview.seed = getParticleEffectSeed(particle);
+      particlePreview.rng = createSeededRandom(particlePreview.seed);
     }
   }
 }
@@ -11391,26 +12272,24 @@ function updateEffectPreviewAnchor(effect = getSelectedEffectSlot()) {
 }
 
 function updateEffectPreviewRuntime(delta) {
-  if (state.mode !== "effect") {
+  if (state.mode !== "effect" && state.mode !== "linker2") {
     clearEffectPreview();
     return;
   }
   syncSelectedEffectPreview();
-  const effect = getSelectedEffectSlot();
+  const effect = getActiveEffectPreviewSlot();
   if (!effectPreview || !effect?.enabled) return;
   effectPreview.elapsed += delta;
-  const duration = Math.max(0.1, effect.duration);
-  const rawT = effect.loop ? (effectPreview.elapsed % duration) / duration : Math.min(1, effectPreview.elapsed / duration);
-  const shouldEmit = effect.loop || effectPreview.elapsed <= duration;
   if (!effectTransformDragging) updateEffectPreviewAnchor(effect);
-  if (effect.type === "particle") updateParticleEffectPreview(effect, rawT, delta, shouldEmit);
-  if (effect.type === "mesh") {
-    effectPreview.object.rotation.y += delta * effect.mesh.spin;
-    effectPreview.object.rotation.x += delta * effect.mesh.spin * 0.35;
+  const duration = Math.max(0.1, effect.duration);
+  for (const particlePreview of effectPreview.particles ?? []) {
+    const particle = effect.particles.find((item) => item.id === particlePreview.id);
+    if (!particle?.enabled) continue;
+    const rawT = particle.loop ? (effectPreview.elapsed % duration) / duration : Math.min(1, effectPreview.elapsed / duration);
+    const shouldEmit = particle.loop || effectPreview.elapsed <= duration;
+    updateParticleEffectPreview(effect, particlePreview, particle, rawT, delta, shouldEmit);
   }
-  if (effect.type === "sprite") {
-    effectPreview.object.quaternion.copy(camera.quaternion);
-  }
+  syncEffectPreviewAliveCount();
 }
 
 function ensureEffectTransformControls() {
@@ -11494,41 +12373,45 @@ function syncEffectRotationInputs(values) {
   }
 }
 
-function updateParticleEffectPreview(effect, t, delta, shouldEmit = true) {
-  const object = effectPreview?.object;
+function updateParticleEffectPreview(effect, particlePreview, particle, t, delta, shouldEmit = true) {
+  const object = particlePreview?.object;
   const geometry = object?.geometry;
   if (!geometry) return;
   const positions = geometry.attributes.position.array;
+  const uvs = geometry.attributes.uv.array;
   const opacities = geometry.attributes.particleOpacity.array;
   const colors = geometry.attributes.particleColor.array;
   const centers = geometry.userData.centers;
   const sizes = geometry.userData.sizes;
   const velocities = geometry.userData.velocities;
+  const drift = geometry.userData.drift;
   const rotations = geometry.userData.rotations;
   const angularVelocities = geometry.userData.angularVelocities;
   const ages = geometry.userData.ages;
   const lifetimes = geometry.userData.lifetimes;
   const alive = geometry.userData.alive;
-  const settings = normalizeParticleEffectSettings(effect.particle);
+  const settings = normalizeParticleEffectSettings(particle);
   const countMax = settings.count[1];
   const duration = Math.max(0.1, effect.duration);
-  const burstCycle = effect.loop ? Math.floor(effectPreview.elapsed / duration) : 0;
+  particlePreview.elapsed = effectPreview.elapsed;
+  const burstCycle = particle.loop ? Math.floor(particlePreview.elapsed / duration) : 0;
   let spawnCount = 0;
+  let spawned = false;
   if (settings.burst) {
-    if (shouldEmit && effectPreview.burstCycle !== burstCycle) {
-      spawnCount = getRandomParticleCount(settings, effectPreview.rng);
-      effectPreview.burstCycle = burstCycle;
+    if (shouldEmit && particlePreview.burstCycle !== burstCycle) {
+      spawnCount = getRandomParticleCount(settings, particlePreview.rng);
+      particlePreview.burstCycle = burstCycle;
     }
   } else {
     const emissionPerSecond = shouldEmit ? evaluateParticleEmissionGraph(settings.emissionGraph, t, countMax) : 0;
-    effectPreview.emitCarry += emissionPerSecond * delta;
-    spawnCount = Math.floor(effectPreview.emitCarry);
-    effectPreview.emitCarry -= spawnCount;
+    particlePreview.emitCarry += emissionPerSecond * delta;
+    spawnCount = Math.floor(particlePreview.emitCarry);
+    particlePreview.emitCarry -= spawnCount;
   }
   const dragFactor = Math.exp(-settings.drag * delta);
   const angularDragFactor = Math.exp(-settings.angularDrag * delta);
-  effectPreview.group.updateMatrixWorld(true);
-  effectPreview.group.getWorldQuaternion(effectWorldQuaternion);
+  particlePreview.object.updateMatrixWorld(true);
+  particlePreview.object.getWorldQuaternion(effectWorldQuaternion);
   effectLocalGravity
     .copy(effectWorldGravity)
     .applyQuaternion(effectWorldQuaternion.invert())
@@ -11536,7 +12419,26 @@ function updateParticleEffectPreview(effect, t, delta, shouldEmit = true) {
   while (spawnCount > 0) {
     const index = findDeadParticleIndex(alive, countMax);
     if (index < 0) break;
-    spawnEffectParticle(index, positions, opacities, colors, centers, velocities, rotations, angularVelocities, ages, lifetimes, sizes, alive, settings, effectPreview.rng);
+    spawnEffectParticle(
+      index,
+      positions,
+      uvs,
+      opacities,
+      colors,
+      centers,
+      velocities,
+      drift,
+      rotations,
+      angularVelocities,
+      ages,
+      lifetimes,
+      sizes,
+      alive,
+      settings,
+      particlePreview.rng,
+      particlePreview.object,
+    );
+    spawned = true;
     spawnCount -= 1;
   }
   for (let index = 0; index < alive.length; index += 1) {
@@ -11561,6 +12463,9 @@ function updateParticleEffectPreview(effect, t, delta, shouldEmit = true) {
     velocities[index * 3] *= dragFactor;
     velocities[index * 3 + 1] *= dragFactor;
     velocities[index * 3 + 2] *= dragFactor;
+    if (settings.driftEnabled) {
+      applyParticleDrift(centers, velocities, drift, ages, index, settings, delta);
+    }
     if (
       settings.stopWhenSlow &&
       Math.hypot(velocities[index * 3], velocities[index * 3 + 1], velocities[index * 3 + 2]) <= settings.stopSpeedThreshold
@@ -11590,9 +12495,12 @@ function updateParticleEffectPreview(effect, t, delta, shouldEmit = true) {
       evaluateParticleSizeGraph(settings.sizeGraph, lifeRatio),
       settings.alignToVelocity,
       velocities,
+      particlePreview.object,
+      settings.shape === "texture" ? settings.texture.atlas.aspectRatio : 1,
     );
   }
   geometry.attributes.position.needsUpdate = true;
+  if (spawned) geometry.attributes.uv.needsUpdate = true;
   geometry.attributes.particleOpacity.needsUpdate = true;
   geometry.attributes.particleColor.needsUpdate = true;
 }
@@ -11604,11 +12512,41 @@ function findDeadParticleIndex(alive, maxCount = alive.length) {
   return -1;
 }
 
-function spawnEffectParticle(index, positions, opacities, colors, centers, velocities, rotations, angularVelocities, ages, lifetimes, sizes, alive, settings, rng) {
+function applyParticleDrift(centers, velocities, drift, ages, index, settings, delta) {
+  if (!drift) return;
+  const start = index * 3;
+  const fallSpeed = Math.abs(velocities[start + 1]);
+  const slowFactor = Math.max(0, 1 - fallSpeed / Math.max(settings.driftFallSpeedRef, 0.000001));
+  if (slowFactor <= 0.000001) return;
+  const cycle = (ages[index] * settings.driftFrequency + drift[start + 2]) % 1;
+  const wave = cycle < 0.5 ? cycle * 4 - 1 : 3 - cycle * 4;
+  const amount = settings.driftStrength * slowFactor * wave * delta;
+  centers[start] += drift[start] * amount;
+  centers[start + 2] += drift[start + 1] * amount;
+}
+
+function getEffectPreviewAliveCount() {
+  let total = 0;
+  for (const particlePreview of effectPreview?.particles ?? []) {
+    const alive = particlePreview.object?.geometry?.userData?.alive;
+    if (!alive) continue;
+    for (let index = 0; index < alive.length; index += 1) {
+      if (alive[index]) total += 1;
+    }
+  }
+  return total;
+}
+
+function syncEffectPreviewAliveCount() {
+  const label = document.querySelector("[data-effect-live-count]");
+  if (label) label.textContent = String(getEffectPreviewAliveCount());
+}
+
+function spawnEffectParticle(index, positions, uvs, opacities, colors, centers, velocities, drift, rotations, angularVelocities, ages, lifetimes, sizes, alive, settings, rng, hostObject) {
   const angle = rng() * Math.PI * 2;
-  const spreadRadius = settings.spread * 0.12;
+  const spreadRadius = settings.emitterRadiusEnabled ? settings.emitterRadius : settings.spread * 0.12;
   const radius = Math.sqrt(rng()) * spreadRadius;
-  const lift = (rng() - 0.25) * settings.spread * 0.18;
+  const lift = settings.emitterRadiusEnabled ? 0 : (rng() - 0.25) * settings.spread * 0.18;
   centers[index * 3] = Math.cos(angle) * radius;
   centers[index * 3 + 1] = lift * 0.2;
   centers[index * 3 + 2] = Math.sin(angle) * radius;
@@ -11618,6 +12556,10 @@ function spawnEffectParticle(index, positions, opacities, colors, centers, veloc
   velocities[index * 3] = Math.cos(angle) * speed * lateral;
   velocities[index * 3 + 1] = upward * speed;
   velocities[index * 3 + 2] = Math.sin(angle) * speed * lateral;
+  const driftAngle = rng() * Math.PI * 2;
+  drift[index * 3] = Math.cos(driftAngle);
+  drift[index * 3 + 1] = Math.sin(driftAngle);
+  drift[index * 3 + 2] = rng();
   rotations[index * 3] = 0;
   rotations[index * 3 + 1] = 0;
   rotations[index * 3 + 2] = THREE.MathUtils.degToRad(lerp(settings.rotation[0], settings.rotation[1], rng()));
@@ -11635,6 +12577,7 @@ function spawnEffectParticle(index, positions, opacities, colors, centers, veloc
   sizes[index] = lerp(settings.size[0], settings.size[1], rng());
   alive[index] = 1;
   const color = settings.colorSlots[Math.min(settings.colorSlots.length - 1, Math.floor(rng() * settings.colorSlots.length))] ?? "#ffd166";
+  writeParticleQuadUvs(uvs, index, getRandomParticleAtlasCell(settings, rng));
   setParticleQuadColor(colors, index, color);
   setParticleQuadOpacity(opacities, index, 0);
   writeParticleQuadPositions(
@@ -11647,6 +12590,8 @@ function spawnEffectParticle(index, positions, opacities, colors, centers, veloc
     evaluateParticleSizeGraph(settings.sizeGraph, 0),
     settings.alignToVelocity,
     velocities,
+    hostObject,
+    settings.shape === "texture" ? settings.texture.atlas.aspectRatio : 1,
   );
 }
 
@@ -11670,18 +12615,24 @@ function createSeededRandom(seed) {
 }
 
 function renderViewerScene() {
+  const activeEffect = getActiveEffectPreviewSlot();
   const beforeEffect =
-    state.mode === "effect" &&
-    effectPreview?.type === "particle" &&
-    getSelectedEffectSlot()?.particle?.renderQueue === "beforeModel"
-      ? effectPreview.group
-      : null;
+    effectPreview?.group && activeEffect?.particles?.some((particle) => particle.renderQueue === "beforeModel") ? effectPreview.group : null;
   if (!beforeEffect) {
     renderer.autoClear = true;
     renderer.render(scene, camera);
     return;
   }
 
+  const beforeParticleIds = new Set(activeEffect.particles.filter((particle) => particle.renderQueue === "beforeModel").map((particle) => particle.id));
+  const particleVisibility = [];
+  for (const particlePreview of effectPreview.particles ?? []) {
+    particleVisibility.push([particlePreview.object, particlePreview.object.visible]);
+    if (particlePreview.marker) particleVisibility.push([particlePreview.marker, particlePreview.marker.visible]);
+    const before = beforeParticleIds.has(particlePreview.id);
+    particlePreview.object.visible = before && particlePreview.object.visible;
+    if (particlePreview.marker) particlePreview.marker.visible = before && particlePreview.marker.visible;
+  }
   const hiddenObjects = [];
   for (const child of scene.children) {
     if (child === beforeEffect) continue;
@@ -11693,12 +12644,15 @@ function renderViewerScene() {
   renderer.render(scene, camera);
 
   for (const [object, visible] of hiddenObjects) object.visible = visible;
-  const wasVisible = beforeEffect.visible;
-  beforeEffect.visible = false;
+  for (const [object, visible] of particleVisibility) {
+    if (object) object.visible = beforeParticleIds.has(effectPreview.particles?.find((particle) => particle.object === object || particle.marker === object)?.id) ? false : visible;
+  }
   renderer.autoClear = false;
   renderer.clearDepth();
   renderer.render(scene, camera);
-  beforeEffect.visible = wasVisible;
+  for (const [object, visible] of particleVisibility) {
+    if (object) object.visible = visible;
+  }
   renderer.autoClear = true;
 }
 
@@ -11909,6 +12863,8 @@ function normalizeMotionSlot(slot, index = 0, presets = state.expressionPresets)
     animationFile,
     expressionPresetId: preset?.id ?? String(slot?.expressionPresetId ?? ""),
     expressionPresetName: preset?.name ?? String(slot?.expressionPresetName ?? ""),
+    effectId: String(slot?.effectId ?? ""),
+    effectStartTime: clampMotionSlotEffectStartTime(Number(slot?.effectStartTime ?? 0), getAnimationDuration(animationFile, 2)),
     loop: Boolean(slot?.loop),
     transitionSeconds: clampTimelineTransitionSeconds(Number(slot?.transitionSeconds ?? 0.2)),
     expressionTimeline: normalizeExpressionTimeline(slot?.expressionTimeline),
@@ -12362,6 +13318,13 @@ function normalizeExpressionTimeline(timeline) {
 function clampTimelineTransitionSeconds(value) {
   if (!Number.isFinite(value)) return 0.2;
   return Math.min(1, Math.max(0, Math.round(value * 10) / 10));
+}
+
+function clampMotionSlotEffectStartTime(value, duration = 2) {
+  const number = Number(value);
+  const max = Math.max(0, Number(duration) || 0);
+  if (!Number.isFinite(number)) return 0;
+  return Math.min(max, Math.max(0, Math.round(number * 10) / 10));
 }
 
 function serializeCorrection() {
@@ -13496,6 +14459,7 @@ function tick() {
   updateRandomBlink(delta);
   updateLipSyncPreview(delta);
   updatePropOverlayRuntime();
+  updateMotionSlotEffectTrigger();
   updateEffectPreviewRuntime(delta);
   updateEmotionImageAnimation(delta);
   applyMotionCorrectionPreview();

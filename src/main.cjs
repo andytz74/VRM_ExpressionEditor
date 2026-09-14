@@ -393,6 +393,32 @@ ipcMain.handle("image:openStored", async (_event, fileName) => {
   return { filePath, name: path.basename(filePath), data };
 });
 
+ipcMain.handle("particleTexture:store", async () => {
+  const dir = imageDir();
+  await fs.mkdir(dir, { recursive: true });
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Open Particle Texture",
+    defaultPath: dir,
+    properties: ["openFile"],
+    filters: [
+      { name: "Particle Texture", extensions: ["png", "svg"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+
+  const sourcePath = result.filePaths[0];
+  const ext = path.extname(sourcePath).toLowerCase();
+  if (ext !== ".png" && ext !== ".svg") return null;
+  const fileName = path.basename(sourcePath);
+  const targetPath = path.join(dir, fileName);
+  if (path.resolve(sourcePath) !== path.resolve(targetPath)) {
+    await fs.copyFile(sourcePath, targetPath);
+  }
+  const data = await fs.readFile(targetPath);
+  return { filePath: targetPath, name: fileName, data };
+});
+
 ipcMain.handle("prop:store", async () => {
   const dir = propsDir();
   await fs.mkdir(dir, { recursive: true });

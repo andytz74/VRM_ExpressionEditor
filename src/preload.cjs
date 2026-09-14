@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld("vrmFiles", {
   openAnimation: () => ipcRenderer.invoke("animation:open"),
   storeImage: () => ipcRenderer.invoke("image:store"),
   openStoredImage: (fileName) => ipcRenderer.invoke("image:openStored", fileName),
+  storeParticleTexture: () => ipcRenderer.invoke("particleTexture:store"),
   storeProp: () => ipcRenderer.invoke("prop:store"),
   openStoredProp: (fileName) => ipcRenderer.invoke("prop:openStored", fileName),
   storeAnimation: (filePath) => ipcRenderer.invoke("animation:store", filePath),

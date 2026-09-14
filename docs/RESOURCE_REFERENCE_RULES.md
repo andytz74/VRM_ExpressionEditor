@@ -1,6 +1,6 @@
 # VRM Companion Resource Reference Rules
 
-Updated: 2026-09-02
+Updated: 2026-09-13
 
 이 문서는 VRM Expression Editor에서 제작한 캐릭터 리소스 묶음을 프론트/익스텐션 런타임에 전달할 때의 폴더 구조와 참조 규칙을 정의한다.
 
@@ -20,6 +20,9 @@ animations/
 emotionLinker/
   emotion-linker.meta
   emotion-linker2.meta
+
+effects/
+  effects.meta
 
 img/
   *.png
@@ -65,6 +68,25 @@ models/CharacterName.vrm.meta
 
 Emotion Linker 관련 조합 정보는 캐릭터 메타에 넣지 않는다. 별도의 `emotionLinker/` 메타파일을 사용한다.
 
+### 이펙트 메타파일
+
+```text
+effects/effects.meta
+```
+
+Effect Editor에서 만든 파티클 이펙트 설정 파일이다.
+
+주요 포함 정보:
+
+- Effect Slot
+- Particle Slot
+- 파티클 텍스처 참조
+- emission / opacity / size graph
+- render queue
+- blending
+
+구체적인 런타임 재현 규칙은 `docs/EFFECT_RUNTIME_SPEC.md`를 기준으로 한다.
+
 ### 애니메이션 폴더
 
 ```text
@@ -97,12 +119,13 @@ animations/animations.meta
 img/
 ```
 
-표정 보조 이미지를 저장한다.
+표정 보조 이미지와 이펙트 파티클 텍스처를 저장한다.
 
 포함 대상:
 
 - 홍조 이미지
 - 감정 이미지
+- 이펙트 파티클 텍스처
 - PNG 이미지
 - SVG 이미지
 
@@ -129,6 +152,7 @@ props/
 ```text
 animationFile  -> animations/ 기준 파일명
 image          -> img/ 기준 파일명
+particle texture image -> img/ 기준 파일명
 prop file      -> props/ 기준 파일명
 ```
 
@@ -140,6 +164,7 @@ prop file      -> props/ 기준 파일명
 {
   "animationFile": "a0_1.vrma",
   "image": "imgSurp.svg",
+  "texture": { "image": "effPaper4.svg" },
   "file": "OBJ_cheerBoard.glb"
 }
 ```
@@ -149,6 +174,7 @@ prop file      -> props/ 기준 파일명
 ```text
 animations/a0_1.vrma
 img/imgSurp.svg
+img/effPaper4.svg
 props/OBJ_cheerBoard.glb
 ```
 
