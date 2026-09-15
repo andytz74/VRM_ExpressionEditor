@@ -2509,6 +2509,71 @@ input[type="range"] {
   font-style: normal;
 }
 
+.effect-texture-preview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+  margin-top: 2px;
+}
+
+.effect-texture-preview-item {
+  display: grid;
+  gap: 5px;
+  justify-items: center;
+  min-width: 0;
+}
+
+.effect-texture-preview-item > span {
+  color: #9aa4af;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.effect-texture-preview-box {
+  display: grid;
+  place-items: center;
+  width: 74px;
+  height: 74px;
+  overflow: hidden;
+  border: 1px solid #303843;
+  border-radius: 7px;
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.06) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.06) 75%),
+    #11161c;
+  background-position:
+    0 0,
+    0 6px,
+    6px -6px,
+    -6px 0;
+  background-size: 12px 12px;
+  color: #728092;
+  font-size: 10px;
+}
+
+.effect-texture-preview-original img {
+  display: block;
+  max-width: 64px;
+  max-height: 64px;
+  object-fit: contain;
+}
+
+.effect-texture-processed-viewport {
+  display: block;
+  overflow: hidden;
+}
+
+.effect-texture-processed-viewport img {
+  display: block;
+  max-width: none;
+  max-height: none;
+  object-fit: fill;
+  transform-origin: left top;
+}
+
 .effect-texture-sprite-note {
   margin: 0;
   color: #9aa4af;

@@ -113,6 +113,8 @@ animations/animations.meta
 - mustWatchFull 여부
 - lookAtCamera 여부
 
+`lookAtCamera`는 에디터 UI의 `정면시선` 옵션이다. Emotion Linker 2 슬롯을 재생할 때도 `motionSlots[].animationFile`로 `animations.meta`를 조회해서 함께 적용해야 한다. 구체적인 런타임 규칙은 `docs/LOOK_AT_CAMERA_RUNTIME_SPEC.md`를 기준으로 한다.
+
 ### 이미지 폴더
 
 ```text
@@ -635,6 +637,7 @@ Emotion Linker 2의 motion slot을 저장한다.
 참조 규칙:
 
 - `animationFile`은 `animations/` 기준 VRMA 파일명이다.
+- `animationFile`은 `animations.meta.animations[animationFile]`의 `lookAtCamera` 조회에도 사용한다.
 - `expressionPresetId`는 같은 캐릭터 메타의 `expressionPresets[].id`를 참조한다.
 - `transitionSeconds`는 이 motion slot을 시작할 때 애니메이션과 표정 전환에 사용하는 시간이다.
 - `expressionTimeline`은 애니메이션 진행 시간별 표정 전환 정보다.

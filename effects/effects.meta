@@ -108,6 +108,7 @@
             3
           ],
           "renderQueue": "afterModel",
+          "blending": "normal",
           "seedMode": "fixed",
           "seed": 2,
           "emissionGraph": [
@@ -240,6 +241,7 @@
             3
           ],
           "renderQueue": "beforeModel",
+          "blending": "normal",
           "seedMode": "fixed",
           "seed": 12345,
           "emissionGraph": [
@@ -377,6 +379,7 @@
             3
           ],
           "renderQueue": "afterModel",
+          "blending": "normal",
           "seedMode": "fixed",
           "seed": 2,
           "emissionGraph": [
@@ -439,7 +442,7 @@
         0
       ],
       "scale": 0.51,
-      "duration": 3,
+      "duration": 5,
       "enabled": true,
       "particles": [
         {
@@ -526,10 +529,11 @@
             0.05
           ],
           "lifetime": [
-            0.6,
-            3
+            1,
+            5
           ],
           "renderQueue": "afterModel",
+          "blending": "normal",
           "seedMode": "fixed",
           "seed": 2,
           "emissionGraph": [
@@ -591,8 +595,8 @@
           "scale": 1,
           "loop": false,
           "count": [
-            5,
-            15
+            20,
+            40
           ],
           "shape": "texture",
           "texture": {
@@ -655,13 +659,14 @@
           "stopSpeedThreshold": 0.01,
           "size": [
             0.07,
-            0.13
+            0.2
           ],
           "lifetime": [
             0.6,
-            3
+            1.5
           ],
           "renderQueue": "beforeModel",
+          "blending": "normal",
           "seedMode": "fixed",
           "seed": 4,
           "emissionGraph": [
@@ -795,10 +800,11 @@
             0.04
           ],
           "lifetime": [
-            0.6,
-            3
+            1,
+            5
           ],
           "renderQueue": "afterModel",
+          "blending": "normal",
           "seedMode": "fixed",
           "seed": 15,
           "emissionGraph": [
@@ -860,8 +866,8 @@
           "scale": 1,
           "loop": false,
           "count": [
-            5,
-            15
+            20,
+            40
           ],
           "shape": "texture",
           "texture": {
@@ -875,19 +881,19 @@
               "spriteMode": "random"
             }
           },
-          "billboard": true,
+          "billboard": false,
           "burst": true,
           "colorSlots": [
-            "#14a5ff",
-            "#c212f3",
-            "#00ff04"
+            "#0055ff",
+            "#ffbb00",
+            "#ffea00"
           ],
           "spread": 0.7,
           "emitterRadiusEnabled": true,
           "emitterRadius": 0.2,
           "speed": [
             2.7,
-            15
+            18
           ],
           "drag": 2,
           "gravity": 0.02,
@@ -924,13 +930,14 @@
           "stopSpeedThreshold": 0.01,
           "size": [
             0.07,
-            0.13
+            0.2
           ],
           "lifetime": [
             0.6,
-            3
+            1.5
           ],
           "renderQueue": "beforeModel",
+          "blending": "normal",
           "seedMode": "fixed",
           "seed": 4,
           "emissionGraph": [
@@ -970,6 +977,305 @@
             },
             {
               "time": 0.53,
+              "value": 1,
+              "curve": "easeInOut"
+            },
+            {
+              "time": 1,
+              "value": 0,
+              "curve": "linear"
+            }
+          ]
+        }
+      ],
+      "version": 1
+    },
+    {
+      "id": "effect-1789440776732-2",
+      "name": "Click1",
+      "attachBone": "world",
+      "positionOffset": [
+        0,
+        1.5,
+        0
+      ],
+      "rotationOffset": [
+        0,
+        0,
+        0
+      ],
+      "scale": 1,
+      "duration": 1,
+      "enabled": true,
+      "particles": [
+        {
+          "id": "particle-1789440796426-0",
+          "name": "Particle 1",
+          "enabled": true,
+          "positionOffset": [
+            0,
+            0,
+            0
+          ],
+          "rotationOffset": [
+            90,
+            0,
+            0
+          ],
+          "scale": 1,
+          "loop": false,
+          "count": [
+            5,
+            8
+          ],
+          "shape": "line",
+          "texture": {
+            "image": "",
+            "sourceType": "bitmap",
+            "colorMode": "original",
+            "atlas": {
+              "columns": 1,
+              "rows": 1,
+              "aspectRatio": 1,
+              "spriteMode": "random"
+            }
+          },
+          "billboard": true,
+          "burst": true,
+          "colorSlots": [
+            "#ffd166"
+          ],
+          "spread": 4,
+          "emitterRadiusEnabled": true,
+          "emitterRadius": 0,
+          "speed": [
+            1,
+            1
+          ],
+          "drag": 10,
+          "gravity": 0,
+          "driftEnabled": false,
+          "driftStrength": 0.2,
+          "driftFallSpeedRef": 2,
+          "driftFrequency": 1.5,
+          "rotation": [
+            0,
+            0
+          ],
+          "alignToVelocity": true,
+          "angularVelocity": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ]
+          ],
+          "angularVelocityEnabled": [
+            false,
+            false,
+            false
+          ],
+          "angularDrag": 0,
+          "stopWhenSlow": false,
+          "stopSpeedThreshold": 0.01,
+          "size": [
+            0.01,
+            0.03
+          ],
+          "lifetime": [
+            0.2,
+            0.5
+          ],
+          "renderQueue": "afterModel",
+          "blending": "normal",
+          "seedMode": "time",
+          "seed": 67890,
+          "emissionGraph": [
+            {
+              "time": 0,
+              "value": 80,
+              "curve": "linear"
+            },
+            {
+              "time": 1,
+              "value": 80,
+              "curve": "linear"
+            }
+          ],
+          "sizeGraph": [
+            {
+              "time": 0,
+              "value": 1,
+              "curve": "easeInOut"
+            },
+            {
+              "time": 1,
+              "value": 0,
+              "curve": "linear"
+            }
+          ],
+          "opacityGraph": [
+            {
+              "time": 0,
+              "value": 0,
+              "curve": "step"
+            },
+            {
+              "time": 0.26,
+              "value": 1,
+              "curve": "easeInOut"
+            },
+            {
+              "time": 1,
+              "value": 0,
+              "curve": "linear"
+            }
+          ]
+        }
+      ],
+      "version": 1
+    },
+    {
+      "id": "effect-1789442519696-3",
+      "name": "Click2",
+      "attachBone": "world",
+      "positionOffset": [
+        0,
+        1.5,
+        0
+      ],
+      "rotationOffset": [
+        0,
+        0,
+        0
+      ],
+      "scale": 1,
+      "duration": 1,
+      "enabled": true,
+      "particles": [
+        {
+          "id": "particle-1789442519696-3-0",
+          "name": "Particle 1",
+          "enabled": true,
+          "positionOffset": [
+            0,
+            0,
+            0
+          ],
+          "rotationOffset": [
+            90,
+            0,
+            0
+          ],
+          "scale": 1,
+          "loop": false,
+          "count": [
+            1,
+            1
+          ],
+          "shape": "ring",
+          "texture": {
+            "image": "",
+            "sourceType": "bitmap",
+            "colorMode": "original",
+            "atlas": {
+              "columns": 1,
+              "rows": 1,
+              "aspectRatio": 1,
+              "spriteMode": "random"
+            }
+          },
+          "billboard": true,
+          "burst": true,
+          "colorSlots": [
+            "#66ff00"
+          ],
+          "spread": 0.05,
+          "emitterRadiusEnabled": true,
+          "emitterRadius": 0,
+          "speed": [
+            0,
+            0
+          ],
+          "drag": 0,
+          "gravity": 0,
+          "driftEnabled": false,
+          "driftStrength": 0.2,
+          "driftFallSpeedRef": 2,
+          "driftFrequency": 1.5,
+          "rotation": [
+            0,
+            0
+          ],
+          "alignToVelocity": false,
+          "angularVelocity": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ]
+          ],
+          "angularVelocityEnabled": [
+            false,
+            false,
+            false
+          ],
+          "angularDrag": 0,
+          "stopWhenSlow": false,
+          "stopSpeedThreshold": 0.01,
+          "size": [
+            0.1,
+            0.1
+          ],
+          "lifetime": [
+            0.4,
+            0.5
+          ],
+          "renderQueue": "afterModel",
+          "blending": "normal",
+          "seedMode": "fixed",
+          "seed": 1,
+          "emissionGraph": [
+            {
+              "time": 0,
+              "value": 80,
+              "curve": "linear"
+            },
+            {
+              "time": 1,
+              "value": 80,
+              "curve": "linear"
+            }
+          ],
+          "sizeGraph": [
+            {
+              "time": 0,
+              "value": 0,
+              "curve": "easeOut"
+            },
+            {
+              "time": 1,
+              "value": 1,
+              "curve": "linear"
+            }
+          ],
+          "opacityGraph": [
+            {
+              "time": 0,
               "value": 1,
               "curve": "easeInOut"
             },

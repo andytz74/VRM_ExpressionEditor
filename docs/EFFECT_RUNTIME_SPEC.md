@@ -488,17 +488,21 @@ Emotion Linker 2를 프론트에서 구현할 경우, 슬롯 재생은 아래 �
 1. emotion-linker2.meta 로드
 2. 선택된 motion slot을 찾는다.
 3. animationFile로 animations/ 안의 VRMA를 재생한다.
-4. expressionPresetId 또는 expressionPresetName으로 캐릭터 표정 프리셋을 적용한다.
-5. expressionTimeline이 있으면 시간에 따라 표정을 갱신한다.
-6. effectId가 있으면 effects.meta에서 해당 effect를 찾는다.
-7. slot 재생 시간이 effectStartTime에 도달하면 해당 effect를 재생한다.
+4. animationFile로 animations.meta의 animation entry를 조회하고 lookAtCamera를 적용한다.
+5. expressionPresetId 또는 expressionPresetName으로 캐릭터 표정 프리셋을 적용한다.
+6. expressionTimeline이 있으면 시간에 따라 표정을 갱신한다.
+7. effectId가 있으면 effects.meta에서 해당 effect를 찾는다.
+8. slot 재생 시간이 effectStartTime에 도달하면 해당 effect를 재생한다.
 ```
 
 의사코드:
 
 ```js
-function playMotionSlot(slot) {
+function playMotionSlot(slot, context) {
+  const animationMeta = context.animationsMeta.animations?.[slot.animationFile];
+
   playVrma(slot.animationFile, { loop: slot.loop });
+  applyLookAtCamera(context.vrm, context.camera, Boolean(animationMeta?.lookAtCamera));
   applyExpressionPreset(slot.expressionPresetId);
 
   scheduleExpressionTimeline(slot.expressionTimeline);
@@ -512,6 +516,8 @@ function playMotionSlot(slot) {
 ```
 
 `playEffect(effectId)`는 이 문서 앞부분의 `effects.meta` 재현 규칙을 그대로 사용한다.
+
+`lookAtCamera`는 에디터 UI의 `정면시선` 옵션이다. 이 값은 `emotion-linker2.meta` 슬롯 안에 직접 저장되지 않고, `animations/animations.meta`의 해당 `animationFile` 항목에서 읽는다. 자세한 규칙은 `docs/LOOK_AT_CAMERA_RUNTIME_SPEC.md`를 따른다.
 
 ### 시간 기준
 

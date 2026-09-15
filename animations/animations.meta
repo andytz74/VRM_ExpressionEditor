@@ -135,7 +135,7 @@
       "duration": 4.958,
       "isFirst": false,
       "loop": true,
-      "lookAtCamera": false
+      "lookAtCamera": true
     },
     "SA3.vrma": {
       "fileName": "SA3.vrma",

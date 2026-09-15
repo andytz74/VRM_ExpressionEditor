@@ -348,6 +348,8 @@ let effectPreview = null;
 let effectTransformControls = null;
 let effectTransformDragging = false;
 const effectTextureCache = new Map();
+const effectTexturePreviewUrlCache = new Map();
+const effectTexturePreviewUrlLoaders = new Map();
 const effectWhiteTexture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, THREE.RGBAFormat);
 effectWhiteTexture.needsUpdate = true;
 effectWhiteTexture.colorSpace = THREE.SRGBColorSpace;
@@ -363,6 +365,8 @@ const effectParticleLocalCameraQuaternion = new THREE.Quaternion();
 const effectParticleInverseBillboardQuaternion = new THREE.Quaternion();
 const effectParticleSpinQuaternion = new THREE.Quaternion();
 const effectParticleZAxis = new THREE.Vector3(0, 0, 1);
+const effectParticleXAxis = new THREE.Vector3(1, 0, 0);
+const effectParticleDirectionQuaternion = new THREE.Quaternion();
 const effectParticleVelocity = new THREE.Vector3();
 const effectParticleCameraPlaneVelocity = new THREE.Vector3();
 const effectParticleColor = new THREE.Color();
@@ -809,6 +813,7 @@ function render() {
   document.querySelector("#canvasHost")?.appendChild(renderer.domElement);
   attachHeaderMetaButtons();
   bindUi();
+  syncEffectTexturePreviewImages();
   resize();
 }
 
@@ -3201,7 +3206,44 @@ function renderEffectTextureControl(effect, particle) {
         <span>Aspect (H/W)</span>
         <input type="number" min="0.05" max="20" step="0.01" value="${roundForInput(texture.atlas.aspectRatio)}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleTextureAspectRatio" ${enabled ? "" : "disabled"} title="Height / Width" />
       </label>
+      ${renderEffectTexturePreview(texture, enabled)}
       <p class="effect-texture-sprite-note">${texture.atlas.columns * texture.atlas.rows} sprites, random per particle</p>
+    </div>
+  `;
+}
+
+function renderEffectTexturePreview(texture, enabled) {
+  if (!enabled || !texture.image) return "";
+  const url = effectTexturePreviewUrlCache.get(texture.image) ?? "";
+  const columns = Math.max(1, texture.atlas.columns);
+  const rows = Math.max(1, texture.atlas.rows);
+  const aspectRatio = Math.max(0.05, texture.atlas.aspectRatio);
+  const aspectScale = Math.sqrt(aspectRatio);
+  const baseSize = 64;
+  const maxSize = 72;
+  let processedWidth = baseSize / aspectScale;
+  let processedHeight = baseSize * aspectScale;
+  const fitScale = Math.min(1, maxSize / Math.max(processedWidth, processedHeight));
+  processedWidth *= fitScale;
+  processedHeight *= fitScale;
+  const processedImageWidth = processedWidth * columns;
+  const processedImageHeight = processedHeight * rows;
+  const originalImage = url ? `<img src="${escapeHtml(url)}" alt="" />` : `<span>Loading</span>`;
+  const processedImage = url
+    ? `<span class="effect-texture-processed-viewport" style="width: ${roundForInput(processedWidth)}px; height: ${roundForInput(processedHeight)}px;">
+        <img src="${escapeHtml(url)}" alt="" style="width: ${roundForInput(processedImageWidth)}px; height: ${roundForInput(processedImageHeight)}px;" />
+      </span>`
+    : `<span>Loading</span>`;
+  return `
+    <div class="effect-texture-preview" data-effect-texture-preview="${escapeHtml(texture.image)}">
+      <div class="effect-texture-preview-item">
+        <span>Original</span>
+        <div class="effect-texture-preview-box effect-texture-preview-original">${originalImage}</div>
+      </div>
+      <div class="effect-texture-preview-item">
+        <span>Processed</span>
+        <div class="effect-texture-preview-box effect-texture-preview-processed">${processedImage}</div>
+      </div>
     </div>
   `;
 }
@@ -11854,6 +11896,38 @@ async function loadParticleTexture(fileName) {
   return promise;
 }
 
+function syncEffectTexturePreviewImages() {
+  for (const node of document.querySelectorAll("[data-effect-texture-preview]")) {
+    const name = fileNameFromPath(node.dataset.effectTexturePreview);
+    if (!name || effectTexturePreviewUrlCache.has(name)) continue;
+    void loadParticleTexturePreviewUrl(name).then(() => {
+      if (state.mode !== "effect") return;
+      renderPreservingScrollableUi();
+    });
+  }
+}
+
+async function loadParticleTexturePreviewUrl(fileName) {
+  const name = fileNameFromPath(fileName);
+  if (!isSupportedParticleTextureFile(name)) return "";
+  if (effectTexturePreviewUrlCache.has(name)) return effectTexturePreviewUrlCache.get(name);
+  if (effectTexturePreviewUrlLoaders.has(name)) return effectTexturePreviewUrlLoaders.get(name);
+  const promise = (async () => {
+    const result = await window.vrmFiles.openStoredImage(name);
+    const blob = new Blob([new Uint8Array(result.data)], { type: getImageMimeType(result.name) });
+    const url = URL.createObjectURL(blob);
+    effectTexturePreviewUrlCache.set(name, url);
+    effectTexturePreviewUrlLoaders.delete(name);
+    return url;
+  })().catch((error) => {
+    console.warn("Failed to load particle texture preview", error);
+    effectTexturePreviewUrlLoaders.delete(name);
+    return "";
+  });
+  effectTexturePreviewUrlLoaders.set(name, promise);
+  return promise;
+}
+
 function hideParticleQuad(positions, index) {
   const start = index * 12;
   for (let offset = 0; offset < 12; offset += 3) {
@@ -11958,17 +12032,24 @@ function writeParticleQuadPositions(
     effectParticleSpinQuaternion.setFromAxisAngle(effectParticleZAxis, roll);
     effectParticleBillboardQuaternion.copy(effectParticleLocalCameraQuaternion).multiply(effectParticleSpinQuaternion);
   } else {
-    if (alignToVelocity && velocities) {
-      const vx = velocities[centerStart];
-      const vy = velocities[centerStart + 1];
-      if (vx * vx + vy * vy > 0.000001) rotations[centerStart + 2] = Math.atan2(vy, vx);
-    }
     effectParticleEuler.set(rotations[centerStart], rotations[centerStart + 1], rotations[centerStart + 2], "XYZ");
+    if (alignToVelocity && velocities) {
+      effectParticleVelocity.set(velocities[centerStart], velocities[centerStart + 1], velocities[centerStart + 2]);
+      if (effectParticleVelocity.lengthSq() > 0.000001) {
+        effectParticleVelocity.normalize();
+        effectParticleDirectionQuaternion.setFromUnitVectors(effectParticleXAxis, effectParticleVelocity);
+        effectParticleSpinQuaternion.setFromAxisAngle(effectParticleXAxis, rotations[centerStart + 2]);
+        effectParticleDirectionQuaternion.multiply(effectParticleSpinQuaternion);
+      } else {
+        effectParticleDirectionQuaternion.setFromEuler(effectParticleEuler);
+      }
+    }
   }
   for (let cornerIndex = 0; cornerIndex < corners.length; cornerIndex += 1) {
     const corner = corners[cornerIndex];
     effectParticleCorner.set(corner[0], corner[1], corner[2]);
     if (billboard) effectParticleCorner.applyQuaternion(effectParticleBillboardQuaternion);
+    else if (alignToVelocity && velocities) effectParticleCorner.applyQuaternion(effectParticleDirectionQuaternion);
     else effectParticleCorner.applyEuler(effectParticleEuler);
     const offset = vertexStart + cornerIndex * 3;
     positions[offset] = centers[centerStart] + effectParticleCorner.x;
