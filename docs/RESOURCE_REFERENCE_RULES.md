@@ -1,6 +1,6 @@
 # VRM Companion Resource Reference Rules
 
-Updated: 2026-09-13
+Updated: 2026-09-26
 
 이 문서는 VRM Expression Editor에서 제작한 캐릭터 리소스 묶음을 프론트/익스텐션 런타임에 전달할 때의 폴더 구조와 참조 규칙을 정의한다.
 
@@ -86,6 +86,8 @@ Effect Editor에서 만든 파티클 이펙트 설정 파일이다.
 - blending
 
 구체적인 런타임 재현 규칙은 `docs/EFFECT_RUNTIME_SPEC.md`를 기준으로 한다.
+
+Emotion Linker 2 슬롯 이름 호출과 애니메이션/표정/이펙트 통합 재생은 `docs/EMOTION_LINKER2_RUNTIME_SPEC.md`를 기준으로 한다.
 
 ### 애니메이션 폴더
 
@@ -626,6 +628,8 @@ Emotion Linker 2의 motion slot을 저장한다.
       "animationFile": "a0_1.vrma",
       "expressionPresetId": "emotion-0",
       "expressionPresetName": "Neutral0",
+      "effectId": "",
+      "effectStartTime": 0,
       "loop": true,
       "transitionSeconds": 0.2,
       "expressionTimeline": []
@@ -639,6 +643,8 @@ Emotion Linker 2의 motion slot을 저장한다.
 - `animationFile`은 `animations/` 기준 VRMA 파일명이다.
 - `animationFile`은 `animations.meta.animations[animationFile]`의 `lookAtCamera` 조회에도 사용한다.
 - `expressionPresetId`는 같은 캐릭터 메타의 `expressionPresets[].id`를 참조한다.
+- `effectId`는 `effects/effects.meta`의 `effects[].id`를 참조한다. 빈 문자열이면 적용하지 않는다.
+- `effectStartTime`은 슬롯 시작 후 이펙트를 재생할 시각이며 초 단위다.
 - `transitionSeconds`는 이 motion slot을 시작할 때 애니메이션과 표정 전환에 사용하는 시간이다.
 - `expressionTimeline`은 애니메이션 진행 시간별 표정 전환 정보다.
 - 캐릭터가 바뀌어도 같은 `expressionPresetId`가 유지되면 같은 Emotion Linker 메타를 재사용할 수 있다.
@@ -672,6 +678,18 @@ Emotion Linker 2의 motion slot을 저장한다.
 - `transitionSeconds`: 이 지점에 도달했을 때 표정이 전환되는 시간이다.
 
 `motionSlots`는 Emotion Linker 2와 Transition Viewer에서 같이 사용할 수 있는 동작 프리셋이다. 프론트/익스텐션이 특정 동작을 호출할 때는 가능하면 `animationFile`과 `expressionPresetId`를 따로 조합하기보다 `motionSlots[].id` 또는 `motionSlots[].title`을 기준으로 호출하는 구조가 관리에 유리하다.
+
+프런트의 외부 호출 API는 `motionSlots[].title`을 사용할 수 있다. 호출 시 제목이 정확히 하나의 슬롯에 대응하는지 검사하고, 재생이 시작된 뒤에는 `motionSlots[].id`를 내부 상태 키로 사용한다. 배열 순서나 에디터의 이름순 정렬 여부에 의존하면 안 된다.
+
+Emotion Linker 2의 전체 구현 규칙은 `docs/EMOTION_LINKER2_RUNTIME_SPEC.md`를 따른다. 여기에는 반드시 함께 처리해야 하는 아래 항목이 포함된다.
+
+- 애니메이션과 Motion Correction
+- 시작 표정과 expression timeline
+- Head/Eye Pose Controls의 offset/override
+- 캐릭터 메타의 눈동자 본 매핑
+- `animations.meta`의 `lookAtCamera` (`정면시선`)
+- 애니메이션별 GLB Props
+- `effectStartTime`의 파티클 이펙트
 
 ## 9. Material Outline 참조 규칙
 
@@ -911,6 +929,10 @@ Missing emotion map preset: emotion-0
 [ ] expressionPresetId가 실제 expressionPresets 안의 id와 일치한다.
 [ ] emotionMap points의 expressionPresetId가 실제 expressionPresets 안의 id와 일치한다.
 [ ] emotionMap points의 expressionRangeId가 해당 expression preset의 rangeSlots 안에 존재한다.
+[ ] motionSlots의 title이 프런트 호출용으로 고유하다.
+[ ] motionSlots의 effectId가 effects.meta의 실제 effect id와 일치한다.
+[ ] expressionPoseBoneMapping의 눈동자 본 이름을 현재 VRM에서 찾을 수 있다.
+[ ] animations.meta의 lookAtCamera를 슬롯 전환마다 적용하고 해제한다.
 [ ] outline material 이름이 현재 VRM material 이름과 일치한다.
 [ ] extraBoneFollowSettings의 targetBone/sourceBone/tailDirectionBone을 런타임에서 찾을 수 있다.
 ```

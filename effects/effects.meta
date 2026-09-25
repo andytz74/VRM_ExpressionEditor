@@ -50,7 +50,11 @@
               "rows": 1,
               "aspectRatio": 1,
               "spriteMode": "random"
-            }
+            },
+            "pivot": [
+              0.5,
+              0.5
+            ]
           },
           "billboard": true,
           "burst": true,
@@ -60,8 +64,11 @@
             "#00ff04"
           ],
           "spread": 0.5,
+          "spreadMode": "3d",
           "emitterRadiusEnabled": false,
           "emitterRadius": 0.144,
+          "radialMaskEnabled": false,
+          "radialMaskDiameter": 0.5,
           "speed": [
             5,
             15
@@ -183,7 +190,11 @@
               "rows": 3,
               "aspectRatio": 1,
               "spriteMode": "random"
-            }
+            },
+            "pivot": [
+              0.5,
+              0.5
+            ]
           },
           "billboard": true,
           "burst": true,
@@ -193,8 +204,11 @@
             "#00ff04"
           ],
           "spread": 0.5,
+          "spreadMode": "3d",
           "emitterRadiusEnabled": false,
           "emitterRadius": 0.144,
+          "radialMaskEnabled": false,
+          "radialMaskDiameter": 0.5,
           "speed": [
             4,
             13
@@ -321,7 +335,11 @@
               "rows": 1,
               "aspectRatio": 1,
               "spriteMode": "random"
-            }
+            },
+            "pivot": [
+              0.5,
+              0.5
+            ]
           },
           "billboard": true,
           "burst": true,
@@ -331,8 +349,11 @@
             "#00ff04"
           ],
           "spread": 0.5,
+          "spreadMode": "3d",
           "emitterRadiusEnabled": false,
           "emitterRadius": 0.144,
+          "radialMaskEnabled": false,
+          "radialMaskDiameter": 0.5,
           "speed": [
             5,
             15
@@ -475,7 +496,11 @@
               "rows": 2,
               "aspectRatio": 1,
               "spriteMode": "random"
-            }
+            },
+            "pivot": [
+              0.5,
+              0.5
+            ]
           },
           "billboard": false,
           "burst": true,
@@ -485,8 +510,11 @@
             "#00ff04"
           ],
           "spread": 0.8,
+          "spreadMode": "3d",
           "emitterRadiusEnabled": true,
           "emitterRadius": 0.02,
+          "radialMaskEnabled": false,
+          "radialMaskDiameter": 0.5,
           "speed": [
             5,
             15
@@ -608,7 +636,11 @@
               "rows": 3,
               "aspectRatio": 0.33,
               "spriteMode": "random"
-            }
+            },
+            "pivot": [
+              0.5,
+              0.5
+            ]
           },
           "billboard": true,
           "burst": true,
@@ -618,8 +650,11 @@
             "#00ff04"
           ],
           "spread": 0.7,
+          "spreadMode": "3d",
           "emitterRadiusEnabled": true,
           "emitterRadius": 0.2,
+          "radialMaskEnabled": false,
+          "radialMaskDiameter": 0.5,
           "speed": [
             3,
             14
@@ -746,7 +781,11 @@
               "rows": 2,
               "aspectRatio": 1,
               "spriteMode": "random"
-            }
+            },
+            "pivot": [
+              0.5,
+              0.5
+            ]
           },
           "billboard": true,
           "burst": true,
@@ -756,8 +795,11 @@
             "#ff00f7"
           ],
           "spread": 0.7,
+          "spreadMode": "3d",
           "emitterRadiusEnabled": true,
           "emitterRadius": 0.01,
+          "radialMaskEnabled": false,
+          "radialMaskDiameter": 0.5,
           "speed": [
             4,
             17
@@ -879,7 +921,11 @@
               "rows": 3,
               "aspectRatio": 0.33,
               "spriteMode": "random"
-            }
+            },
+            "pivot": [
+              0.5,
+              0.5
+            ]
           },
           "billboard": false,
           "burst": true,
@@ -889,8 +935,11 @@
             "#ffea00"
           ],
           "spread": 0.7,
+          "spreadMode": "3d",
           "emitterRadiusEnabled": true,
           "emitterRadius": 0.2,
+          "radialMaskEnabled": false,
+          "radialMaskDiameter": 0.5,
           "speed": [
             2.7,
             18
@@ -1038,7 +1087,11 @@
               "rows": 1,
               "aspectRatio": 1,
               "spriteMode": "random"
-            }
+            },
+            "pivot": [
+              0.5,
+              0.5
+            ]
           },
           "billboard": true,
           "burst": true,
@@ -1046,8 +1099,11 @@
             "#ffd166"
           ],
           "spread": 4,
+          "spreadMode": "3d",
           "emitterRadiusEnabled": true,
           "emitterRadius": 0,
+          "radialMaskEnabled": false,
+          "radialMaskDiameter": 0.5,
           "speed": [
             1,
             1
@@ -1190,7 +1246,11 @@
               "rows": 1,
               "aspectRatio": 1,
               "spriteMode": "random"
-            }
+            },
+            "pivot": [
+              0.5,
+              0.5
+            ]
           },
           "billboard": true,
           "burst": true,
@@ -1198,8 +1258,11 @@
             "#66ff00"
           ],
           "spread": 0.05,
+          "spreadMode": "3d",
           "emitterRadiusEnabled": true,
           "emitterRadius": 0,
+          "radialMaskEnabled": false,
+          "radialMaskDiameter": 0.5,
           "speed": [
             0,
             0
@@ -1276,6 +1339,854 @@
           "opacityGraph": [
             {
               "time": 0,
+              "value": 1,
+              "curve": "easeInOut"
+            },
+            {
+              "time": 1,
+              "value": 0,
+              "curve": "linear"
+            }
+          ]
+        }
+      ],
+      "version": 1
+    },
+    {
+      "id": "effect-1789692996901-4",
+      "name": "EmotionTest",
+      "attachBone": "world",
+      "positionOffset": [
+        0,
+        1.5,
+        0
+      ],
+      "rotationOffset": [
+        0,
+        0,
+        0
+      ],
+      "scale": 1,
+      "duration": 1,
+      "enabled": true,
+      "particles": [
+        {
+          "id": "particle-1789693034896-0",
+          "name": "Particle 1",
+          "enabled": true,
+          "positionOffset": [
+            0,
+            0,
+            0
+          ],
+          "rotationOffset": [
+            0,
+            0,
+            0
+          ],
+          "scale": 1,
+          "loop": true,
+          "count": [
+            1,
+            1
+          ],
+          "shape": "texture",
+          "texture": {
+            "image": "imgWarau.svg",
+            "sourceType": "svgMask",
+            "colorMode": "original",
+            "atlas": {
+              "columns": 1,
+              "rows": 1,
+              "aspectRatio": 1,
+              "spriteMode": "random"
+            },
+            "pivot": [
+              0,
+              0.5
+            ]
+          },
+          "billboard": true,
+          "burst": false,
+          "colorSlots": [
+            "#ffffff"
+          ],
+          "spread": 1.2,
+          "spreadMode": "3d",
+          "emitterRadiusEnabled": true,
+          "emitterRadius": 0,
+          "radialMaskEnabled": false,
+          "radialMaskDiameter": 0.5,
+          "speed": [
+            0,
+            0
+          ],
+          "drag": 0,
+          "gravity": 0,
+          "driftEnabled": false,
+          "driftStrength": 0.2,
+          "driftFallSpeedRef": 2,
+          "driftFrequency": 1.5,
+          "rotation": [
+            0,
+            180
+          ],
+          "alignToVelocity": false,
+          "angularVelocity": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ]
+          ],
+          "angularVelocityEnabled": [
+            false,
+            false,
+            false
+          ],
+          "angularDrag": 0,
+          "stopWhenSlow": false,
+          "stopSpeedThreshold": 0.01,
+          "size": [
+            0.25,
+            0.3
+          ],
+          "lifetime": [
+            0.3,
+            0.7
+          ],
+          "renderQueue": "afterModel",
+          "blending": "normal",
+          "seedMode": "time",
+          "seed": 12345,
+          "emissionGraph": [
+            {
+              "time": 0,
+              "value": 80,
+              "curve": "linear"
+            },
+            {
+              "time": 1,
+              "value": 80,
+              "curve": "linear"
+            }
+          ],
+          "sizeGraph": [
+            {
+              "time": 0,
+              "value": 1,
+              "curve": "linear"
+            },
+            {
+              "time": 1,
+              "value": 1,
+              "curve": "linear"
+            }
+          ],
+          "opacityGraph": [
+            {
+              "time": 0,
+              "value": 0.99,
+              "curve": "easeIn"
+            },
+            {
+              "time": 0.71,
+              "value": 1,
+              "curve": "easeIn"
+            },
+            {
+              "time": 1,
+              "value": 0,
+              "curve": "linear"
+            }
+          ]
+        }
+      ],
+      "version": 1
+    },
+    {
+      "id": "effect-1789705549536-5",
+      "name": "JoyMusic",
+      "attachBone": "world",
+      "positionOffset": [
+        0,
+        1.34,
+        0
+      ],
+      "rotationOffset": [
+        0,
+        0,
+        0
+      ],
+      "scale": 1,
+      "duration": 1,
+      "enabled": true,
+      "particles": [
+        {
+          "id": "particle-1789705575225-0",
+          "name": "Particle 1",
+          "enabled": true,
+          "positionOffset": [
+            0,
+            0,
+            0
+          ],
+          "rotationOffset": [
+            90,
+            0,
+            0
+          ],
+          "scale": 1,
+          "loop": false,
+          "count": [
+            5,
+            10
+          ],
+          "shape": "texture",
+          "texture": {
+            "image": "effMusic.svg",
+            "sourceType": "svgMask",
+            "colorMode": "particleColor",
+            "atlas": {
+              "columns": 2,
+              "rows": 2,
+              "aspectRatio": 1,
+              "spriteMode": "random"
+            },
+            "pivot": [
+              0.5,
+              0.5
+            ]
+          },
+          "billboard": true,
+          "burst": false,
+          "colorSlots": [
+            "#ffb300",
+            "#04ff00",
+            "#f50fac"
+          ],
+          "spread": 1.2,
+          "spreadMode": "billboardPlane",
+          "emitterRadiusEnabled": true,
+          "emitterRadius": 0.1,
+          "radialMaskEnabled": false,
+          "radialMaskDiameter": 0.34,
+          "speed": [
+            0.1,
+            0.2
+          ],
+          "drag": 0.3,
+          "gravity": -0.01,
+          "driftEnabled": true,
+          "driftStrength": 0.05,
+          "driftFallSpeedRef": 0.01,
+          "driftFrequency": 1,
+          "rotation": [
+            -25,
+            25
+          ],
+          "alignToVelocity": false,
+          "angularVelocity": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ]
+          ],
+          "angularVelocityEnabled": [
+            false,
+            false,
+            false
+          ],
+          "angularDrag": 0,
+          "stopWhenSlow": false,
+          "stopSpeedThreshold": 0.01,
+          "size": [
+            0.03,
+            0.1
+          ],
+          "lifetime": [
+            2,
+            3
+          ],
+          "renderQueue": "beforeModel",
+          "blending": "normal",
+          "seedMode": "time",
+          "seed": 12345,
+          "emissionGraph": [
+            {
+              "time": 0,
+              "value": 80,
+              "curve": "linear"
+            },
+            {
+              "time": 1,
+              "value": 80,
+              "curve": "linear"
+            }
+          ],
+          "sizeGraph": [
+            {
+              "time": 0,
+              "value": 1,
+              "curve": "linear"
+            },
+            {
+              "time": 1,
+              "value": 1,
+              "curve": "linear"
+            }
+          ],
+          "opacityGraph": [
+            {
+              "time": 0,
+              "value": 0,
+              "curve": "easeInOut"
+            },
+            {
+              "time": 0.12,
+              "value": 0,
+              "curve": "easeInOut"
+            },
+            {
+              "time": 0.29,
+              "value": 1,
+              "curve": "easeInOut"
+            },
+            {
+              "time": 1,
+              "value": 0,
+              "curve": "linear"
+            }
+          ]
+        }
+      ],
+      "version": 1
+    },
+    {
+      "id": "effect-1789708580042-6",
+      "name": "Star",
+      "attachBone": "world",
+      "positionOffset": [
+        0,
+        1.185,
+        0
+      ],
+      "rotationOffset": [
+        0,
+        0,
+        0
+      ],
+      "scale": 1,
+      "duration": 2,
+      "enabled": true,
+      "particles": [
+        {
+          "id": "particle-1789708595373-0",
+          "name": "Particle 1",
+          "enabled": true,
+          "positionOffset": [
+            0,
+            0,
+            0
+          ],
+          "rotationOffset": [
+            90,
+            0,
+            0
+          ],
+          "scale": 1,
+          "loop": false,
+          "count": [
+            50,
+            50
+          ],
+          "shape": "texture",
+          "texture": {
+            "image": "effStar.png",
+            "sourceType": "bitmap",
+            "colorMode": "particleColor",
+            "atlas": {
+              "columns": 1,
+              "rows": 1,
+              "aspectRatio": 1,
+              "spriteMode": "random"
+            },
+            "pivot": [
+              0.5,
+              0.5
+            ]
+          },
+          "billboard": true,
+          "burst": false,
+          "colorSlots": [
+            "#ffb300",
+            "#2bff00",
+            "#fff700",
+            "#c800ff"
+          ],
+          "spread": 2,
+          "spreadMode": "billboardPlane",
+          "emitterRadiusEnabled": true,
+          "emitterRadius": 0,
+          "radialMaskEnabled": false,
+          "radialMaskDiameter": 0.5,
+          "speed": [
+            1,
+            3
+          ],
+          "drag": 5,
+          "gravity": 0,
+          "driftEnabled": false,
+          "driftStrength": 0.2,
+          "driftFallSpeedRef": 2,
+          "driftFrequency": 1.5,
+          "rotation": [
+            0,
+            360
+          ],
+          "alignToVelocity": false,
+          "angularVelocity": [
+            [
+              0,
+              500
+            ],
+            [
+              0,
+              500
+            ],
+            [
+              -300,
+              300
+            ]
+          ],
+          "angularVelocityEnabled": [
+            false,
+            false,
+            true
+          ],
+          "angularDrag": 1,
+          "stopWhenSlow": true,
+          "stopSpeedThreshold": 0.01,
+          "size": [
+            0.04,
+            0.1
+          ],
+          "lifetime": [
+            0.3,
+            1
+          ],
+          "renderQueue": "beforeModel",
+          "blending": "normal",
+          "seedMode": "time",
+          "seed": 12345,
+          "emissionGraph": [
+            {
+              "time": 0,
+              "value": 50,
+              "curve": "easeIn"
+            },
+            {
+              "time": 0.52,
+              "value": 0,
+              "curve": "linear"
+            },
+            {
+              "time": 1,
+              "value": 0,
+              "curve": "linear"
+            }
+          ],
+          "sizeGraph": [
+            {
+              "time": 0,
+              "value": 1,
+              "curve": "linear"
+            },
+            {
+              "time": 1,
+              "value": 1,
+              "curve": "linear"
+            }
+          ],
+          "opacityGraph": [
+            {
+              "time": 0,
+              "value": 1,
+              "curve": "linear"
+            },
+            {
+              "time": 0.52,
+              "value": 1,
+              "curve": "easeInOut"
+            },
+            {
+              "time": 1,
+              "value": 0,
+              "curve": "linear"
+            }
+          ]
+        }
+      ],
+      "version": 1
+    },
+    {
+      "id": "effect-1789709785548-7",
+      "name": "TwinkleBurst",
+      "attachBone": "world",
+      "positionOffset": [
+        0,
+        1.466,
+        0
+      ],
+      "rotationOffset": [
+        0,
+        0,
+        0
+      ],
+      "scale": 1,
+      "duration": 1,
+      "enabled": true,
+      "particles": [
+        {
+          "id": "particle-1789709809944-0",
+          "name": "Particle 1",
+          "enabled": true,
+          "positionOffset": [
+            0,
+            0,
+            0
+          ],
+          "rotationOffset": [
+            90,
+            0,
+            0
+          ],
+          "scale": 1,
+          "loop": false,
+          "count": [
+            40,
+            50
+          ],
+          "shape": "texture",
+          "texture": {
+            "image": "effTwinkle.png",
+            "sourceType": "bitmap",
+            "colorMode": "particleColor",
+            "atlas": {
+              "columns": 1,
+              "rows": 1,
+              "aspectRatio": 1,
+              "spriteMode": "random"
+            },
+            "pivot": [
+              0.5,
+              0.5
+            ]
+          },
+          "billboard": true,
+          "burst": true,
+          "colorSlots": [
+            "#ffea00"
+          ],
+          "spread": 4,
+          "spreadMode": "3d",
+          "emitterRadiusEnabled": true,
+          "emitterRadius": 0,
+          "radialMaskEnabled": false,
+          "radialMaskDiameter": 0.5,
+          "speed": [
+            0.5,
+            0.5
+          ],
+          "drag": 4,
+          "gravity": 0,
+          "driftEnabled": false,
+          "driftStrength": 0.2,
+          "driftFallSpeedRef": 2,
+          "driftFrequency": 1.5,
+          "rotation": [
+            45,
+            45
+          ],
+          "alignToVelocity": false,
+          "angularVelocity": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ]
+          ],
+          "angularVelocityEnabled": [
+            false,
+            false,
+            false
+          ],
+          "angularDrag": 0,
+          "stopWhenSlow": true,
+          "stopSpeedThreshold": 0.01,
+          "size": [
+            0.02,
+            0.05
+          ],
+          "lifetime": [
+            0.6,
+            1.2
+          ],
+          "renderQueue": "afterModel",
+          "blending": "add",
+          "seedMode": "time",
+          "seed": 12345,
+          "emissionGraph": [
+            {
+              "time": 0,
+              "value": 80,
+              "curve": "linear"
+            },
+            {
+              "time": 1,
+              "value": 80,
+              "curve": "linear"
+            }
+          ],
+          "sizeGraph": [
+            {
+              "time": 0,
+              "value": 1,
+              "curve": "linear"
+            },
+            {
+              "time": 1,
+              "value": 1,
+              "curve": "linear"
+            }
+          ],
+          "opacityGraph": [
+            {
+              "time": 0,
+              "value": 1,
+              "curve": "step"
+            },
+            {
+              "time": 0.24,
+              "value": 0.74,
+              "curve": "step"
+            },
+            {
+              "time": 0.33,
+              "value": 1,
+              "curve": "step"
+            },
+            {
+              "time": 0.51,
+              "value": 0.5,
+              "curve": "step"
+            },
+            {
+              "time": 0.6,
+              "value": 1,
+              "curve": "step"
+            },
+            {
+              "time": 0.73,
+              "value": 0,
+              "curve": "step"
+            },
+            {
+              "time": 0.84,
+              "value": 0.48,
+              "curve": "step"
+            },
+            {
+              "time": 0.96,
+              "value": 0,
+              "curve": "step"
+            },
+            {
+              "time": 1,
+              "value": 0,
+              "curve": "linear"
+            }
+          ]
+        }
+      ],
+      "version": 1
+    },
+    {
+      "id": "effect-1789951949419-8",
+      "name": "Star2",
+      "attachBone": "world",
+      "positionOffset": [
+        0,
+        1.185,
+        0
+      ],
+      "rotationOffset": [
+        0,
+        0,
+        0
+      ],
+      "scale": 1,
+      "duration": 2,
+      "enabled": true,
+      "particles": [
+        {
+          "id": "particle-1789951949420-8-0",
+          "name": "Particle 1",
+          "enabled": true,
+          "positionOffset": [
+            0,
+            0,
+            0
+          ],
+          "rotationOffset": [
+            90,
+            0,
+            0
+          ],
+          "scale": 1,
+          "loop": false,
+          "count": [
+            50,
+            50
+          ],
+          "shape": "texture",
+          "texture": {
+            "image": "effStar.png",
+            "sourceType": "bitmap",
+            "colorMode": "particleColor",
+            "atlas": {
+              "columns": 1,
+              "rows": 1,
+              "aspectRatio": 1,
+              "spriteMode": "random"
+            },
+            "pivot": [
+              0.5,
+              0.5
+            ]
+          },
+          "billboard": true,
+          "burst": false,
+          "colorSlots": [
+            "#ffb300",
+            "#2bff00",
+            "#fff700",
+            "#c800ff"
+          ],
+          "spread": 2,
+          "spreadMode": "billboardPlane",
+          "emitterRadiusEnabled": true,
+          "emitterRadius": 0,
+          "radialMaskEnabled": false,
+          "radialMaskDiameter": 0.5,
+          "speed": [
+            1,
+            3
+          ],
+          "drag": 5,
+          "gravity": 0,
+          "driftEnabled": false,
+          "driftStrength": 0.2,
+          "driftFallSpeedRef": 2,
+          "driftFrequency": 1.5,
+          "rotation": [
+            0,
+            360
+          ],
+          "alignToVelocity": false,
+          "angularVelocity": [
+            [
+              0,
+              500
+            ],
+            [
+              0,
+              500
+            ],
+            [
+              -300,
+              300
+            ]
+          ],
+          "angularVelocityEnabled": [
+            false,
+            false,
+            true
+          ],
+          "angularDrag": 1,
+          "stopWhenSlow": true,
+          "stopSpeedThreshold": 0.01,
+          "size": [
+            0.04,
+            0.1
+          ],
+          "lifetime": [
+            0.3,
+            1
+          ],
+          "renderQueue": "beforeModel",
+          "blending": "normal",
+          "seedMode": "time",
+          "seed": 12345,
+          "emissionGraph": [
+            {
+              "time": 0,
+              "value": 50,
+              "curve": "easeIn"
+            },
+            {
+              "time": 0.52,
+              "value": 0,
+              "curve": "linear"
+            },
+            {
+              "time": 1,
+              "value": 0,
+              "curve": "linear"
+            }
+          ],
+          "sizeGraph": [
+            {
+              "time": 0,
+              "value": 1,
+              "curve": "linear"
+            },
+            {
+              "time": 1,
+              "value": 1,
+              "curve": "linear"
+            }
+          ],
+          "opacityGraph": [
+            {
+              "time": 0,
+              "value": 1,
+              "curve": "linear"
+            },
+            {
+              "time": 0.52,
               "value": 1,
               "curve": "easeInOut"
             },

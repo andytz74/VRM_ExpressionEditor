@@ -3,141 +3,7 @@
   "type": "vrm-emotion-linker2-meta",
   "motionSlots": [
     {
-      "id": "motion-slot-1787273330073-1",
-      "title": "A0_1 대기",
-      "animationFile": "a0_1.vrma",
-      "expressionPresetId": "emotion-1785207956456-10",
-      "expressionPresetName": "mapNeutral+1",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": true,
-      "transitionSeconds": 0.2,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787559097930-7",
-      "title": "A0_3 대기",
-      "animationFile": "a0_3.vrma",
-      "expressionPresetId": "emotion-1785207956456-10",
-      "expressionPresetName": "mapNeutral+1",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": true,
-      "transitionSeconds": 0.4,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787558646989-6",
-      "title": "A0_2 대기",
-      "animationFile": "a0_2.vrma",
-      "expressionPresetId": "emotion-1785207957925-11",
-      "expressionPresetName": "Neutral-1",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": true,
-      "transitionSeconds": 0.5,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787532670118-5",
-      "title": "A0_4 대기 - 각성",
-      "animationFile": "a0_standSlantedL.vrma",
-      "expressionPresetId": "emotion-1787559476067-38",
-      "expressionPresetName": "Awake",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": true,
-      "transitionSeconds": 0.1,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787559401696-7",
-      "title": "A1 집중",
-      "animationFile": "a1.vrma",
-      "expressionPresetId": "emotion-1",
-      "expressionPresetName": "Focus",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": true,
-      "transitionSeconds": 0.3,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787559440854-8",
-      "title": "A2 긴장",
-      "animationFile": "a2.vrma",
-      "expressionPresetId": "emotion-2",
-      "expressionPresetName": "Tension",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": true,
-      "transitionSeconds": 0.3,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787559572713-9",
-      "title": "A3 좋았어!",
-      "animationFile": "a3.vrma",
-      "expressionPresetId": "emotion-4",
-      "expressionPresetName": "Joy",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": false,
-      "transitionSeconds": 0.1,
-      "expressionTimeline": [
-        {
-          "id": "motion-point-1788234167850-0",
-          "time": 1.2,
-          "expressionPresetId": "emotion-4",
-          "expressionPresetName": "Joy",
-          "expressionRangeId": "",
-          "expressionValue": 1,
-          "transitionSeconds": 0.1
-        },
-        {
-          "id": "motion-point-1788234174818-1",
-          "time": 2.1,
-          "expressionPresetId": "emotion-4",
-          "expressionPresetName": "Joy",
-          "expressionRangeId": "range-1785148625618-1",
-          "expressionValue": 0.4,
-          "transitionSeconds": 0.4
-        }
-      ]
-    },
-    {
-      "id": "motion-slot-1787561456897-11",
-      "title": "A4 작은박수",
-      "animationFile": "a4.vrma",
-      "expressionPresetId": "emotion-1785724085823-15",
-      "expressionPresetName": "gpt smile",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": false,
-      "transitionSeconds": 0.2,
-      "expressionTimeline": [
-        {
-          "id": "motion-point-1788234249012-0",
-          "time": 1.9,
-          "expressionPresetId": "emotion-1785724085823-15",
-          "expressionPresetName": "gpt smile",
-          "expressionRangeId": "",
-          "expressionValue": 1,
-          "transitionSeconds": 0.2
-        },
-        {
-          "id": "motion-point-1788234251705-1",
-          "time": 3.3,
-          "expressionPresetId": "emotion-1787789093101-56",
-          "expressionPresetName": "mapWarm",
-          "expressionRangeId": "",
-          "expressionValue": 1,
-          "transitionSeconds": 0.5
-        }
-      ]
-    },
-    {
-      "id": "motion-slot-1787561532993-12",
+      "id": "motion-slot-1787566035066-25",
       "title": "대기",
       "animationFile": "a0_standSlantedL.vrma",
       "expressionPresetId": "emotion-1785207956456-10",
@@ -145,107 +11,7 @@
       "effectId": "",
       "effectStartTime": 0,
       "loop": false,
-      "transitionSeconds": 0.4,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787559589231-10",
-      "title": "A5 안심",
-      "animationFile": "a5.vrma",
-      "expressionPresetId": "emotion-5",
-      "expressionPresetName": "Relief",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": false,
-      "transitionSeconds": 0.4,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787273299377-0",
-      "title": "놀람",
-      "animationFile": "a6.vrma",
-      "expressionPresetId": "emotion-1787462525809-37",
-      "expressionPresetName": "Surprise 2",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": false,
       "transitionSeconds": 0.2,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787563361482-13",
-      "title": "A0_2 대기",
-      "animationFile": "a0_2.vrma",
-      "expressionPresetId": "emotion-1785898910069-21",
-      "expressionPresetName": "mapDisappoint",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": true,
-      "transitionSeconds": 0.3,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787564480385-15",
-      "title": "A0_1 대기",
-      "animationFile": "a0_1.vrma",
-      "expressionPresetId": "emotion-0",
-      "expressionPresetName": "Neutral0",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": true,
-      "transitionSeconds": 0.5,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787564405448-14",
-      "title": "SA0 소셜인사",
-      "animationFile": "SA0.vrma",
-      "expressionPresetId": "emotion-1785723926871-14",
-      "expressionPresetName": "mapJoy",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": false,
-      "transitionSeconds": 0.2,
-      "expressionTimeline": [
-        {
-          "id": "motion-point-1788912773707-0",
-          "time": 1.6,
-          "expressionPresetId": "emotion-1785723926871-14",
-          "expressionPresetName": "mapJoy",
-          "expressionRangeId": "",
-          "expressionValue": 1,
-          "transitionSeconds": 0.2
-        },
-        {
-          "id": "motion-point-1788913144789-2",
-          "time": 1.6,
-          "expressionPresetId": "emotion-1785723926871-14",
-          "expressionPresetName": "mapJoy",
-          "expressionRangeId": "",
-          "expressionValue": 1,
-          "transitionSeconds": 0.2
-        },
-        {
-          "id": "motion-point-1788912775173-1",
-          "time": 3.1,
-          "expressionPresetId": "emotion-2",
-          "expressionPresetName": "Tension",
-          "expressionRangeId": "",
-          "expressionValue": 1,
-          "transitionSeconds": 0.2
-        }
-      ]
-    },
-    {
-      "id": "motion-slot-1787564539747-16",
-      "title": "SA1 듣는중",
-      "animationFile": "SA1.vrma",
-      "expressionPresetId": "emotion-1786617942344-31",
-      "expressionPresetName": "s1_listening",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": false,
-      "transitionSeconds": 0.3,
       "expressionTimeline": []
     },
     {
@@ -269,18 +35,6 @@
           "transitionSeconds": 0.2
         }
       ]
-    },
-    {
-      "id": "motion-slot-1787564893667-17",
-      "title": "SA5 끄덕임",
-      "animationFile": "SA5.vrma",
-      "expressionPresetId": "emotion-7",
-      "expressionPresetName": "Warm Smile",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": true,
-      "transitionSeconds": 0.2,
-      "expressionTimeline": []
     },
     {
       "id": "motion-slot-1787531338223-3",
@@ -312,149 +66,6 @@
           "transitionSeconds": 0.2
         }
       ]
-    },
-    {
-      "id": "motion-slot-1787564992033-18",
-      "title": "SA3 박수",
-      "animationFile": "SA3.vrma",
-      "expressionPresetId": "emotion-1785901115339-23",
-      "expressionPresetName": "mapSinnam",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": false,
-      "transitionSeconds": 0.1,
-      "expressionTimeline": [
-        {
-          "id": "motion-point-1788902026359-0",
-          "time": 0,
-          "expressionPresetId": "emotion-1785901115339-23",
-          "expressionPresetName": "mapSinnam",
-          "expressionRangeId": "",
-          "expressionValue": 1,
-          "transitionSeconds": 0.2
-        },
-        {
-          "id": "motion-point-1788902033954-1",
-          "time": 0.7,
-          "expressionPresetId": "emotion-1786618997455-33",
-          "expressionPresetName": "s4_playful",
-          "expressionRangeId": "",
-          "expressionValue": 1,
-          "transitionSeconds": 0.1
-        },
-        {
-          "id": "motion-point-1788902159082-2",
-          "time": 1.9,
-          "expressionPresetId": "emotion-1787789093101-56",
-          "expressionPresetName": "mapWarm",
-          "expressionRangeId": "",
-          "expressionValue": 1,
-          "transitionSeconds": 0.2
-        }
-      ]
-    },
-    {
-      "id": "motion-slot-1787565139128-19",
-      "title": "A0_3 대기",
-      "animationFile": "a0_3.vrma",
-      "expressionPresetId": "emotion-2",
-      "expressionPresetName": "Tension",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": true,
-      "transitionSeconds": 0.2,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787565188655-20",
-      "title": "etc 화남",
-      "animationFile": "a0_2.vrma",
-      "expressionPresetId": "emotion-1785743089433-16",
-      "expressionPresetName": "Angry",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": true,
-      "transitionSeconds": 0.2,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787565265486-21",
-      "title": "A0_2 대기",
-      "animationFile": "a0_2.vrma",
-      "expressionPresetId": "emotion-1785897820564-19",
-      "expressionPresetName": "gpt surprize",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": false,
-      "transitionSeconds": 0.2,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787565347073-22",
-      "title": "A0_3",
-      "animationFile": "a0_3.vrma",
-      "expressionPresetId": "emotion-1785724085823-15",
-      "expressionPresetName": "gpt smile",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": false,
-      "transitionSeconds": 0.2,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787565385274-23",
-      "title": "A0_3 대기",
-      "animationFile": "a0_3.vrma",
-      "expressionPresetId": "emotion-1785723926871-14",
-      "expressionPresetName": "mapJoy",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": true,
-      "transitionSeconds": 0.2,
-      "expressionTimeline": []
-    },
-    {
-      "id": "motion-slot-1787565413101-24",
-      "title": "SA6 파이팅",
-      "animationFile": "SA6.vrma",
-      "expressionPresetId": "emotion-1786619400843-35",
-      "expressionPresetName": "s6_encourage",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": false,
-      "transitionSeconds": 0.2,
-      "expressionTimeline": [
-        {
-          "id": "motion-point-1789024422936-1",
-          "time": 0.1,
-          "expressionPresetId": "emotion-1785210628762-12",
-          "expressionPresetName": "s3_happy",
-          "expressionRangeId": "",
-          "expressionValue": 1,
-          "transitionSeconds": 0.2
-        },
-        {
-          "id": "motion-point-1789024412136-0",
-          "time": 0.5,
-          "expressionPresetId": "emotion-1786619400843-35",
-          "expressionPresetName": "s6_encourage",
-          "expressionRangeId": "",
-          "expressionValue": 1,
-          "transitionSeconds": 0.2
-        }
-      ]
-    },
-    {
-      "id": "motion-slot-1787566035066-25",
-      "title": "대기",
-      "animationFile": "a0_standSlantedL.vrma",
-      "expressionPresetId": "emotion-1785207956456-10",
-      "expressionPresetName": "mapNeutral+1",
-      "effectId": "",
-      "effectStartTime": 0,
-      "loop": false,
-      "transitionSeconds": 0.2,
-      "expressionTimeline": []
     },
     {
       "id": "motion-slot-1789001845503-26",
@@ -495,6 +106,554 @@
           "transitionSeconds": 0.2
         }
       ]
+    },
+    {
+      "id": "motion-slot-1787565413101-24",
+      "title": "파이팅",
+      "animationFile": "SA6.vrma",
+      "expressionPresetId": "emotion-1786619400843-35",
+      "expressionPresetName": "s6_encourage",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": [
+        {
+          "id": "motion-point-1789024422936-1",
+          "time": 0.1,
+          "expressionPresetId": "emotion-1785210628762-12",
+          "expressionPresetName": "s3_happy",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        },
+        {
+          "id": "motion-point-1789024412136-0",
+          "time": 0.5,
+          "expressionPresetId": "emotion-1786619400843-35",
+          "expressionPresetName": "s6_encourage",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        }
+      ]
+    },
+    {
+      "id": "motion-slot-1787561532993-12",
+      "title": "A0_1",
+      "animationFile": "a0_standSlantedL.vrma",
+      "expressionPresetId": "emotion-1785207956456-10",
+      "expressionPresetName": "mapNeutral+1",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.4,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787565139128-19",
+      "title": "A0_2",
+      "animationFile": "a0_3.vrma",
+      "expressionPresetId": "emotion-2",
+      "expressionPresetName": "Tension",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": true,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787565265486-21",
+      "title": "A0_3",
+      "animationFile": "a0_2.vrma",
+      "expressionPresetId": "emotion-1785207956456-10",
+      "expressionPresetName": "mapNeutral+1",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787564539747-16",
+      "title": "A1",
+      "animationFile": "SA1.vrma",
+      "expressionPresetId": "emotion-1786617942344-31",
+      "expressionPresetName": "s1_listening",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.3,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787564893667-17",
+      "title": "A2",
+      "animationFile": "SA5.vrma",
+      "expressionPresetId": "emotion-7",
+      "expressionPresetName": "Warm Smile",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": true,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787561456897-11",
+      "title": "A4_1",
+      "animationFile": "a4.vrma",
+      "expressionPresetId": "emotion-1785724085823-15",
+      "expressionPresetName": "gpt smile",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": [
+        {
+          "id": "motion-point-1788234249012-0",
+          "time": 1.9,
+          "expressionPresetId": "emotion-1785724085823-15",
+          "expressionPresetName": "gpt smile",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        },
+        {
+          "id": "motion-point-1788234251705-1",
+          "time": 3.3,
+          "expressionPresetId": "emotion-1787789093101-56",
+          "expressionPresetName": "mapWarm",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.5
+        }
+      ]
+    },
+    {
+      "id": "motion-slot-1787564992033-18",
+      "title": "A4_2",
+      "animationFile": "SA3.vrma",
+      "expressionPresetId": "emotion-1785901115339-23",
+      "expressionPresetName": "mapSinnam",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.1,
+      "expressionTimeline": [
+        {
+          "id": "motion-point-1788902026359-0",
+          "time": 0,
+          "expressionPresetId": "emotion-1785901115339-23",
+          "expressionPresetName": "mapSinnam",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        },
+        {
+          "id": "motion-point-1788902033954-1",
+          "time": 0.7,
+          "expressionPresetId": "emotion-1786618997455-33",
+          "expressionPresetName": "s4_playful",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.1
+        },
+        {
+          "id": "motion-point-1788902159082-2",
+          "time": 1.9,
+          "expressionPresetId": "emotion-1787789093101-56",
+          "expressionPresetName": "mapWarm",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.2
+        }
+      ]
+    },
+    {
+      "id": "motion-slot-1787565385274-23",
+      "title": "A5",
+      "animationFile": "a5.vrma",
+      "expressionPresetId": "emotion-1790341085319-67",
+      "expressionPresetName": "Relief2",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1790341357333-41",
+      "title": "A6",
+      "animationFile": "a6_1.vrma",
+      "expressionPresetId": "emotion-3",
+      "expressionPresetName": "Surprise",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787564405448-14",
+      "title": "A7",
+      "animationFile": "SA0.vrma",
+      "expressionPresetId": "emotion-1785723926871-14",
+      "expressionPresetName": "mapJoy",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": [
+        {
+          "id": "motion-point-1788912773707-0",
+          "time": 1.1,
+          "expressionPresetId": "emotion-4",
+          "expressionPresetName": "Joy",
+          "expressionRangeId": "range-1785148625618-1",
+          "expressionValue": 0.4,
+          "transitionSeconds": 0.2
+        },
+        {
+          "id": "motion-point-1788913144789-2",
+          "time": 3.1,
+          "expressionPresetId": "emotion-4",
+          "expressionPresetName": "Joy",
+          "expressionRangeId": "range-1785148483545-0",
+          "expressionValue": 0,
+          "transitionSeconds": 0.8
+        }
+      ]
+    },
+    {
+      "id": "motion-slot-1790129214728-27",
+      "title": "cm_01",
+      "animationFile": "cm_vrma_01.vrma",
+      "expressionPresetId": "emotion-1790131542402-58",
+      "expressionPresetName": "cm_01",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1790133316467-28",
+      "title": "cm_02",
+      "animationFile": "cm_vrma_02.vrma",
+      "expressionPresetId": "emotion-1790131542402-58",
+      "expressionPresetName": "cm_01",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1790139687967-29",
+      "title": "cm_03",
+      "animationFile": "cm_vrma_03.vrma",
+      "expressionPresetId": "emotion-1790139358598-60",
+      "expressionPresetName": "cm_03",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1790162462426-30",
+      "title": "cm_04",
+      "animationFile": "cm_vrma_04.vrma",
+      "expressionPresetId": "emotion-1790133424011-59",
+      "expressionPresetName": "cm_02",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1790240859901-31",
+      "title": "cm_05",
+      "animationFile": "cm_vrma_05.vrma",
+      "expressionPresetId": "emotion-1790133424011-59",
+      "expressionPresetName": "cm_02",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1790260686685-35",
+      "title": "cm_06",
+      "animationFile": "cm_vrma_06.vrma",
+      "expressionPresetId": "emotion-1790265398161-63",
+      "expressionPresetName": "cm_06",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1790241824334-32",
+      "title": "cm_07",
+      "animationFile": "cm_vrma_07.vrma",
+      "expressionPresetId": "emotion-2",
+      "expressionPresetName": "Tension",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1790256145844-33",
+      "title": "cm_08",
+      "animationFile": "cm_vrma_08.vrma",
+      "expressionPresetId": "emotion-1790256030048-61",
+      "expressionPresetName": "cm_08",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1790260527917-34",
+      "title": "cm_09",
+      "animationFile": "cm_vrma_09.vrma",
+      "expressionPresetId": "emotion-1790260398453-62",
+      "expressionPresetName": "cm_09",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1790268607301-36",
+      "title": "cm_10",
+      "animationFile": "cm_vrma_06.vrma",
+      "expressionPresetId": "emotion-1790268457317-64",
+      "expressionPresetName": "cm_10",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1790273427374-37",
+      "title": "cm_11",
+      "animationFile": "cm_vrma_11.vrma",
+      "expressionPresetId": "emotion-1790131542402-58",
+      "expressionPresetName": "cm_01",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1790274549398-38",
+      "title": "cm_12",
+      "animationFile": "cm_vrma_12.vrma",
+      "expressionPresetId": "emotion-1790274446170-65",
+      "expressionPresetName": "cm_12",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1790275978833-39",
+      "title": "cm_13",
+      "animationFile": "cm_vrma_13.vrma",
+      "expressionPresetId": "emotion-1790275814132-66",
+      "expressionPresetName": "cm_13",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1790276163200-40",
+      "title": "cm_14",
+      "animationFile": "cm_vrma_14.vrma",
+      "expressionPresetId": "emotion-2",
+      "expressionPresetName": "Tension",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787273330073-1",
+      "title": "E0_1",
+      "animationFile": "a0_1.vrma",
+      "expressionPresetId": "emotion-1785207956456-10",
+      "expressionPresetName": "mapNeutral+1",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": true,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787559097930-7",
+      "title": "E0_2",
+      "animationFile": "a0_3.vrma",
+      "expressionPresetId": "emotion-1785207956456-10",
+      "expressionPresetName": "mapNeutral+1",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": true,
+      "transitionSeconds": 0.4,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787558646989-6",
+      "title": "E0_3",
+      "animationFile": "a0_2.vrma",
+      "expressionPresetId": "emotion-1785207957925-11",
+      "expressionPresetName": "Neutral-1",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": true,
+      "transitionSeconds": 0.5,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787532670118-5",
+      "title": "E0_4",
+      "animationFile": "a0_standSlantedL.vrma",
+      "expressionPresetId": "emotion-1787559476067-38",
+      "expressionPresetName": "Awake",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": true,
+      "transitionSeconds": 0.1,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787559401696-7",
+      "title": "E1",
+      "animationFile": "a1.vrma",
+      "expressionPresetId": "emotion-1",
+      "expressionPresetName": "Focus",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": true,
+      "transitionSeconds": 0.3,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787559440854-8",
+      "title": "E2",
+      "animationFile": "a2.vrma",
+      "expressionPresetId": "emotion-2",
+      "expressionPresetName": "Tension",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": true,
+      "transitionSeconds": 0.3,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787273299377-0",
+      "title": "E3",
+      "animationFile": "a6.vrma",
+      "expressionPresetId": "emotion-1787462525809-37",
+      "expressionPresetName": "Surprise 2",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787559572713-9",
+      "title": "E4",
+      "animationFile": "a3.vrma",
+      "expressionPresetId": "emotion-4",
+      "expressionPresetName": "Joy",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.1,
+      "expressionTimeline": [
+        {
+          "id": "motion-point-1788234167850-0",
+          "time": 1.2,
+          "expressionPresetId": "emotion-4",
+          "expressionPresetName": "Joy",
+          "expressionRangeId": "",
+          "expressionValue": 1,
+          "transitionSeconds": 0.1
+        },
+        {
+          "id": "motion-point-1788234174818-1",
+          "time": 2.1,
+          "expressionPresetId": "emotion-4",
+          "expressionPresetName": "Joy",
+          "expressionRangeId": "range-1785148625618-1",
+          "expressionValue": 0.4,
+          "transitionSeconds": 0.4
+        }
+      ]
+    },
+    {
+      "id": "motion-slot-1787559589231-10",
+      "title": "E5",
+      "animationFile": "a5.vrma",
+      "expressionPresetId": "emotion-5",
+      "expressionPresetName": "Relief",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.4,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787563361482-13",
+      "title": "E6",
+      "animationFile": "a0_standSlantedL.vrma",
+      "expressionPresetId": "emotion-6",
+      "expressionPresetName": "Disappointed",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": true,
+      "transitionSeconds": 0.3,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787564480385-15",
+      "title": "E7",
+      "animationFile": "a0_1.vrma",
+      "expressionPresetId": "emotion-7",
+      "expressionPresetName": "Warm Smile",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": true,
+      "transitionSeconds": 0.5,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1787565188655-20",
+      "title": "etc 화남",
+      "animationFile": "a0_2.vrma",
+      "expressionPresetId": "emotion-1785743089433-16",
+      "expressionPresetName": "Angry",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": true,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
     }
   ]
 }

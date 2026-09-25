@@ -30,6 +30,9 @@ npm start
 
 - [VRM Expression Editor Frontend Runtime Guide](docs/VRM_ExpressionEditor_Frontend_Runtime_Guide.pdf)
 - [Resource Reference Rules](docs/RESOURCE_REFERENCE_RULES.md)
+- [Emotion Linker 2 Frontend Runtime Spec](docs/EMOTION_LINKER2_RUNTIME_SPEC.md)
+- [Effect Runtime Spec](docs/EFFECT_RUNTIME_SPEC.md)
+- [Look At Camera Runtime Spec](docs/LOOK_AT_CAMERA_RUNTIME_SPEC.md)
 
 런타임 가이드 PDF에는 다음 내용이 정리되어 있습니다.
 
@@ -81,7 +84,7 @@ VRM 휴머노이드 본이 아닌 추가 본을 특정 휴머노이드 본의 �
 
 모션 슬롯 단위로 애니메이션과 표정 프리셋을 연결해서 확인하는 view only 모드입니다.
 
-슬롯 제목, 애니메이션 파일, 표정 프리셋, loop, transition 값을 관리합니다. 이 정보는 `emotionLinker/emotion-linker2.meta`에 저장됩니다.
+슬롯 제목, 애니메이션 파일, 표정 프리셋과 시간축 전환, 파티클 이펙트, loop, transition 값을 관리합니다. 이 정보는 `emotionLinker/emotion-linker2.meta`에 저장됩니다. 프런트에서는 슬롯 제목을 호출해 설정된 애니메이션, 표정, 이펙트 시퀀스를 함께 재생합니다.
 
 ### Transition Viewer
 

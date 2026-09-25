@@ -64,6 +64,14 @@ function effectsMetaPath() {
   return path.join(effectsDir(), "effects.meta");
 }
 
+function spaceDir() {
+  return path.join(__dirname, "..", "spaces");
+}
+
+function spaceMetaPath() {
+  return path.join(spaceDir(), "space.meta");
+}
+
 function emotionLinkerDir() {
   return path.join(__dirname, "..", "emotionLinker");
 }
@@ -612,6 +620,26 @@ ipcMain.handle("effects:loadOrCreate", async (_event, data) => {
 ipcMain.handle("effects:save", async (_event, data) => {
   await fs.mkdir(effectsDir(), { recursive: true });
   const filePath = effectsMetaPath();
+  await fs.writeFile(filePath, data, "utf8");
+  return { filePath, name: path.basename(filePath) };
+});
+
+ipcMain.handle("space:loadOrCreate", async (_event, data) => {
+  await fs.mkdir(spaceDir(), { recursive: true });
+  const filePath = spaceMetaPath();
+  try {
+    const existing = await fs.readFile(filePath);
+    return { filePath, name: path.basename(filePath), data: existing, created: false };
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    await fs.writeFile(filePath, data, "utf8");
+    return { filePath, name: path.basename(filePath), data: Buffer.from(data, "utf8"), created: true };
+  }
+});
+
+ipcMain.handle("space:save", async (_event, data) => {
+  await fs.mkdir(spaceDir(), { recursive: true });
+  const filePath = spaceMetaPath();
   await fs.writeFile(filePath, data, "utf8");
   return { filePath, name: path.basename(filePath) };
 });

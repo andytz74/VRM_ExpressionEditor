@@ -1,12 +1,12 @@
 # Effect Runtime Spec
 
-Updated: 2026-09-13
+Updated: 2026-09-26
 
 이 문서는 VRM Expression Editor의 Effect Editor에서 만든 `effects/effects.meta`를 프론트/익스텐션 런타임에서 재현하기 위한 구현 기준이다.
 
-현재 프론트 구현 대상은 `effects/effects.meta`의 이펙트 재생이다.
+이 문서는 `effects/effects.meta`의 이펙트 재생을 정의한다.
 
-`emotionLinker/emotion-linker2.meta`에 추가된 이펙트 연결 필드는 아직 프론트에서 재현할 내용이 아니며, 이 문서에서는 참고사항으로만 다룬다.
+Emotion Linker 2에서 애니메이션, 표정, 이펙트를 함께 재생하는 기능도 프론트 구현 대상이다. 슬롯 이름 호출과 전체 시퀀스 규칙은 `docs/EMOTION_LINKER2_RUNTIME_SPEC.md`를 따른다.
 
 ## 1. 파일 위치
 
@@ -435,11 +435,9 @@ multiply -> multiply blending
 
 블렌딩은 Effect Slot 단위가 아니라 Particle Slot 단위로 적용한다.
 
-## 13. Emotion Linker 2 연동 참고사항
+## 13. Emotion Linker 2 연동
 
-현재 프론트/익스텐션의 필수 구현 대상은 `effects/effects.meta`의 이펙트 단독 재현이다.
-
-다만 `emotionLinker/emotion-linker2.meta`에는 애니메이션, 표정, 이펙트를 하나의 모션 슬롯으로 묶어 재생할 수 있는 정보가 이미 준비되어 있다. 프론트에서 Emotion Linker 2 재생 기능을 구현하면, 에디터에서 설정한 대로 아래 세 가지를 함께 사용할 수 있다.
+`emotionLinker/emotion-linker2.meta`에는 애니메이션, 표정, 이펙트를 하나의 모션 슬롯으로 묶어 재생하는 정보가 준비되어 있다. 프론트는 에디터에서 설정한 아래 세 가지를 함께 재생한다.
 
 ```text
 VRMA animation
@@ -482,7 +480,7 @@ Emotion Linker 2의 슬롯은 대략 아래 구조를 가진다.
 
 ### 프론트 구현 흐름
 
-Emotion Linker 2를 프론트에서 구현할 경우, 슬롯 재생은 아래 순서로 처리한다.
+Emotion Linker 2 슬롯 재생은 아래 순서로 처리한다.
 
 ```text
 1. emotion-linker2.meta 로드
@@ -540,21 +538,9 @@ effect trigger time = effectStartTime
 
 이 경우 `a3_1.vrma` 재생을 시작하고 0.6초 뒤 `effect-1789020298667-1`을 재생한다.
 
-### 현재 구현 범위 구분
+Emotion Linker 2 연동은 프론트 구현 대상이다. `emotion-linker2.meta`를 읽고 슬롯 이름으로 호출하여 애니메이션 + 표정 + 이펙트를 에디터 설정 그대로 재생한다.
 
-이 문서 기준의 최소 구현:
-
-```text
-effects.meta를 읽고 playEffect(effectId)를 구현한다.
-```
-
-확장 구현:
-
-```text
-emotion-linker2.meta를 읽고 motion slot 재생 중 playEffect(slot.effectId)를 예약 호출한다.
-```
-
-따라서 Emotion Linker 2 연동은 현재 필수는 아니지만, 프론트에서 구현하면 애니메이션 + 표정 + 이펙트를 에디터 설정 그대로 호출할 수 있는 상태다.
+이 절의 이펙트 연결 필드 설명보다 `docs/EMOTION_LINKER2_RUNTIME_SPEC.md`의 전체 재생 수명주기와 취소 규칙을 우선한다.
 
 ## 14. 기본값
 

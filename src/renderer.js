@@ -6,6 +6,7 @@ import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from "@pixiv/three-vrm-animation";
 import {
+  ArrowDownAZ,
   ArrowLeft,
   Camera,
   Download,
@@ -121,6 +122,13 @@ const MIRROR_AXIS_SIGNS = {
 };
 
 const DEFAULT_EMOTION_PRESET_NAMES = ["Neutral", "Focus", "Tension", "Surprise", "Joy", "Relief", "Disappointed", "Warm Smile", "Joy"];
+const EXPRESSION_POSE_CONTROL_SPECS = [
+  { key: "headYaw", label: "Head L/R", min: -60, max: 60, step: 1, unit: "deg" },
+  { key: "eyeGazeX", label: "Eye L/R", min: -1, max: 1, step: 0.01, unit: "" },
+  { key: "eyeGazeY", label: "Eye U/D", min: -1, max: 1, step: 0.01, unit: "" },
+];
+const EXPRESSION_EYE_YAW_MAX = 30;
+const EXPRESSION_EYE_PITCH_MAX = 20;
 const EMOTION_GRAPH_WIDTH = 280;
 const EMOTION_GRAPH_HEIGHT = 148;
 const EFFECT_GRAPH_WIDTH = 280;
@@ -177,6 +185,10 @@ const state = {
   effects: createEmptyEffectsMeta(),
   effectsPath: null,
   effectsDirty: false,
+  space: createEmptySpaceMeta(),
+  spacePath: null,
+  spaceDirty: false,
+  spaceShowModel: true,
   selectedEffectId: null,
   selectedEffectParticleId: null,
   effectShowModel: true,
@@ -202,6 +214,7 @@ const state = {
   emotionImagePanelMinimized: false,
   selectedEmotionImageGraph: { graph: "scaleGraph", index: 0 },
   emotionImageAnimation: null,
+  emotionImageEffectPlayback: null,
   emotionMapActiveEmotionImage: null,
   emotionImagePivotPicking: false,
   screenshot: {
@@ -257,6 +270,7 @@ const state = {
   cameraSettingsOpen: null,
   cameraTransition: null,
   expressionParameterDraft: {},
+  expressionPoseDraft: createDefaultExpressionPoseControls(),
   expressionParameterDirty: false,
   expressionTransition: null,
   expressionDecay: null,
@@ -334,6 +348,8 @@ let animationMixer = null;
 let animationAction = null;
 let lastCorrectionBases = new Map();
 let lastExtraBoneFollowBases = new Map();
+let lastExpressionPoseBases = new Map();
+let expressionPoseBoneRestQuaternions = new WeakMap();
 let blushOverlay = null;
 let emotionImageOverlay = null;
 let emotionImageTransformControls = null;
@@ -342,11 +358,14 @@ let emotionImageHeadRotationOffset = null;
 let blushOverlayRequestId = 0;
 let emotionImageOverlayRequestId = 0;
 let propOverlay = null;
+const propOverlays = new Map();
+const propOverlayLoadPromises = new Map();
 let propTransformControls = null;
 let propTransformDragging = false;
 let effectPreview = null;
 let effectTransformControls = null;
 let effectTransformDragging = false;
+let spacePreview = null;
 const effectTextureCache = new Map();
 const effectTexturePreviewUrlCache = new Map();
 const effectTexturePreviewUrlLoaders = new Map();
@@ -369,7 +388,11 @@ const effectParticleXAxis = new THREE.Vector3(1, 0, 0);
 const effectParticleDirectionQuaternion = new THREE.Quaternion();
 const effectParticleVelocity = new THREE.Vector3();
 const effectParticleCameraPlaneVelocity = new THREE.Vector3();
+const effectParticlePlaneRight = new THREE.Vector3();
+const effectParticlePlaneUp = new THREE.Vector3();
+const effectParticleWorldScale = new THREE.Vector3();
 const effectParticleColor = new THREE.Color();
+const effectParticleNextColor = new THREE.Color();
 const emotionImageRollAxis = new THREE.Vector3(0, 0, 1);
 const emotionImageRollQuat = new THREE.Quaternion();
 const emotionImageRaycaster = new THREE.Raycaster();
@@ -387,6 +410,7 @@ function createDefaultEmotionPresets() {
     locked: false,
     isDisableBlink: false,
     parameters: {},
+    poseControls: createDefaultExpressionPoseControls(),
     rangeSlots: [],
     emotionImage: null,
   }));
@@ -490,7 +514,7 @@ function normalizeTransitionSequence(sequence) {
 
 function normalizeCameraPresets(presets) {
   const next = {};
-  for (const mode of ["transfer", "correction", "expression", "emotionMap", "effect", "linker", "linker2", "extraBone", "transitionViewer"]) {
+  for (const mode of ["transfer", "correction", "expression", "emotionMap", "effect", "space", "linker", "linker2", "extraBone", "transitionViewer"]) {
     const preset = presets?.[mode];
     if (!preset || typeof preset !== "object") continue;
     next[mode] = normalizeCameraPreset(preset);
@@ -512,6 +536,14 @@ function normalizeCameraPreset(preset) {
 function normalizeFiniteNumber(value, fallback) {
   const next = Number(value);
   return Number.isFinite(next) ? next : fallback;
+}
+
+function createDefaultExpressionPoseControls() {
+  return Object.fromEntries(EXPRESSION_POSE_CONTROL_SPECS.map(({ key }) => [key, { value: 0, mode: "offset" }]));
+}
+
+function createDefaultExpressionPoseBoneMapping() {
+  return { leftEye: "", rightEye: "" };
 }
 
 function isCompleteNumberInput(value) {
@@ -622,6 +654,7 @@ async function initialize() {
   applyViewerLightIntensity(state.config.viewer.lightIntensity);
   await refreshAnimationCatalog();
   await loadEffectsMeta();
+  await loadSpaceMeta();
   const names = getAnimationNames();
   state.selectedAnimationName = getDefaultAnimationName() ?? names[0] ?? null;
   await loadSelectedAnimation();
@@ -740,6 +773,7 @@ function getCharacterMetaFileName() {
 }
 
 function render() {
+  const editableFocus = captureEditableFocus();
   if (!app.innerHTML) {
     app.innerHTML = "";
   }
@@ -750,7 +784,8 @@ function render() {
     state.mode === "linker" ||
     state.mode === "linker2" ||
     state.mode === "emotionMap" ||
-    state.mode === "effect";
+    state.mode === "effect" ||
+    state.mode === "space";
   app.innerHTML = `
     <main class="app ${isExpressionLayout ? "expression-layout" : ""} ${isTransitionLayout ? "transition-layout" : ""} ${hasEmptyRightTray ? "empty-right-layout" : ""}">
       <aside class="sidebar">
@@ -765,6 +800,8 @@ function render() {
             ? renderEmotionMapPanel()
             : state.mode === "effect"
             ? renderEffectEditorPanel()
+            : state.mode === "space"
+            ? renderSpaceEditorPanel()
             : state.mode === "extraBone"
             ? renderExtraBoneFollowPanel()
             : state.mode === "transitionViewer"
@@ -777,7 +814,7 @@ function render() {
       <section class="viewer">
         <div id="canvasHost"></div>
         ${renderCameraSettingsPanel()}
-        ${state.filePath || state.mode === "effect" ? "" : renderDropHint()}
+        ${state.filePath || state.mode === "effect" || state.mode === "space" ? "" : renderDropHint()}
         ${renderStatusPill()}
         ${renderScreenshotTools()}
         ${renderScreenshotSelectionOverlay()}
@@ -803,6 +840,8 @@ function render() {
           ? renderEmotionMapRightTray()
           : state.mode === "effect"
           ? renderEffectRightTray()
+          : state.mode === "space"
+          ? renderSpaceRightTray()
           : state.mode === "linker" || state.mode === "linker2"
           ? renderEmptyRightTray()
           : ""
@@ -815,6 +854,7 @@ function render() {
   bindUi();
   syncEffectTexturePreviewImages();
   resize();
+  restoreEditableFocus(editableFocus);
 }
 
 function attachHeaderMetaButtons() {
@@ -906,6 +946,108 @@ function renderEffectRestartControl() {
         <strong data-effect-live-count>${getEffectPreviewAliveCount()}</strong>
         <span>particles</span>
       </div>
+    </div>
+  `;
+}
+
+function renderSpaceRightTray() {
+  const room = getActiveSpaceRoom();
+  return `
+    <aside class="mode-empty-tray effect-right-tray space-right-tray">
+      <div class="effect-right-head">
+        <strong>Space Settings</strong>
+        <label class="effect-model-toggle" title="VRM 모델 표시">
+          <input type="checkbox" id="toggleSpaceModelVisible" ${state.spaceShowModel ? "checked" : ""} ${currentVrm ? "" : "disabled"} />
+          Model
+        </label>
+      </div>
+      <div class="effect-settings-area">
+        ${renderSpaceRoomSettings(room)}
+      </div>
+    </aside>
+  `;
+}
+
+function renderSpaceRoomSettings(room) {
+  return `
+    <div class="correction-card effect-settings-card space-settings-card">
+      <div class="correction-card-head">
+        <strong>Cube Room</strong>
+        <span class="parameter-meta">code generated</span>
+      </div>
+      <label>
+        Space Name
+        <input type="text" value="${escapeHtml(room.name)}" data-space-name />
+      </label>
+      <label class="effect-enabled-row">
+        <input type="checkbox" data-space-enabled ${room.enabled ? "checked" : ""} />
+        Enabled in preview
+      </label>
+      <div class="effect-setting-label-row">
+        <strong>Room Size</strong>
+      </div>
+      <div class="effect-vector-grid">
+        ${[
+          ["Width", "width", room.size[0]],
+          ["Height", "height", room.size[1]],
+          ["Depth", "depth", room.size[2]],
+        ]
+          .map(
+            ([label, key, value]) => `
+              <label>
+                ${escapeHtml(label)}
+                <input type="number" min="0.5" max="20" step="0.1" value="${roundForInput(value)}" data-space-number="${escapeHtml(key)}" />
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="effect-setting-label-row">
+        <strong>Position</strong>
+      </div>
+      <div class="effect-vector-grid">
+        ${["X", "Y", "Z"]
+          .map(
+            (axis, index) => `
+              <label>
+                ${axis}
+                <input type="number" step="0.01" value="${roundForInput(room.position[index])}" data-space-vector="position" data-axis="${index}" />
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="effect-setting-label-row">
+        <strong>Rotation</strong>
+      </div>
+      <div class="effect-vector-grid">
+        ${["X", "Y", "Z"]
+          .map(
+            (axis, index) => `
+              <label>
+                ${axis}
+                <input type="number" step="0.1" value="${roundForInput(room.rotation[index])}" data-space-vector="rotation" data-axis="${index}" />
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
+      <label>
+        Wall Color
+        <input type="color" value="${escapeHtml(room.wallColor)}" data-space-color="wallColor" />
+      </label>
+      <label>
+        Floor Color
+        <input type="color" value="${escapeHtml(room.floorColor)}" data-space-color="floorColor" />
+      </label>
+      <label>
+        Opacity
+        <input type="number" min="0.05" max="1" step="0.01" value="${roundForInput(room.opacity)}" data-space-number="opacity" />
+      </label>
+      <label class="effect-enabled-row">
+        <input type="checkbox" data-space-grid ${room.grid ? "checked" : ""} />
+        Grid
+      </label>
     </div>
   `;
 }
@@ -1905,8 +2047,69 @@ function renderEmotionImageOverlayPanel() {
             : ""
         }
       </div>
+      ${renderEmotionImageEffectEditor(settings, selected.locked)}
       ${renderEmotionImageGraphEditor(settings, selected.locked)}
     </section>
+  `;
+}
+
+function renderEmotionImageEffectEditor(settings, disabled = false) {
+  const instance = normalizeEmotionImageEffect(settings?.effect);
+  const effects = normalizeEffectSlots(state.effects?.effects);
+  const selectedExists = instance && effects.some((effect) => effect.id === instance.effectId);
+  const options = [
+    `<option value="">No Effect</option>`,
+    ...effects.map(
+      (effect) =>
+        `<option value="${escapeHtml(effect.id)}" ${effect.id === instance?.effectId ? "selected" : ""}>${escapeHtml(effect.name)}</option>`,
+    ),
+  ];
+  if (instance && !selectedExists) {
+    options.push(`<option value="${escapeHtml(instance.effectId)}" selected>Missing Effect</option>`);
+  }
+  return `
+    <div class="emotion-image-effect-editor ${instance ? "active" : ""}">
+      <div class="emotion-image-effect-head">
+        <strong>Effect</strong>
+        <button class="mini-icon-button" type="button" data-emotion-image-effect-preview ${!instance || disabled ? "disabled" : ""} title="Preview effect">${iconSvg(Play, 15)}</button>
+      </div>
+      <label class="emotion-image-effect-select-row">
+        <span>Use</span>
+        <select data-emotion-image-effect-select ${disabled ? "disabled" : ""}>${options.join("")}</select>
+      </label>
+      ${
+        instance
+          ? `
+            ${renderEmotionImageEffectVector("positionOffset", "Position", instance.positionOffset, 0.01, disabled)}
+            ${renderEmotionImageEffectVector("rotationOffset", "Rotation", instance.rotationOffset, 0.1, disabled)}
+            <div class="emotion-image-effect-compact-row">
+              <label><span>Scale</span><input type="number" min="0.01" max="10" step="0.01" value="${roundForInput(instance.scale)}" data-emotion-image-effect-number="scale" ${disabled ? "disabled" : ""} /></label>
+              <label><span>Start</span><input type="number" min="0" max="30" step="0.1" value="${roundForInput(instance.startTime)}" data-emotion-image-effect-number="startTime" ${disabled ? "disabled" : ""} /></label>
+            </div>
+          `
+          : ""
+      }
+    </div>
+  `;
+}
+
+function renderEmotionImageEffectVector(key, label, values, step, disabled = false) {
+  return `
+    <div class="emotion-image-effect-vector-block">
+      <strong>${escapeHtml(label)}</strong>
+      <div class="emotion-image-effect-vector">
+        ${["X", "Y", "Z"]
+          .map(
+            (axis, index) => `
+              <label>
+                <span>${axis}</span>
+                <input type="number" step="${step}" value="${roundForInput(values[index])}" data-emotion-image-effect-vector="${escapeHtml(key)}" data-axis="${index}" ${disabled ? "disabled" : ""} />
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
+    </div>
   `;
 }
 
@@ -2128,6 +2331,7 @@ function renderFileButtons() {
 
 function renderEmotionParameterTray() {
   const selected = getSelectedEmotionPreset();
+  const poseControls = renderExpressionPoseControls();
   const rows = state.rorrParameters.map((parameter) => {
     const value = state.expressionParameterDraft?.[parameter.id] ?? 0;
     return `
@@ -2147,6 +2351,7 @@ function renderEmotionParameterTray() {
         <p>${selected ? escapeHtml(selected.name) : "No emotion selected"}</p>
       </div>
       <div class="parameter-tray-empty">
+        ${poseControls}
         ${
           rows ||
           `<p>${state.filePath ? "표시할 shape key가 없습니다." : "VRM을 열면 shape key가 여기에 표시됩니다."}</p>`
@@ -2158,6 +2363,7 @@ function renderEmotionParameterTray() {
 
 function renderEmotionParameterTrayWithSave() {
   const selected = getSelectedEmotionPreset();
+  const poseControls = renderExpressionPoseControls(Boolean(selected?.locked));
   const visibleIds = getVisibleParameterIdSet();
   const rows = state.rorrParameters.map((parameter) => {
     const isAvailable = state.currentParameterIds.has(parameter.id);
@@ -2191,6 +2397,7 @@ function renderEmotionParameterTrayWithSave() {
         ${state.parameterFilterOpen ? renderParameterFilterPopup() : ""}
       </div>
       <div class="parameter-tray-empty">
+        ${poseControls}
         ${rows || `<p>${state.filePath ? "표시할 shape key가 없습니다." : "VRM을 열면 shape key가 여기에 표시됩니다."}</p>`}
       </div>
       <div class="parameter-tray-footer">
@@ -2290,6 +2497,15 @@ function getDefaultCameraPreset(mode) {
       distance: height * 0.72,
       fov: 22,
       target: [center.x, center.y + height * 0.62, center.z],
+    };
+  }
+  if (mode === "space") {
+    return {
+      yaw: 34,
+      pitch: -12,
+      distance: 5.8,
+      fov: 34,
+      target: [0, 1.15, 0],
     };
   }
   return {
@@ -2420,6 +2636,7 @@ function renderModeBar(active) {
     ["emotionMap", "Emotion Map", GitCompare],
     ["extraBone", "Extra Bone Follow Setting", GitCompare],
     ["effect", "Effect Editor", GitCompare],
+    ["space", "Space Editor", GitCompare],
     ["linker", "Emotion Linker (view only)", GitCompare],
     ["linker2", "Emotion Linker 2 (view only)", GitCompare],
     ["transitionViewer", "Transition Viewer (view only)", GitCompare],
@@ -2489,6 +2706,81 @@ function renderEmotionExpressionPanel() {
     </div>
     <div class="expression-editor-footer">
       ${renderMetaSaveButton("saveExpressionMeta", !(state.correctionPath && state.expressionDirty), "Save Meta", getCharacterMetaFileName())}
+    </div>
+  `;
+}
+
+function renderExpressionPoseControls(disabled = false) {
+  const controls = normalizeExpressionPoseControls(state.expressionPoseDraft);
+  const rows = EXPRESSION_POSE_CONTROL_SPECS.map((spec) => {
+    const control = controls[spec.key];
+    return `
+      <div class="expression-pose-row">
+        <div class="expression-pose-row-head">
+          <label title="${escapeHtml(spec.label)}">${escapeHtml(spec.label)}</label>
+          <label class="expression-pose-mode" title="체크하면 이 축을 Override로 적용합니다.">
+            <input type="checkbox" data-expression-pose-override="${spec.key}" ${control.mode === "override" ? "checked" : ""} ${disabled ? "disabled" : ""} />
+            <span>Override</span>
+          </label>
+        </div>
+        <div class="expression-pose-row-controls">
+          <input
+            class="expression-pose-slider"
+            type="range"
+            min="${spec.min}"
+            max="${spec.max}"
+            step="${spec.step}"
+            value="${roundForInput(control.value)}"
+            data-expression-pose="${spec.key}"
+            ${disabled ? "disabled" : ""}
+          />
+          <input
+            class="expression-pose-value"
+            type="number"
+            min="${spec.min}"
+            max="${spec.max}"
+            step="${spec.step}"
+            value="${roundForInput(control.value)}"
+            data-expression-pose-value="${spec.key}"
+            ${disabled ? "disabled" : ""}
+          />
+        </div>
+      </div>
+    `;
+  }).join("");
+  return `
+    <section class="expression-pose-controls">
+      <div class="expression-pose-heading">
+        <strong>Pose Controls</strong>
+        <span>0 = no effect</span>
+      </div>
+      ${rows}
+      ${renderExpressionEyeBoneMapping()}
+    </section>
+  `;
+}
+
+function renderExpressionEyeBoneMapping() {
+  const mapping = normalizeExpressionPoseBoneMapping(state.correction.expressionPoseBoneMapping);
+  const boneNames = collectAllBoneOptions();
+  const renderSelect = (side, label) => {
+    const configured = mapping[side];
+    const detected = getExpressionEyeBone(side)?.name ?? "not found";
+    return `
+      <label class="expression-eye-bone-row">
+        <span>${escapeHtml(label)}</span>
+        <select data-expression-eye-bone="${side}">
+          <option value="" ${configured ? "" : "selected"}>Auto (${escapeHtml(detected)})</option>
+          ${boneNames.map((boneName) => `<option value="${escapeHtml(boneName)}" ${boneName === configured ? "selected" : ""}>${escapeHtml(boneName)}</option>`).join("")}
+        </select>
+      </label>
+    `;
+  };
+  return `
+    <div class="expression-eye-bone-mapping">
+      <div class="expression-eye-bone-heading">Eye Bone Mapping</div>
+      ${renderSelect("leftEye", "Left")}
+      ${renderSelect("rightEye", "Right")}
     </div>
   `;
 }
@@ -2885,6 +3177,16 @@ function renderEmotionLinker2Panel() {
     </div>
     ${renderModeBar("linker2")}
       <div class="emotion-linker-panel motion-linker-panel">
+      <div class="motion-linker-toolbar">
+        <strong>Motion Slots</strong>
+        <button
+          class="icon-button compact"
+          id="sortMotionSlotsByName"
+          title="슬롯 이름순 정렬"
+          aria-label="슬롯 이름순 정렬"
+          ${slots.length < 2 ? "disabled" : ""}
+        >${iconSvg(ArrowDownAZ)}</button>
+      </div>
       ${
         slots.length
           ? slots.map((slot, index) => renderMotionSlotCard(slot, index, slots.length)).join("")
@@ -2940,6 +3242,38 @@ function renderEffectSlot(effect) {
         <em>${effect.particles.length} particle${effect.particles.length === 1 ? "" : "s"}</em>
       </button>
       <button class="duplicate-emotion-button effect-duplicate-button" data-effect-duplicate="${escapeHtml(effect.id)}" title="Duplicate effect">${iconSvg(Copy, 15)}</button>
+    </div>
+  `;
+}
+
+function renderSpaceEditorPanel() {
+  const room = getActiveSpaceRoom();
+  return `
+    <div class="panel-header">
+      <div class="title-block">
+        <h1>Space Editor</h1>
+        <p>${state.spacePath ? escapeHtml(fileNameFromPath(state.spacePath)) : "spaces/space.meta"}</p>
+      </div>
+      <button class="icon-button" id="openFile" title="VRM 열기">${iconSvg(FolderOpen)}</button>
+    </div>
+    ${renderModeBar("space")}
+    <div class="effect-editor-panel space-editor-panel">
+      <div class="effect-editor-toolbar">
+        <strong>Space</strong>
+        <span class="parameter-meta">1st draft</span>
+      </div>
+      <div class="correction-card">
+        <div class="correction-card-head">
+          <strong>${escapeHtml(room.name)}</strong>
+          <span>${room.enabled ? "on" : "off"}</span>
+        </div>
+        <p class="parameter-meta">
+          기본 큐브룸을 코드로 생성해 캐릭터가 놓일 공간의 크기, 색, 투명도를 먼저 확인합니다.
+        </p>
+      </div>
+    </div>
+    <div class="correction-footer">
+      ${renderMetaSaveButton("saveSpace", !state.spaceDirty, "Save Space", state.spacePath ? fileNameFromPath(state.spacePath) : "space.meta")}
     </div>
   `;
 }
@@ -3132,7 +3466,9 @@ function renderEffectParticleSettings(effect, particle) {
       ${renderEffectColorSlots(effect, particle)}
       ${renderEffectCountControl(effect, particle)}
       ${renderEffectNumberControl(effect.id, "particleSpread", "Spread", particle.spread, 0.05, 4, 0.01)}
+      ${renderEffectSpreadModeControl(effect, particle)}
       ${renderEffectEmitterRadiusControl(effect, particle)}
+      ${renderEffectRadialMaskControl(effect, particle)}
       ${renderEffectSpeedControl(effect, particle)}
       ${renderEffectNumberControl(effect.id, "particleDrag", "Drag", particle.drag, 0, 30, 0.01)}
       ${renderEffectNumberControl(effect.id, "particleGravity", "Gravity", particle.gravity, -10, 10, 0.01)}
@@ -3206,13 +3542,21 @@ function renderEffectTextureControl(effect, particle) {
         <span>Aspect (H/W)</span>
         <input type="number" min="0.05" max="20" step="0.01" value="${roundForInput(texture.atlas.aspectRatio)}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleTextureAspectRatio" ${enabled ? "" : "disabled"} title="Height / Width" />
       </label>
-      ${renderEffectTexturePreview(texture, enabled)}
+      <label class="effect-atlas-row">
+        <span>Pivot X / Y</span>
+        <span class="effect-atlas-inputs">
+          <input type="number" min="0" max="1" step="0.01" value="${roundForInput(texture.pivot[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleTexturePivotX" ${enabled ? "" : "disabled"} title="Pivot X" />
+          <em>/</em>
+          <input type="number" min="0" max="1" step="0.01" value="${roundForInput(texture.pivot[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleTexturePivotY" ${enabled ? "" : "disabled"} title="Pivot Y" />
+        </span>
+      </label>
+      ${renderEffectTexturePreview(effect, particle, texture, enabled)}
       <p class="effect-texture-sprite-note">${texture.atlas.columns * texture.atlas.rows} sprites, random per particle</p>
     </div>
   `;
 }
 
-function renderEffectTexturePreview(texture, enabled) {
+function renderEffectTexturePreview(effect, particle, texture, enabled) {
   if (!enabled || !texture.image) return "";
   const url = effectTexturePreviewUrlCache.get(texture.image) ?? "";
   const columns = Math.max(1, texture.atlas.columns);
@@ -3230,8 +3574,9 @@ function renderEffectTexturePreview(texture, enabled) {
   const processedImageHeight = processedHeight * rows;
   const originalImage = url ? `<img src="${escapeHtml(url)}" alt="" />` : `<span>Loading</span>`;
   const processedImage = url
-    ? `<span class="effect-texture-processed-viewport" style="width: ${roundForInput(processedWidth)}px; height: ${roundForInput(processedHeight)}px;">
+    ? `<span class="effect-texture-processed-viewport" data-effect-texture-pivot-picker="${escapeHtml(effect.id)}" data-particle-id="${escapeHtml(particle.id)}" style="width: ${roundForInput(processedWidth)}px; height: ${roundForInput(processedHeight)}px;">
         <img src="${escapeHtml(url)}" alt="" style="width: ${roundForInput(processedImageWidth)}px; height: ${roundForInput(processedImageHeight)}px;" />
+        <i class="effect-texture-pivot-marker" style="left:${roundForInput(texture.pivot[0] * 100)}%;top:${roundForInput((1 - texture.pivot[1]) * 100)}%"></i>
       </span>`
     : `<span>Loading</span>`;
   return `
@@ -3249,11 +3594,12 @@ function renderEffectTexturePreview(texture, enabled) {
 }
 
 function renderEffectColorSlots(effect, particle) {
+  const usesParticleColor = particle.shape !== "texture" || particle.texture.colorMode === "particleColor";
   return `
-    <div class="effect-color-slots-block">
+    <div class="effect-color-slots-block ${usesParticleColor ? "" : "disabled"}">
       <label>
         Color Slots
-        <input type="number" min="1" max="5" step="1" value="${particle.colorSlots.length}" data-effect-color-slot-count="${escapeHtml(effect.id)}" />
+        <input type="number" min="1" max="5" step="1" value="${particle.colorSlots.length}" data-effect-color-slot-count="${escapeHtml(effect.id)}" ${usesParticleColor ? "" : "disabled"} />
       </label>
       <div class="effect-color-slot-list">
         ${particle.colorSlots
@@ -3261,12 +3607,41 @@ function renderEffectColorSlots(effect, particle) {
             (color, index) => `
               <label>
                 <span>${index + 1}</span>
-                <input type="color" value="${escapeHtml(color)}" data-effect-color-slot="${escapeHtml(effect.id)}" data-index="${index}" />
+                <input type="color" value="${escapeHtml(color)}" data-effect-color-slot="${escapeHtml(effect.id)}" data-index="${index}" ${usesParticleColor ? "" : "disabled"} />
               </label>
             `,
           )
           .join("")}
       </div>
+      <label class="effect-enabled-row effect-color-random-row">
+        <input type="checkbox" data-effect-color-random="${escapeHtml(effect.id)}" ${particle.colorRandom ? "checked" : ""} ${usesParticleColor ? "" : "disabled"} />
+        Random
+      </label>
+      ${
+        !particle.colorRandom
+          ? `
+            <label>
+              Sequence Mode
+              <select data-effect-color-sequence-mode="${escapeHtml(effect.id)}" ${usesParticleColor ? "" : "disabled"}>
+                <option value="lifetime" ${particle.colorSequenceMode === "lifetime" ? "selected" : ""}>Over Lifetime</option>
+                <option value="global" ${particle.colorSequenceMode === "global" ? "selected" : ""}>Global Cycle</option>
+              </select>
+            </label>
+            <label>
+              Transition
+              <select data-effect-color-transition="${escapeHtml(effect.id)}" ${usesParticleColor ? "" : "disabled"}>
+                <option value="step" ${particle.colorTransition === "step" ? "selected" : ""}>Step</option>
+                <option value="blend" ${particle.colorTransition === "blend" ? "selected" : ""}>Blend</option>
+              </select>
+            </label>
+            ${
+              particle.colorSequenceMode === "global"
+                ? renderEffectNumberControl(effect.id, "particleColorCycleSeconds", "Color Interval", particle.colorCycleSeconds, 0.01, 30, 0.01)
+                : ""
+            }
+          `
+          : ""
+      }
     </div>
   `;
 }
@@ -3293,6 +3668,32 @@ function renderEffectEmitterRadiusControl(effect, particle) {
         Emitter Radius
       </span>
       <input type="number" min="0" max="3" step="0.01" value="${roundForInput(particle.emitterRadius)}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleEmitterRadius" ${checked ? "" : "disabled"} />
+    </label>
+  `;
+}
+
+function renderEffectSpreadModeControl(effect, particle) {
+  return `
+    <label>
+      Spread Mode
+      <select data-effect-spread-mode="${escapeHtml(effect.id)}">
+        <option value="3d" ${particle.spreadMode === "3d" ? "selected" : ""}>3D</option>
+        <option value="billboardPlane" ${particle.spreadMode === "billboardPlane" ? "selected" : ""}>Billboard Plane</option>
+      </select>
+    </label>
+  `;
+}
+
+function renderEffectRadialMaskControl(effect, particle) {
+  const planar = particle.spreadMode === "billboardPlane";
+  const checked = planar && particle.radialMaskEnabled;
+  return `
+    <label class="effect-emitter-radius-row ${planar ? "" : "disabled"}">
+      <span class="effect-emitter-radius-check">
+        <input type="checkbox" data-effect-radial-mask="${escapeHtml(effect.id)}" ${checked ? "checked" : ""} ${planar ? "" : "disabled"} />
+        Radial Mask
+      </span>
+      <input type="number" min="0" max="10" step="0.01" value="${roundForInput(particle.radialMaskDiameter)}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleRadialMaskDiameter" ${checked ? "" : "disabled"} title="Mask Diameter" />
     </label>
   `;
 }
@@ -3400,9 +3801,9 @@ function renderEffectSizeControl(effect, particle) {
     <label class="effect-life-row">
       <span>Size</span>
       <span class="effect-life-inputs">
-        <input type="number" min="0.01" max="0.3" step="0.01" value="${roundForInput(particle.size[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSizeMin" />
+        <input type="number" min="0.01" max="5" step="0.01" value="${roundForInput(particle.size[0])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSizeMin" />
         <em>~</em>
-        <input type="number" min="0.01" max="0.3" step="0.01" value="${roundForInput(particle.size[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSizeMax" />
+        <input type="number" min="0.01" max="5" step="0.01" value="${roundForInput(particle.size[1])}" data-effect-number="${escapeHtml(effect.id)}" data-key="particleSizeMax" />
       </span>
     </label>
   `;
@@ -4309,6 +4710,32 @@ function bindUi() {
   document.querySelector("#saveCorrection")?.addEventListener("click", saveCorrection);
   document.querySelector("#saveExpressionMeta")?.addEventListener("click", saveCorrection);
   document.querySelector("#saveEffects")?.addEventListener("click", saveEffectsMeta);
+  document.querySelector("#saveSpace")?.addEventListener("click", saveSpaceMeta);
+  document.querySelector("#toggleSpaceModelVisible")?.addEventListener("change", (event) => {
+    state.spaceShowModel = event.target.checked;
+    applySpaceModelVisibility();
+  });
+  document.querySelector("[data-space-name]")?.addEventListener("input", (event) => updateSpaceRoom({ name: event.target.value }, false));
+  document.querySelector("[data-space-enabled]")?.addEventListener("change", (event) => updateSpaceRoom({ enabled: event.target.checked }, true));
+  document.querySelector("[data-space-grid]")?.addEventListener("change", (event) => updateSpaceRoom({ grid: event.target.checked }, true));
+  for (const input of document.querySelectorAll("[data-space-number]")) {
+    input.addEventListener("input", () => {
+      if (!isCompleteNumberInput(input.value)) return;
+      updateSpaceRoomNumber(input.dataset.spaceNumber, Number(input.value));
+    });
+    input.addEventListener("change", () => {
+      updateSpaceRoomNumber(input.dataset.spaceNumber, Number(input.value), true);
+      syncSpaceNumberInputFromState(input);
+    });
+  }
+  for (const input of document.querySelectorAll("[data-space-vector]")) {
+    input.addEventListener("input", () =>
+      updateSpaceRoomVector(input.dataset.spaceVector, Number(input.dataset.axis), Number(input.value)),
+    );
+  }
+  for (const input of document.querySelectorAll("[data-space-color]")) {
+    input.addEventListener("input", () => updateSpaceRoom({ [input.dataset.spaceColor]: input.value }, false));
+  }
   document.querySelector("#addEffectSlot")?.addEventListener("click", addEffectSlot);
   document.querySelector("#toggleEffectModelVisible")?.addEventListener("change", (event) => {
     state.effectShowModel = event.target.checked;
@@ -4394,6 +4821,33 @@ function bindUi() {
       updateEffectColorSlot(input.dataset.effectColorSlot, Number(input.dataset.index), input.value, getEffectParticleIdFromControl(input)),
     );
   }
+  for (const input of document.querySelectorAll("[data-effect-color-random]")) {
+    input.addEventListener("change", () =>
+      updateEffectSlotNested(input.dataset.effectColorRandom, "particle", { colorRandom: input.checked }, true, getEffectParticleIdFromControl(input)),
+    );
+  }
+  for (const select of document.querySelectorAll("[data-effect-color-sequence-mode]")) {
+    select.addEventListener("change", () =>
+      updateEffectSlotNested(
+        select.dataset.effectColorSequenceMode,
+        "particle",
+        { colorSequenceMode: select.value },
+        true,
+        getEffectParticleIdFromControl(select),
+      ),
+    );
+  }
+  for (const select of document.querySelectorAll("[data-effect-color-transition]")) {
+    select.addEventListener("change", () =>
+      updateEffectSlotNested(
+        select.dataset.effectColorTransition,
+        "particle",
+        { colorTransition: select.value },
+        true,
+        getEffectParticleIdFromControl(select),
+      ),
+    );
+  }
   for (const input of document.querySelectorAll("[data-effect-vector]")) {
     input.addEventListener("input", () =>
       updateEffectSlotVector(input.dataset.effectVector, input.dataset.key, Number(input.dataset.axis), Number(input.value)),
@@ -4452,6 +4906,19 @@ function bindUi() {
     input.addEventListener("change", () =>
       updateEffectSlotNested(input.dataset.effectParticleBillboard, "particle", { billboard: input.checked }, true, getEffectParticleIdFromControl(input)),
     );
+  }
+  for (const select of document.querySelectorAll("[data-effect-spread-mode]")) {
+    select.addEventListener("change", () =>
+      updateEffectSlotNested(select.dataset.effectSpreadMode, "particle", { spreadMode: select.value }, true, getEffectParticleIdFromControl(select)),
+    );
+  }
+  for (const input of document.querySelectorAll("[data-effect-radial-mask]")) {
+    input.addEventListener("change", () =>
+      updateEffectSlotNested(input.dataset.effectRadialMask, "particle", { radialMaskEnabled: input.checked }, true, getEffectParticleIdFromControl(input)),
+    );
+  }
+  for (const picker of document.querySelectorAll("[data-effect-texture-pivot-picker]")) {
+    picker.addEventListener("pointerdown", (event) => updateEffectTexturePivotFromPointer(event, picker));
   }
   for (const input of document.querySelectorAll("[data-effect-align-velocity]")) {
     input.addEventListener("change", () =>
@@ -4590,6 +5057,7 @@ function bindUi() {
   }
 
   document.querySelector("#addMotionSlot")?.addEventListener("click", addMotionSlot);
+  document.querySelector("#sortMotionSlotsByName")?.addEventListener("click", sortMotionSlotsByName);
   for (const input of document.querySelectorAll("[data-motion-slot-title]")) {
     input.addEventListener("pointerdown", (event) => event.stopPropagation());
     input.addEventListener("click", (event) => event.stopPropagation());
@@ -4908,7 +5376,7 @@ function bindUi() {
         clearBlushOverlay();
         clearEmotionImageOverlay();
       }
-      if (state.mode !== "correction") {
+      if (!shouldPreviewAnimationProps()) {
         clearPropOverlay();
       } else {
         updateVisiblePropsForSelectedAnimation();
@@ -4916,11 +5384,15 @@ function bindUi() {
       if (state.mode !== "effect") {
         clearEffectPreview();
       }
+      if (state.mode !== "space") {
+        clearSpacePreview();
+      }
       if (state.mode !== "linker2") {
         state.activeMotionSlotEffectId = "";
         state.pendingMotionSlotEffect = null;
       }
       applyEffectModelVisibility();
+      applySpaceModelVisibility();
       applyCameraPresetForMode(state.mode);
       render();
     });
@@ -5030,6 +5502,24 @@ function bindUi() {
   }
 
   document.querySelector("[data-emotion-image-loop]")?.addEventListener("change", (event) => updateSelectedEmotionImageLoop(event.target.checked));
+  document.querySelector("[data-emotion-image-effect-select]")?.addEventListener("change", (event) => {
+    updateSelectedEmotionImageEffectSelection(event.target.value);
+  });
+  document.querySelector("[data-emotion-image-effect-preview]")?.addEventListener("click", () => {
+    startEmotionImageGraphAnimationForSelected(true);
+  });
+  for (const input of document.querySelectorAll("[data-emotion-image-effect-vector]")) {
+    input.addEventListener("input", () => {
+      if (!isCompleteNumberInput(input.value)) return;
+      updateSelectedEmotionImageEffectVector(input.dataset.emotionImageEffectVector, Number(input.dataset.axis), Number(input.value));
+    });
+  }
+  for (const input of document.querySelectorAll("[data-emotion-image-effect-number]")) {
+    input.addEventListener("input", () => {
+      if (!isCompleteNumberInput(input.value)) return;
+      updateSelectedEmotionImageEffectValue(input.dataset.emotionImageEffectNumber, Number(input.value));
+    });
+  }
 
   for (const surface of document.querySelectorAll("[data-emotion-graph]")) {
     surface.addEventListener("pointerdown", (event) => handleEmotionGraphPointerDown(event, surface));
@@ -5156,7 +5646,6 @@ function bindUi() {
     input.addEventListener("blur", () => updateEmotionPresetName(input.dataset.emotionName, input.value));
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
-        updateEmotionPresetName(input.dataset.emotionName, input.value);
         input.blur();
       }
     });
@@ -5190,6 +5679,28 @@ function bindUi() {
         input.blur();
       }
     });
+  }
+
+  for (const slider of document.querySelectorAll("[data-expression-pose]")) {
+    slider.addEventListener("input", () => updateSelectedExpressionPoseControl(slider.dataset.expressionPose, Number(slider.value), null, slider));
+  }
+
+  for (const input of document.querySelectorAll("[data-expression-pose-value]")) {
+    input.addEventListener("blur", () => updateSelectedExpressionPoseControl(input.dataset.expressionPoseValue, Number(input.value), null, input));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        updateSelectedExpressionPoseControl(input.dataset.expressionPoseValue, Number(input.value), null, input);
+        input.blur();
+      }
+    });
+  }
+
+  for (const input of document.querySelectorAll("[data-expression-pose-override]")) {
+    input.addEventListener("change", () => updateSelectedExpressionPoseControl(input.dataset.expressionPoseOverride, null, input.checked ? "override" : "offset", input));
+  }
+
+  for (const select of document.querySelectorAll("[data-expression-eye-bone]")) {
+    select.addEventListener("change", () => updateExpressionEyeBoneMapping(select.dataset.expressionEyeBone, select.value));
   }
 
   for (const input of document.querySelectorAll("[data-parameter-filter]")) {
@@ -5342,6 +5853,7 @@ function addEmotionPreset() {
     locked: false,
     isDisableBlink: false,
     parameters: {},
+    poseControls: createDefaultExpressionPoseControls(),
     blush: createDisabledPresetBlush(),
     emotionImage: null,
   });
@@ -5367,12 +5879,14 @@ function duplicateEmotionPreset(id) {
     locked: false,
     isDisableBlink: Boolean(source.isDisableBlink),
     parameters: normalizeExpressionParameterValues(source.parameters),
+    poseControls: normalizeExpressionPoseControls(source.poseControls),
     blush: normalizePresetBlush(source.blush),
     emotionImage: source.emotionImage ? normalizePresetEmotionImage(source.emotionImage) : null,
     rangeSlots: normalizeExpressionRangeSlots(source.rangeSlots).map((slot, index) => ({
       id: `range-${Date.now()}-${index}`,
       threshold: slot.threshold,
       parameters: normalizeExpressionParameterValues(slot.parameters),
+      poseControls: normalizeExpressionPoseControls(slot.poseControls),
       ...(slot.blushOpacity != null ? { blushOpacity: slot.blushOpacity } : {}),
       ...(slot.emotionImage ? { emotionImage: normalizePresetEmotionImage(slot.emotionImage) } : {}),
     })),
@@ -5505,6 +6019,47 @@ function updateSelectedEmotionImageLoop(loop) {
   if (next?.loop && isEmotionImageGraphAnimated(getActiveEmotionImageSettings())) {
     startEmotionImageGraphAnimationForSelected(true);
   }
+}
+
+function updateSelectedEmotionImageEffectSelection(effectId) {
+  const selected = getSelectedEmotionPreset();
+  if (!selected?.emotionImage || selected.locked) return;
+  const effect = getEffectSlotById(effectId);
+  updateSelectedEmotionImageSettings({
+    effect: effect
+      ? normalizeEmotionImageEffect({
+          effectId: effect.id,
+          positionOffset: [0, 0, 0],
+          rotationOffset: [0, 0, 0],
+          scale: 1,
+          startTime: 0,
+        })
+      : null,
+  });
+  markExpressionMetaDirty();
+  startEmotionImageGraphAnimationForSelected(true);
+  renderPreservingExpressionEditorScrolls();
+}
+
+function updateSelectedEmotionImageEffectVector(key, axis, value) {
+  const settings = getSelectedEmotionImageSettingsForEdit();
+  const instance = normalizeEmotionImageEffect(settings?.effect);
+  if (!instance || !["positionOffset", "rotationOffset"].includes(key) || !Number.isFinite(value)) return;
+  const next = [...instance[key]];
+  next[axis] = value;
+  updateSelectedEmotionImageSettings({ effect: normalizeEmotionImageEffect({ ...instance, [key]: next }) });
+  markExpressionMetaDirty();
+  syncSelectedEffectPreview();
+}
+
+function updateSelectedEmotionImageEffectValue(key, value) {
+  const settings = getSelectedEmotionImageSettingsForEdit();
+  const instance = normalizeEmotionImageEffect(settings?.effect);
+  if (!instance || !["scale", "startTime"].includes(key) || !Number.isFinite(value)) return;
+  updateSelectedEmotionImageSettings({ effect: normalizeEmotionImageEffect({ ...instance, [key]: value }) });
+  markExpressionMetaDirty();
+  if (key === "startTime") startEmotionImageGraphAnimationForSelected(true);
+  else syncSelectedEffectPreview();
 }
 
 function beginEmotionImagePivotPicking() {
@@ -5832,6 +6387,7 @@ function addEmotionRangeSlot(presetId) {
     id: `range-${Date.now()}-${slots.length}`,
     threshold,
     parameters: {},
+    poseControls: getExpressionPoseControlsAtValue(preset, threshold, false),
     ...(preset.emotionImage ? { emotionImage: normalizePresetEmotionImage(getEmotionImageBaseSettings(preset) ?? preset.emotionImage) } : {}),
   };
   preset.rangeSlots = [...slots, slot].sort((a, b) => a.threshold - b.threshold);
@@ -5887,10 +6443,13 @@ function sampleEmotionRangeSlotParameters(slotId) {
   const slot = slots.find((item) => item.id === slotId);
   if (!slot) return;
   const sampled = getExpressionParametersAtValue(selected, slot.threshold, false, slotId);
+  const sampledPose = getExpressionPoseControlsAtValue(selected, slot.threshold, false, slotId);
   slot.parameters = normalizeExpressionParameterValues(sampled);
+  slot.poseControls = normalizeExpressionPoseControls(sampledPose);
   selected.rangeSlots = slots;
   state.selectedExpressionRangeId = slotId;
   state.expressionParameterDraft = { ...slot.parameters };
+  state.expressionPoseDraft = normalizeExpressionPoseControls(slot.poseControls);
   state.expressionParameterDirty = false;
   setEmotionPresetPreviewValue(selected.id, slot.threshold);
   markExpressionMetaDirty();
@@ -6000,16 +6559,10 @@ function deleteEmotionPreset(id) {
 function updateEmotionPresetName(id, name) {
   const preset = state.expressionPresets.find((item) => item.id === id);
   if (!preset || preset.locked) return;
-  const selectionChanged = state.selectedExpressionPresetId !== id;
-  if (selectionChanged && !confirmPendingExpressionParameterChanges()) return;
   const nextName = name.trim() || "new emotion";
   if (preset.name === nextName) return;
   preset.name = nextName;
-  state.selectedExpressionPresetId = id;
-  if (selectionChanged) state.selectedExpressionRangeId = null;
-  if (selectionChanged) loadSelectedExpressionParameterDraft();
   markExpressionMetaDirty();
-  applySelectedEmotionPreset();
   renderPreservingExpressionScroll();
 }
 
@@ -6062,6 +6615,42 @@ function updateSelectedRorrParameter(parameterId, value, source, shouldRender = 
   syncSaveParameterButton();
 }
 
+function updateSelectedExpressionPoseControl(key, value = null, mode = null, source = null) {
+  const selected = getSelectedEmotionPreset();
+  const spec = EXPRESSION_POSE_CONTROL_SPECS.find((item) => item.key === key);
+  if (!selected || selected.locked || !spec) return;
+  state.expressionDecay = null;
+  const controls = normalizeExpressionPoseControls(state.expressionPoseDraft);
+  if (value != null) controls[key].value = normalizeExpressionPoseValue(key, value);
+  if (mode) controls[key].mode = mode === "override" ? "override" : "offset";
+  state.expressionPoseDraft = controls;
+  state.expressionParameterDirty = true;
+  syncExpressionPoseControls(key, controls[key], source);
+  applySelectedEmotionPreset();
+  syncSaveParameterButton();
+}
+
+function syncExpressionPoseControls(key, control, source) {
+  const formatted = roundForInput(control.value);
+  for (const input of document.querySelectorAll(`[data-expression-pose="${key}"], [data-expression-pose-value="${key}"]`)) {
+    if (input !== source || input.type !== "range") input.value = formatted;
+  }
+  const checkbox = document.querySelector(`[data-expression-pose-override="${key}"]`);
+  if (checkbox && checkbox !== source) checkbox.checked = control.mode === "override";
+}
+
+function updateExpressionEyeBoneMapping(side, boneName) {
+  if (side !== "leftEye" && side !== "rightEye") return;
+  const mapping = normalizeExpressionPoseBoneMapping(state.correction.expressionPoseBoneMapping);
+  mapping[side] = String(boneName ?? "");
+  state.correction.expressionPoseBoneMapping = mapping;
+  state.correctionDirty = true;
+  state.expressionDirty = true;
+  syncSaveMetaButton();
+  applyExpressionPosePreview();
+  renderPreservingExpressionEditorScrolls();
+}
+
 function markExpressionMetaDirty() {
   state.expressionDirty = true;
   syncSaveMetaButton();
@@ -6071,6 +6660,7 @@ function loadSelectedExpressionParameterDraft() {
   const selected = getSelectedEmotionPreset();
   const slot = getSelectedExpressionRangeSlot();
   state.expressionParameterDraft = { ...((slot ?? selected)?.parameters ?? {}) };
+  state.expressionPoseDraft = normalizeExpressionPoseControls((slot ?? selected)?.poseControls);
   state.expressionParameterDirty = false;
 }
 
@@ -6083,9 +6673,11 @@ function commitSelectedExpressionParameters() {
     const target = slots.find((item) => item.id === slot.id);
     if (!target) return false;
     target.parameters = normalizeExpressionParameterValues(state.expressionParameterDraft);
+    target.poseControls = normalizeExpressionPoseControls(state.expressionPoseDraft);
     selected.rangeSlots = slots;
   } else {
     selected.parameters = normalizeExpressionParameterValues(state.expressionParameterDraft);
+    selected.poseControls = normalizeExpressionPoseControls(state.expressionPoseDraft);
   }
   state.expressionParameterDirty = false;
   markExpressionMetaDirty();
@@ -6103,7 +6695,7 @@ function confirmPendingExpressionParameterChanges() {
   if (window.confirm("편집한 파라미터를 저장할까요?")) {
     commitSelectedExpressionParameters();
   } else {
-    state.expressionParameterDirty = false;
+    loadSelectedExpressionParameterDraft();
   }
   return true;
 }
@@ -6168,12 +6760,12 @@ function isEditableElement(element) {
 function getStableElementSelector(element) {
   if (!element?.attributes) return null;
   if (element.id) return `[id="${cssEscape(element.id)}"]`;
-  for (const attribute of element.attributes) {
-    if (attribute.name.startsWith("data-") && attribute.value) {
-      return `[${attribute.name}="${cssEscape(attribute.value)}"]`;
-    }
-  }
-  return null;
+  const dataAttributes = [...element.attributes].filter((attribute) => attribute.name.startsWith("data-") && attribute.value);
+  if (!dataAttributes.length) return null;
+  const tagName = String(element.tagName ?? "").toLowerCase();
+  return `${tagName}${dataAttributes
+    .map((attribute) => `[${attribute.name}="${cssEscape(attribute.value)}"]`)
+    .join("")}`;
 }
 
 function captureEditableFocus() {
@@ -6181,17 +6773,26 @@ function captureEditableFocus() {
   if (!isEditableElement(active)) return null;
   const selector = getStableElementSelector(active);
   if (!selector) return null;
+  const currentValue = "value" in active ? String(active.value ?? "") : "";
   return {
     selector,
-    start: active.selectionStart ?? active.value.length,
-    end: active.selectionEnd ?? active.value.length,
+    value: shouldPreserveEditableValue(active) ? currentValue : null,
+    start: active.selectionStart ?? currentValue.length,
+    end: active.selectionEnd ?? currentValue.length,
   };
+}
+
+function shouldPreserveEditableValue(element) {
+  if (element?.tagName === "TEXTAREA") return true;
+  if (element?.tagName !== "INPUT") return false;
+  return ["text", "number", "search", "email", "tel", "url", "password"].includes(String(element.type ?? "text").toLowerCase());
 }
 
 function restoreEditableFocus(focusState) {
   if (!focusState?.selector) return;
   const input = document.querySelector(focusState.selector);
   if (!isEditableElement(input)) return;
+  if (focusState.value != null && "value" in input) input.value = focusState.value;
   input.focus({ preventScroll: true });
   if (typeof input.setSelectionRange !== "function") return;
   const end = Math.min(focusState.end, input.value.length);
@@ -6248,6 +6849,7 @@ function renderPreservingScrollableUi() {
     ".effect-editor-panel",
     ".effect-slot-list",
     ".effect-settings-area",
+    ".space-editor-panel",
     ".material-outline-list",
     ".props-list",
     ".props-settings-area",
@@ -6554,6 +7156,7 @@ function applyEmotionImagePivotOffset(settings = getActiveEmotionImageSettings()
 function startEmotionImageGraphAnimationForSelected(force = false) {
   const selected = getSelectedEmotionPreset();
   const settings = selected?.emotionImage ? getActiveEmotionImageSettings() : null;
+  startEmotionImageEffectForSelected(settings);
   if (!settings?.image || (!force && !isEmotionImageGraphAnimated(settings))) {
     state.emotionImageAnimation = null;
     return;
@@ -6561,6 +7164,61 @@ function startEmotionImageGraphAnimationForSelected(force = false) {
   state.emotionImageAnimation = {
     elapsed: 0,
     duration: normalizeEmotionImageDuration(settings.animationDuration),
+  };
+}
+
+function startEmotionImageEffectForSelected(settings = getActiveEmotionImageSettings()) {
+  const selected = getSelectedEmotionPreset();
+  const instance = normalizeEmotionImageEffect(settings?.effect);
+  const effect = instance ? getEffectSlotById(instance.effectId) : null;
+  if (state.mode !== "expression" || !selected || !effect) {
+    state.emotionImageEffectPlayback = null;
+    return;
+  }
+  state.emotionImageEffectPlayback = {
+    presetId: selected.id,
+    effectId: effect.id,
+    elapsed: 0,
+    started: instance.startTime <= 0.001,
+  };
+  if (state.emotionImageEffectPlayback.started) {
+    syncSelectedEffectPreview();
+    restartSelectedEffectPreview();
+  } else if (effectPreview) {
+    clearEffectPreview();
+  }
+}
+
+function updateEmotionImageEffectPlayback(delta) {
+  const playback = state.emotionImageEffectPlayback;
+  if (state.mode !== "expression" || !playback) return;
+  const selected = getSelectedEmotionPreset();
+  const instance = normalizeEmotionImageEffect(getActiveEmotionImageSettings()?.effect);
+  if (!selected || selected.id !== playback.presetId || !instance || instance.effectId !== playback.effectId) {
+    state.emotionImageEffectPlayback = null;
+    return;
+  }
+  playback.elapsed += delta;
+  if (!playback.started && playback.elapsed >= instance.startTime) {
+    playback.started = true;
+    syncSelectedEffectPreview();
+    restartSelectedEffectPreview();
+  }
+}
+
+function getActiveEmotionImageEffectSlot() {
+  const playback = state.emotionImageEffectPlayback;
+  if (state.mode !== "expression" || !playback?.started) return null;
+  const instance = normalizeEmotionImageEffect(getActiveEmotionImageSettings()?.effect);
+  const source = instance ? getEffectSlotById(instance.effectId) : null;
+  if (!source || playback.effectId !== source.id) return null;
+  return {
+    ...source,
+    id: `emotion-image:${playback.presetId}:${source.id}`,
+    enabled: true,
+    positionOffset: source.positionOffset.map((value, index) => value + instance.positionOffset[index]),
+    rotationOffset: source.rotationOffset.map((value, index) => value + instance.rotationOffset[index]),
+    scale: source.scale * instance.scale,
   };
 }
 
@@ -6659,6 +7317,7 @@ function clearEmotionImageOverlay() {
   emotionImageOverlayRequestId += 1;
   restoreEmotionImageHeadRotationOffset();
   state.emotionImageAnimation = null;
+  state.emotionImageEffectPlayback = null;
   state.emotionImagePivotPicking = false;
   if (!emotionImageOverlay) return;
   detachEmotionImageTransformControls();
@@ -6725,6 +7384,53 @@ function getExpressionParametersAtValue(preset, value, includeDraft = false, exc
   const rawT = (clamped - left.threshold) / (right.threshold - left.threshold);
   const t = easeSegment ? easeInOutCubic(rawT) : rawT;
   return interpolateExpressionParameters(left.parameters, right.parameters, t);
+}
+
+function getExpressionPoseControlsAtValue(preset, value, includeDraft = false, excludeRangeSlotId = null, easeSegment = false) {
+  const clamped = clampEmotionValue(value);
+  const mainPose =
+    includeDraft && !state.selectedExpressionRangeId && preset.id === state.selectedExpressionPresetId
+      ? normalizeExpressionPoseControls(state.expressionPoseDraft)
+      : normalizeExpressionPoseControls(preset.poseControls);
+  const slots = normalizeExpressionRangeSlots(preset.rangeSlots)
+    .filter((slot) => slot.id !== excludeRangeSlotId)
+    .map((slot) => ({
+      ...slot,
+      poseControls:
+        includeDraft && state.selectedExpressionRangeId === slot.id && preset.id === state.selectedExpressionPresetId
+          ? normalizeExpressionPoseControls(state.expressionPoseDraft)
+          : normalizeExpressionPoseControls(slot.poseControls),
+    }));
+  const points = [
+    { threshold: 0, poseControls: createDefaultExpressionPoseControls() },
+    ...slots,
+    { threshold: 1, poseControls: mainPose },
+  ].sort((a, b) => a.threshold - b.threshold);
+  let left = points[0];
+  let right = points[points.length - 1];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    if (clamped >= points[index].threshold && clamped <= points[index + 1].threshold) {
+      left = points[index];
+      right = points[index + 1];
+      break;
+    }
+  }
+  if (Math.abs(right.threshold - left.threshold) < 0.000001) return normalizeExpressionPoseControls(right.poseControls);
+  const rawT = (clamped - left.threshold) / (right.threshold - left.threshold);
+  const t = easeSegment ? easeInOutCubic(rawT) : rawT;
+  return interpolateExpressionPoseControls(left.poseControls, right.poseControls, t);
+}
+
+function interpolateExpressionPoseControls(left, right, t) {
+  const normalizedLeft = normalizeExpressionPoseControls(left);
+  const normalizedRight = normalizeExpressionPoseControls(right);
+  return Object.fromEntries(EXPRESSION_POSE_CONTROL_SPECS.map(({ key }) => [
+    key,
+    {
+      value: normalizeExpressionPoseValue(key, normalizedLeft[key].value + (normalizedRight[key].value - normalizedLeft[key].value) * t),
+      mode: t < 0.5 ? normalizedLeft[key].mode : normalizedRight[key].mode,
+    },
+  ]));
 }
 
 function interpolateExpressionParameters(left, right, t) {
@@ -7831,7 +8537,7 @@ function removeSelectedProp() {
   state.selectedPropId = state.correction.props[0]?.id ?? null;
   state.correctionDirty = true;
   syncSaveMetaButton();
-  clearPropOverlay();
+  clearPropOverlay(prop.id);
   void loadSelectedPropOverlay();
   renderPreservingScrollableUi();
 }
@@ -7846,9 +8552,9 @@ function selectProp(propId) {
 async function reloadPropGlb(propId) {
   const prop = normalizePropSettings(state.correction.props).find((item) => item.id === propId);
   if (!prop) return;
-  state.selectedPropId = prop.id;
-  clearPropOverlay();
-  await loadSelectedPropOverlay();
+  clearPropOverlay(prop.id);
+  if (isPropEnabledForSelectedAnimation(prop.id)) await loadPropOverlay(prop);
+  if (state.selectedPropId === prop.id) await loadSelectedPropOverlay();
   renderPreservingScrollableUi();
 }
 
@@ -7912,7 +8618,6 @@ function togglePropForSelectedAnimation(propId, enabled) {
   else ids.delete(String(propId));
   entry.props = [...ids].filter((id) => normalizePropSettings(state.correction.props).some((prop) => prop.id === id));
   if (!entry.props.length) delete entry.props;
-  state.selectedPropId = String(propId);
   state.correctionDirty = true;
   syncSaveMetaButton();
   updateVisiblePropsForSelectedAnimation();
@@ -7920,25 +8625,53 @@ function togglePropForSelectedAnimation(propId, enabled) {
 }
 
 function updateVisiblePropsForSelectedAnimation() {
-  const prop = getSelectedPropSetting();
-  if (prop && isPropEnabledForSelectedAnimation(prop.id)) {
-    void loadSelectedPropOverlay();
-  } else {
-    clearPropOverlay();
+  const props = normalizePropSettings(state.correction.props);
+  const enabledIds = new Set(getAnimationPropIds());
+  for (const id of [...propOverlays.keys()]) {
+    if (!enabledIds.has(id) || !props.some((prop) => prop.id === id)) clearPropOverlay(id);
   }
+  for (const prop of props) {
+    if (enabledIds.has(prop.id)) void loadPropOverlay(prop);
+  }
+  void loadSelectedPropOverlay();
 }
 
 async function loadSelectedPropOverlay() {
   const prop = getSelectedPropSetting();
   if (!currentVrm || !prop?.file || !isPropEnabledForSelectedAnimation(prop.id)) {
-    clearPropOverlay();
+    propOverlay = null;
+    detachPropTransformControls();
     return;
   }
-  if (propOverlay?.id === prop.id && propOverlay?.file === prop.file) {
-    applyPropOverlaySettings(prop);
-    return;
+  const overlay = await loadPropOverlay(prop);
+  if (!overlay || state.selectedPropId !== prop.id) return;
+  propOverlay = overlay;
+  applyPropOverlaySettings(prop, overlay);
+  attachPropTransformControls();
+}
+
+async function loadPropOverlay(prop) {
+  if (!shouldPreviewAnimationProps() || !currentVrm || !prop?.file || !isPropEnabledForSelectedAnimation(prop.id)) return null;
+  const existing = propOverlays.get(prop.id);
+  if (existing?.file === prop.file) {
+    if (state.selectedPropId === prop.id) propOverlay = existing;
+    applyPropOverlaySettings(prop, existing);
+    return existing;
   }
-  clearPropOverlay();
+  const pending = propOverlayLoadPromises.get(prop.id);
+  if (pending) return pending;
+  const promise = loadPropOverlayFile(prop);
+  propOverlayLoadPromises.set(prop.id, promise);
+  try {
+    return await promise;
+  } finally {
+    if (propOverlayLoadPromises.get(prop.id) === promise) propOverlayLoadPromises.delete(prop.id);
+  }
+}
+
+async function loadPropOverlayFile(prop) {
+  const existing = propOverlays.get(prop.id);
+  if (existing) clearPropOverlay(prop.id);
   let result;
   try {
     result = await window.vrmFiles.openStoredProp(prop.file);
@@ -7954,44 +8687,56 @@ async function loadSelectedPropOverlay() {
   } catch {
     URL.revokeObjectURL(url);
     setScreenshotMessage(`${prop.file} GLB를 읽지 못했습니다.`);
-    return;
+    return null;
+  }
+  if (!shouldPreviewAnimationProps() || !isPropEnabledForSelectedAnimation(prop.id)) {
+    URL.revokeObjectURL(url);
+    disposePropOverlay({ group: gltf.scene, url: null });
+    return null;
   }
   const group = new THREE.Group();
   group.name = `ExpressionEditor_Prop_${prop.id}`;
   group.add(gltf.scene);
-  propOverlay = { id: prop.id, file: prop.file, group, scene: gltf.scene, url };
-  applyPropOverlaySettings(prop);
+  const overlay = { id: prop.id, file: prop.file, group, scene: gltf.scene, url };
+  propOverlays.set(prop.id, overlay);
+  if (state.selectedPropId === prop.id) propOverlay = overlay;
+  applyPropOverlaySettings(prop, overlay);
+  return overlay;
 }
 
-function applyPropOverlaySettings(setting = getSelectedPropSetting()) {
-  if (!propOverlay?.group || !setting) return;
+function shouldPreviewAnimationProps() {
+  return state.mode === "correction" || state.mode === "linker2";
+}
+
+function applyPropOverlaySettings(setting = getSelectedPropSetting(), overlay = propOverlays.get(setting?.id)) {
+  if (!overlay?.group || !setting) return;
   const prop = createPropSetting(setting);
   const parent = getRawBoneNode(prop.attachBone);
   if (!parent) {
-    propOverlay.group.visible = false;
-    detachPropTransformControls();
+    overlay.group.visible = false;
+    if (state.selectedPropId === prop.id) detachPropTransformControls();
     return;
   }
-  if (prop.followRotation && propOverlay.group.parent !== parent) {
-    propOverlay.group.parent?.remove(propOverlay.group);
-    parent.add(propOverlay.group);
-  } else if (!prop.followRotation && propOverlay.group.parent !== scene) {
-    propOverlay.group.parent?.remove(propOverlay.group);
-    scene.add(propOverlay.group);
+  if (prop.followRotation && overlay.group.parent !== parent) {
+    overlay.group.parent?.remove(overlay.group);
+    parent.add(overlay.group);
+  } else if (!prop.followRotation && overlay.group.parent !== scene) {
+    overlay.group.parent?.remove(overlay.group);
+    scene.add(overlay.group);
   }
-  propOverlay.group.visible = true;
-  applyPropOverlayTransform(prop, parent);
-  attachPropTransformControls();
+  overlay.group.visible = true;
+  applyPropOverlayTransform(prop, parent, overlay);
+  if (state.selectedPropId === prop.id) attachPropTransformControls();
 }
 
-function applyPropOverlayTransform(prop = getSelectedPropSetting(), parent = null) {
-  if (!propOverlay?.group || !prop) return;
+function applyPropOverlayTransform(prop = getSelectedPropSetting(), parent = null, overlay = propOverlays.get(prop?.id)) {
+  if (!overlay?.group || !prop) return;
   const setting = createPropSetting(prop);
   const targetParent = parent ?? getRawBoneNode(setting.attachBone);
   if (!targetParent) return;
   if (setting.followRotation) {
-    propOverlay.group.position.set(...setting.positionOffset);
-    propOverlay.group.rotation.set(
+    overlay.group.position.set(...setting.positionOffset);
+    overlay.group.rotation.set(
       THREE.MathUtils.degToRad(setting.rotationOffset[0]),
       THREE.MathUtils.degToRad(setting.rotationOffset[1]),
       THREE.MathUtils.degToRad(setting.rotationOffset[2]),
@@ -8000,26 +8745,28 @@ function applyPropOverlayTransform(prop = getSelectedPropSetting(), parent = nul
   } else {
     targetParent.updateMatrixWorld(true);
     targetParent.getWorldPosition(propWorldPosition);
-    propOverlay.group.position.set(
+    overlay.group.position.set(
       propWorldPosition.x + setting.positionOffset[0],
       propWorldPosition.y + setting.positionOffset[1],
       propWorldPosition.z + setting.positionOffset[2],
     );
-    propOverlay.group.rotation.set(
+    overlay.group.rotation.set(
       THREE.MathUtils.degToRad(setting.rotationOffset[0]),
       THREE.MathUtils.degToRad(setting.rotationOffset[1]),
       THREE.MathUtils.degToRad(setting.rotationOffset[2]),
       "XYZ",
     );
   }
-  propOverlay.group.scale.setScalar(setting.scale);
-  propOverlay.group.updateMatrixWorld(true);
+  overlay.group.scale.setScalar(setting.scale);
+  overlay.group.updateMatrixWorld(true);
 }
 
 function updatePropOverlayRuntime() {
-  const prop = getSelectedPropSetting();
-  if (!propOverlay?.group || !prop || prop.followRotation || propTransformDragging) return;
-  applyPropOverlayTransform(prop);
+  for (const prop of normalizePropSettings(state.correction.props)) {
+    const overlay = propOverlays.get(prop.id);
+    if (!overlay?.group || prop.followRotation || (prop.id === state.selectedPropId && propTransformDragging)) continue;
+    applyPropOverlayTransform(prop, null, overlay);
+  }
 }
 
 function ensurePropTransformControls() {
@@ -8117,11 +8864,28 @@ function syncPropRotationControls(rotation) {
   }
 }
 
-function clearPropOverlay() {
-  detachPropTransformControls();
-  if (!propOverlay) return;
-  propOverlay.group?.parent?.remove(propOverlay.group);
-  propOverlay.group?.traverse?.((object) => {
+function clearPropOverlay(propId = null) {
+  if (propId == null) {
+    detachPropTransformControls();
+    for (const overlay of propOverlays.values()) disposePropOverlay(overlay);
+    propOverlays.clear();
+    propOverlayLoadPromises.clear();
+    propOverlay = null;
+    return;
+  }
+  const overlay = propOverlays.get(String(propId));
+  if (!overlay) return;
+  if (propOverlay === overlay) {
+    detachPropTransformControls();
+    propOverlay = null;
+  }
+  disposePropOverlay(overlay);
+  propOverlays.delete(String(propId));
+}
+
+function disposePropOverlay(overlay) {
+  overlay?.group?.parent?.remove(overlay.group);
+  overlay?.group?.traverse?.((object) => {
     object.geometry?.dispose?.();
     const materials = Array.isArray(object.material) ? object.material : object.material ? [object.material] : [];
     for (const material of materials) {
@@ -8131,8 +8895,7 @@ function clearPropOverlay() {
       material.dispose?.();
     }
   });
-  if (propOverlay.url) URL.revokeObjectURL(propOverlay.url);
-  propOverlay = null;
+  if (overlay?.url) URL.revokeObjectURL(overlay.url);
 }
 
 function addMotionSlot() {
@@ -8220,6 +8983,25 @@ function moveMotionSlot(slotId, direction) {
   slots.splice(toIndex, 0, slot);
   state.emotionLinker2.motionSlots = slots;
   state.selectedMotionSlotId = slotId;
+  markCorrectionDirtyAndRenderLinker2();
+}
+
+function sortMotionSlotsByName() {
+  const slots = Array.isArray(state.emotionLinker2.motionSlots) ? state.emotionLinker2.motionSlots : [];
+  if (slots.length < 2) return;
+
+  const collator = new Intl.Collator(["ko", "en"], { numeric: true, sensitivity: "base" });
+  const sorted = slots
+    .map((slot, index) => ({ slot, index, name: String(slot?.title ?? "").trim() }))
+    .sort((left, right) => {
+      if (!left.name && right.name) return 1;
+      if (left.name && !right.name) return -1;
+      return collator.compare(left.name, right.name) || left.index - right.index;
+    })
+    .map(({ slot }) => slot);
+
+  if (sorted.every((slot, index) => slot === slots[index])) return;
+  state.emotionLinker2.motionSlots = sorted;
   markCorrectionDirtyAndRenderLinker2();
 }
 
@@ -9043,6 +9825,7 @@ async function loadVrm(bytes) {
   applySelectedEmotionPreset();
   applyMotionCorrectionPreview();
   applyEffectModelVisibility();
+  applySpaceModelVisibility();
 }
 
 function frameModel(root) {
@@ -9787,6 +10570,7 @@ function createEmptyCorrection() {
     motionSlots: [],
     props: [],
     extraBoneFollowSettings: [],
+    expressionPoseBoneMapping: createDefaultExpressionPoseBoneMapping(),
     materialSettings: {
       outline: {
         materials: {},
@@ -9806,11 +10590,12 @@ function createEmptyCorrection() {
       },
       points: [],
     },
-    expressionPresets: createDefaultEmotionPresets().map(({ id, name, locked, isDisableBlink, rangeSlots, emotionImage }) => ({
+    expressionPresets: createDefaultEmotionPresets().map(({ id, name, locked, isDisableBlink, poseControls, rangeSlots, emotionImage }) => ({
       id,
       name,
       locked,
       isDisableBlink,
+      poseControls,
       rangeSlots,
       emotionImage,
     })),
@@ -9838,6 +10623,29 @@ function createEmptyEffectsMeta() {
     schemaVersion: 1,
     type: "vrm-effects-meta",
     effects: [],
+  };
+}
+
+function createEmptySpaceMeta() {
+  return {
+    schemaVersion: 1,
+    type: "vrm-space-meta",
+    activeSpaceId: "space-default-room",
+    spaces: [
+      {
+        id: "space-default-room",
+        name: "Default Cube Room",
+        type: "cubeRoom",
+        enabled: true,
+        size: [4, 2.8, 4],
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+        wallColor: "#1f2933",
+        floorColor: "#111827",
+        opacity: 0.55,
+        grid: true,
+      },
+    ],
   };
 }
 
@@ -10077,6 +10885,15 @@ function ensureAnimationMetaEntry(animationName) {
   return state.correction.animations[animationName];
 }
 
+function collectAllBoneOptions() {
+  if (!currentVrm?.scene) return [];
+  const names = new Set();
+  currentVrm.scene.traverse((object) => {
+    if (object?.isBone && object.name) names.add(object.name);
+  });
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+
 function ensureEmotionLinkerEntry(animationName) {
   if (!animationName) return null;
   state.emotionLinker.animations[animationName] = normalizeAnimationLinkEntry(state.emotionLinker.animations[animationName] ?? {});
@@ -10198,6 +11015,8 @@ function syncSaveMetaButton() {
   if (expressionButton) expressionButton.disabled = !(state.correctionPath && state.expressionDirty);
   const effectsButton = document.querySelector("#saveEffects");
   if (effectsButton) effectsButton.disabled = !state.effectsDirty;
+  const spaceButton = document.querySelector("#saveSpace");
+  if (spaceButton) spaceButton.disabled = !state.spaceDirty;
 }
 
 function isEmotionControlElement(target) {
@@ -10379,6 +11198,121 @@ function hasOwnField(target, key) {
   return Object.prototype.hasOwnProperty.call(target, key);
 }
 
+async function loadSpaceMeta() {
+  const fallback = createEmptySpaceMeta();
+  state.space = fallback;
+  state.spacePath = null;
+  state.spaceDirty = false;
+  const result = await window.vrmFiles.loadOrCreateSpaceMeta?.(JSON.stringify(fallback, null, 2));
+  if (!result?.data) return;
+  state.spacePath = result.filePath;
+  state.space = normalizeSpaceMeta(parseJsonBuffer(result.data, fallback));
+}
+
+function normalizeSpaceMeta(json) {
+  const fallback = createEmptySpaceMeta();
+  const spaces = Array.isArray(json?.spaces) && json.spaces.length ? json.spaces.map(normalizeSpaceRoom).filter(Boolean) : fallback.spaces;
+  const activeSpaceId = spaces.some((space) => space.id === json?.activeSpaceId) ? String(json.activeSpaceId) : spaces[0]?.id;
+  return {
+    schemaVersion: 1,
+    type: "vrm-space-meta",
+    activeSpaceId,
+    spaces,
+  };
+}
+
+function normalizeSpaceRoom(room = {}) {
+  const fallback = createEmptySpaceMeta().spaces[0];
+  const id = String(room?.id || fallback.id);
+  return {
+    id,
+    name: String(room?.name || fallback.name),
+    type: room?.type === "cubeRoom" ? "cubeRoom" : "cubeRoom",
+    enabled: room?.enabled !== false,
+    size: normalizeSpaceSize(room?.size ?? [room?.width, room?.height, room?.depth]),
+    position: normalizeEffectNumberArray(room?.position, fallback.position, 3).map((value) => clampNumber(value, -10, 10, 0)),
+    rotation: normalizeEffectNumberArray(room?.rotation, fallback.rotation, 3).map((value) => clampNumber(value, -180, 180, 0)),
+    wallColor: normalizeHexColor(room?.wallColor) ?? fallback.wallColor,
+    floorColor: normalizeHexColor(room?.floorColor) ?? fallback.floorColor,
+    opacity: clampNumber(normalizeFiniteNumber(room?.opacity, fallback.opacity), 0.05, 1, fallback.opacity),
+    grid: room?.grid !== false,
+  };
+}
+
+function normalizeSpaceSize(size) {
+  const fallback = createEmptySpaceMeta().spaces[0].size;
+  return normalizeEffectNumberArray(size, fallback, 3).map((value) => clampNumber(value, 0.5, 20, 4));
+}
+
+function serializeSpaceMeta() {
+  return normalizeSpaceMeta(state.space);
+}
+
+function getActiveSpaceRoom() {
+  state.space = normalizeSpaceMeta(state.space);
+  return state.space.spaces.find((space) => space.id === state.space.activeSpaceId) ?? state.space.spaces[0];
+}
+
+async function saveSpaceMeta() {
+  const result = await window.vrmFiles.saveSpaceMeta?.(JSON.stringify(serializeSpaceMeta(), null, 2));
+  if (!result) return;
+  state.spacePath = result.filePath;
+  state.spaceDirty = false;
+  syncSaveMetaButton();
+  renderPreservingScrollableUi();
+}
+
+function updateSpaceRoom(patch, shouldRender = false) {
+  const room = getActiveSpaceRoom();
+  state.space.spaces = state.space.spaces.map((space) => (space.id === room.id ? normalizeSpaceRoom({ ...space, ...patch }) : space));
+  state.spaceDirty = true;
+  syncSaveMetaButton();
+  syncSpacePreview();
+  if (shouldRender) renderPreservingScrollableUi();
+}
+
+function updateSpaceRoomNumber(key, value, shouldRender = false) {
+  if (!Number.isFinite(value)) return;
+  const room = getActiveSpaceRoom();
+  if (key === "width" || key === "height" || key === "depth") {
+    const index = key === "width" ? 0 : key === "height" ? 1 : 2;
+    const size = [...room.size];
+    size[index] = clampNumber(value, 0.5, 20, room.size[index]);
+    updateSpaceRoom({ size }, shouldRender);
+    return;
+  }
+  if (key === "opacity") {
+    updateSpaceRoom({ opacity: clampNumber(value, 0.05, 1, room.opacity) }, shouldRender);
+  }
+}
+
+function updateSpaceRoomVector(key, axis, value) {
+  if (!Number.isInteger(axis) || axis < 0 || axis > 2 || !Number.isFinite(value)) return;
+  const room = getActiveSpaceRoom();
+  if (key === "position") {
+    const position = [...room.position];
+    position[axis] = clampNumber(value, -10, 10, 0);
+    updateSpaceRoom({ position }, false);
+  }
+  if (key === "rotation") {
+    const rotation = [...room.rotation];
+    rotation[axis] = clampNumber(value, -180, 180, 0);
+    updateSpaceRoom({ rotation }, false);
+  }
+}
+
+function syncSpaceNumberInputFromState(input) {
+  const room = getActiveSpaceRoom();
+  const valueMap = {
+    width: room.size[0],
+    height: room.size[1],
+    depth: room.size[2],
+    opacity: room.opacity,
+  };
+  if (!hasOwnField(valueMap, input.dataset.spaceNumber)) return;
+  input.value = roundForInput(valueMap[input.dataset.spaceNumber]);
+}
+
 async function loadEffectsMeta() {
   const fallback = createEmptyEffectsMeta();
   state.effects = fallback;
@@ -10439,8 +11373,8 @@ function normalizeParticleEffectSettings(settings = {}) {
   const speedMin = Math.min(20, Math.max(0, normalizeFiniteNumber(speedSource[0], 1.4)));
   const speedMax = Math.min(20, Math.max(speedMin, normalizeFiniteNumber(speedSource[1], speedMin)));
   const sizeSource = Array.isArray(settings.size) ? settings.size : [settings.sizeMin ?? settings.size, settings.sizeMax ?? settings.size];
-  const sizeMin = Math.min(0.3, Math.max(0.01, normalizeFiniteNumber(sizeSource[0], 0.06)));
-  const sizeMax = Math.min(0.3, Math.max(sizeMin, normalizeFiniteNumber(sizeSource[1], sizeMin)));
+  const sizeMin = Math.min(5, Math.max(0.01, normalizeFiniteNumber(sizeSource[0], 0.06)));
+  const sizeMax = Math.min(5, Math.max(sizeMin, normalizeFiniteNumber(sizeSource[1], sizeMin)));
   const lifetimeMin = Math.min(10, Math.max(0.05, normalizeFiniteNumber(settings.lifetime?.[0], settings.lifetimeMin ?? 0.6)));
   const lifetimeMax = Math.min(10, Math.max(lifetimeMin, normalizeFiniteNumber(settings.lifetime?.[1], settings.lifetimeMax ?? 1.2)));
   const rotationSource = Array.isArray(settings.rotation) ? settings.rotation : [settings.rotationMin ?? 0, settings.rotationMax ?? 360];
@@ -10459,9 +11393,16 @@ function normalizeParticleEffectSettings(settings = {}) {
     billboard: hasOwnField(settings, "billboard") ? Boolean(settings.billboard) : defaultBillboard,
     burst: Boolean(settings.burst),
     colorSlots,
+    colorRandom: hasOwnField(settings, "colorRandom") ? Boolean(settings.colorRandom) : true,
+    colorSequenceMode: settings.colorSequenceMode === "global" ? "global" : "lifetime",
+    colorTransition: settings.colorTransition === "blend" ? "blend" : "step",
+    colorCycleSeconds: Math.min(30, Math.max(0.01, normalizeFiniteNumber(settings.colorCycleSeconds, 0.5))),
     spread,
+    spreadMode: settings.spreadMode === "billboardPlane" ? "billboardPlane" : "3d",
     emitterRadiusEnabled: Boolean(settings.emitterRadiusEnabled),
     emitterRadius: Math.min(3, Math.max(0, normalizeFiniteNumber(settings.emitterRadius, spread * 0.12))),
+    radialMaskEnabled: Boolean(settings.radialMaskEnabled),
+    radialMaskDiameter: Math.min(10, Math.max(0, normalizeFiniteNumber(settings.radialMaskDiameter, 0.5))),
     speed: [speedMin, speedMax],
     drag: Math.min(30, Math.max(0, normalizeFiniteNumber(settings.drag, 0))),
     gravity: Math.min(10, Math.max(-10, normalizeFiniteNumber(settings.gravity, 0))),
@@ -10497,6 +11438,11 @@ function normalizeParticleTextureSettings(texture) {
   const columns = Math.min(16, Math.max(1, Math.round(normalizeFiniteNumber(atlas.columns, 1))));
   const rows = Math.min(16, Math.max(1, Math.round(normalizeFiniteNumber(atlas.rows, 1))));
   const aspectRatio = Math.min(20, Math.max(0.05, normalizeFiniteNumber(atlas.aspectRatio, 1)));
+  const pivotSource = Array.isArray(texture?.pivot) ? texture.pivot : [texture?.pivotX, texture?.pivotY];
+  const pivot = [
+    clampNumber(Number(pivotSource[0]), 0, 1, 0.5),
+    clampNumber(Number(pivotSource[1]), 0, 1, 0.5),
+  ];
   return {
     image,
     sourceType,
@@ -10507,6 +11453,7 @@ function normalizeParticleTextureSettings(texture) {
       aspectRatio,
       spriteMode: "random",
     },
+    pivot,
   };
 }
 
@@ -10957,11 +11904,27 @@ async function chooseEffectParticleTexture(effectId, particleId = null) {
           aspectRatio: 1,
           spriteMode: "random",
         },
+        pivot: [0.5, 0.5],
       },
     },
     true,
     particleId,
   );
+}
+
+function updateEffectTexturePivotFromPointer(event, picker) {
+  event.preventDefault();
+  const rect = picker.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+  const effectId = picker.dataset.effectTexturePivotPicker;
+  const particle = getEffectParticleSlotById(effectId, picker.dataset.particleId);
+  if (!particle) return;
+  const texture = normalizeParticleTextureSettings(particle.texture);
+  const pivot = [
+    clampNumber((event.clientX - rect.left) / rect.width, 0, 1, 0.5),
+    1 - clampNumber((event.clientY - rect.top) / rect.height, 0, 1, 0.5),
+  ].map((value) => Math.round(value * 100) / 100);
+  updateEffectSlotNested(effectId, "particle", { texture: { ...texture, pivot } }, true, particle.id);
 }
 
 function isSupportedParticleTextureFile(fileName) {
@@ -10988,6 +11951,8 @@ function updateEffectSlotNumber(effectId, key, value, particleId = null) {
     const map = {
       particleSpread: "spread",
       particleEmitterRadius: "emitterRadius",
+      particleRadialMaskDiameter: "radialMaskDiameter",
+      particleColorCycleSeconds: "colorCycleSeconds",
       particleDrag: "drag",
       particleGravity: "gravity",
       particleDriftStrength: "driftStrength",
@@ -11064,6 +12029,14 @@ function updateEffectSlotNumber(effectId, key, value, particleId = null) {
       const atlasValue = atlasKey === "aspectRatio" ? Math.min(20, Math.max(0.05, value)) : Math.min(16, Math.max(1, Math.round(value)));
       const atlas = { ...texture.atlas, [atlasKey]: atlasValue };
       updateEffectSlotNested(effectId, "particle", { texture: { ...texture, atlas } }, true, particle.id);
+    } else if (key === "particleTexturePivotX" || key === "particleTexturePivotY") {
+      const effect = state.effects.effects.find((item) => item.id === effectId);
+      const particle = getEffectParticleSlotById(effectId, particleId) ?? getSelectedEffectParticleSlot(effect);
+      if (!particle) return;
+      const texture = normalizeParticleTextureSettings(particle.texture);
+      const pivot = [...texture.pivot];
+      pivot[key === "particleTexturePivotX" ? 0 : 1] = clampNumber(value, 0, 1, 0.5);
+      updateEffectSlotNested(effectId, "particle", { texture: { ...texture, pivot } }, true, particle.id);
     } else {
       updateEffectSlotNested(effectId, "particle", { [map[key]]: value }, false, particleId);
     }
@@ -11470,6 +12443,8 @@ function syncEffectNumberInputFromState(input) {
     particleScale: particle?.scale,
     particleSpread: particle?.spread,
     particleEmitterRadius: particle?.emitterRadius,
+    particleRadialMaskDiameter: particle?.radialMaskDiameter,
+    particleColorCycleSeconds: particle?.colorCycleSeconds,
     particleDrag: particle?.drag,
     particleGravity: particle?.gravity,
     particleDriftStrength: particle?.driftStrength,
@@ -11496,6 +12471,8 @@ function syncEffectNumberInputFromState(input) {
     particleTextureColumns: particle?.texture?.atlas?.columns,
     particleTextureRows: particle?.texture?.atlas?.rows,
     particleTextureAspectRatio: particle?.texture?.atlas?.aspectRatio,
+    particleTexturePivotX: particle?.texture?.pivot?.[0],
+    particleTexturePivotY: particle?.texture?.pivot?.[1],
     particleSeed: particle?.seed,
   };
   if (!hasOwnField(valueMap, key) || valueMap[key] == null) return;
@@ -11514,6 +12491,8 @@ function isEffectRangeNumberKey(key) {
     key === "particleLifetimeMax" ||
     key === "particleRotationMin" ||
     key === "particleRotationMax" ||
+    key === "particleTexturePivotX" ||
+    key === "particleTexturePivotY" ||
     /^particleAngularVelocity[XYZ](Min|Max)$/.test(key ?? "")
   );
 }
@@ -11592,6 +12571,119 @@ function getSelectedEffectParticleSlotByEffectId(effectId) {
   return effect ? getSelectedEffectParticleSlot(effect) : null;
 }
 
+function syncSpacePreview() {
+  if (state.mode !== "space") {
+    clearSpacePreview();
+    return;
+  }
+  const room = getActiveSpaceRoom();
+  if (!room?.enabled) {
+    clearSpacePreview();
+    return;
+  }
+  if (!spacePreview) createSpacePreview();
+  applySpacePreviewSettings(room);
+}
+
+function createSpacePreview() {
+  clearSpacePreview();
+  const group = new THREE.Group();
+  group.name = "ExpressionEditor_SpacePreview";
+
+  const walls = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.55,
+      side: THREE.BackSide,
+      depthWrite: false,
+    }),
+  );
+  walls.name = "SpacePreview_Walls";
+  group.add(walls);
+
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.86,
+      side: THREE.DoubleSide,
+    }),
+  );
+  floor.name = "SpacePreview_Floor";
+  floor.rotation.x = -Math.PI / 2;
+  group.add(floor);
+
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+    new THREE.LineBasicMaterial({ color: 0x7dd3fc, transparent: true, opacity: 0.45 }),
+  );
+  edges.name = "SpacePreview_Edges";
+  group.add(edges);
+
+  const grid = new THREE.GridHelper(1, 8, 0x7dd3fc, 0x334155);
+  grid.name = "SpacePreview_Grid";
+  group.add(grid);
+
+  scene.add(group);
+  spacePreview = { group, walls, floor, edges, grid };
+}
+
+function clearSpacePreview() {
+  if (!spacePreview?.group) return;
+  scene.remove(spacePreview.group);
+  spacePreview.group.traverse((object) => {
+    if (object.geometry) object.geometry.dispose();
+    if (object.material) {
+      if (Array.isArray(object.material)) object.material.forEach((material) => material.dispose?.());
+      else object.material.dispose?.();
+    }
+  });
+  spacePreview = null;
+}
+
+function applySpacePreviewSettings(room = getActiveSpaceRoom()) {
+  if (!spacePreview?.group || !room) return;
+  const [width, height, depth] = room.size;
+  spacePreview.group.position.set(room.position[0], room.position[1], room.position[2]);
+  spacePreview.group.rotation.set(
+    THREE.MathUtils.degToRad(room.rotation[0]),
+    THREE.MathUtils.degToRad(room.rotation[1]),
+    THREE.MathUtils.degToRad(room.rotation[2]),
+  );
+
+  spacePreview.walls.scale.set(width, height, depth);
+  spacePreview.walls.position.set(0, height / 2, 0);
+  spacePreview.walls.material.color.set(room.wallColor);
+  spacePreview.walls.material.opacity = room.opacity;
+
+  spacePreview.floor.scale.set(width, depth, 1);
+  spacePreview.floor.position.set(0, 0.002, 0);
+  spacePreview.floor.material.color.set(room.floorColor);
+
+  spacePreview.edges.scale.set(width, height, depth);
+  spacePreview.edges.position.set(0, height / 2, 0);
+
+  spacePreview.grid.scale.set(width, 1, depth);
+  spacePreview.grid.position.set(0, 0.006, 0);
+  spacePreview.grid.visible = Boolean(room.grid);
+}
+
+function updateSpacePreviewRuntime() {
+  if (state.mode !== "space") {
+    clearSpacePreview();
+    return;
+  }
+  syncSpacePreview();
+}
+
+function applySpaceModelVisibility() {
+  if (!currentVrm?.scene) return;
+  currentVrm.scene.visible = state.mode === "space" ? state.spaceShowModel : currentVrm.scene.visible;
+}
+
 function syncSelectedEffectPreview() {
   const effect = getActiveEffectPreviewSlot();
   if (!effect) {
@@ -11619,6 +12711,7 @@ function getActiveEffectPreviewSlot() {
     const effect = getEffectSlotById(state.activeMotionSlotEffectId);
     return effect ? { ...effect, enabled: true } : null;
   }
+  if (state.mode === "expression") return getActiveEmotionImageEffectSlot();
   return null;
 }
 
@@ -11982,12 +13075,49 @@ function setParticleQuadOpacity(opacities, index, value) {
 function setParticleQuadColor(colors, index, color) {
   if (!colors) return;
   effectParticleColor.set(color);
+  setParticleQuadColorValue(colors, index, effectParticleColor);
+}
+
+function setParticleQuadColorValue(colors, index, color) {
+  if (!colors || !color) return;
   const start = index * 12;
   for (let offset = 0; offset < 12; offset += 3) {
-    colors[start + offset] = effectParticleColor.r;
-    colors[start + offset + 1] = effectParticleColor.g;
-    colors[start + offset + 2] = effectParticleColor.b;
+    colors[start + offset] = color.r;
+    colors[start + offset + 1] = color.g;
+    colors[start + offset + 2] = color.b;
   }
+}
+
+function applyParticleSequenceColor(colors, index, settings, age, lifetime, elapsed) {
+  const slots = settings.colorSlots;
+  if (settings.colorRandom || slots.length < 2) return;
+  let colorIndex = 0;
+  let nextIndex = 0;
+  let blend = 0;
+  if (settings.colorSequenceMode === "global") {
+    const phase = elapsed / Math.max(settings.colorCycleSeconds, 0.01);
+    colorIndex = Math.floor(phase) % slots.length;
+    nextIndex = (colorIndex + 1) % slots.length;
+    blend = phase - Math.floor(phase);
+  } else {
+    const progress = clampNumber(age / Math.max(lifetime, 0.000001), 0, 1, 0);
+    if (settings.colorTransition === "blend") {
+      const phase = progress * (slots.length - 1);
+      colorIndex = Math.min(slots.length - 1, Math.floor(phase));
+      nextIndex = Math.min(slots.length - 1, colorIndex + 1);
+      blend = phase - Math.floor(phase);
+    } else {
+      colorIndex = Math.min(slots.length - 1, Math.floor(progress * slots.length));
+      nextIndex = colorIndex;
+    }
+  }
+  if (settings.colorTransition !== "blend") blend = 0;
+  effectParticleColor.set(slots[colorIndex]);
+  if (blend > 0.000001 && nextIndex !== colorIndex) {
+    effectParticleNextColor.set(slots[nextIndex]);
+    effectParticleColor.lerp(effectParticleNextColor, blend);
+  }
+  setParticleQuadColorValue(colors, index, effectParticleColor);
 }
 
 function writeParticleQuadPositions(
@@ -12002,6 +13132,7 @@ function writeParticleQuadPositions(
   velocities = null,
   hostObject = effectPreview?.group,
   aspectRatio = 1,
+  pivot = [0.5, 0.5],
 ) {
   const centerStart = index * 3;
   const vertexStart = index * 12;
@@ -12010,11 +13141,17 @@ function writeParticleQuadPositions(
   const aspectScale = Math.sqrt(safeAspectRatio);
   const halfWidth = baseHalfSize / aspectScale;
   const halfHeight = baseHalfSize * aspectScale;
+  const pivotX = clampNumber(Number(pivot?.[0]), 0, 1, 0.5);
+  const pivotY = clampNumber(Number(pivot?.[1]), 0, 1, 0.5);
+  const left = -2 * halfWidth * pivotX;
+  const right = 2 * halfWidth * (1 - pivotX);
+  const bottom = -2 * halfHeight * pivotY;
+  const top = 2 * halfHeight * (1 - pivotY);
   const corners = [
-    [-halfWidth, -halfHeight, 0],
-    [halfWidth, -halfHeight, 0],
-    [halfWidth, halfHeight, 0],
-    [-halfWidth, halfHeight, 0],
+    [left, bottom, 0],
+    [right, bottom, 0],
+    [right, top, 0],
+    [left, top, 0],
   ];
   if (billboard) {
     hostObject?.updateMatrixWorld(true);
@@ -12114,6 +13251,8 @@ function createParticleEffectPreview(particle) {
       textureMap: { value: effectWhiteTexture },
       useTexture: { value: false },
       textureColorMode: { value: 0 },
+      radialMaskEnabled: { value: settings.spreadMode === "billboardPlane" && settings.radialMaskEnabled },
+      radialMaskRadius: { value: settings.radialMaskDiameter * 0.5 },
     },
     vertexShader: `
       attribute float particleOpacity;
@@ -12121,11 +13260,14 @@ function createParticleEffectPreview(particle) {
       varying float vOpacity;
       varying vec3 vColor;
       varying vec2 vUv;
+      varying vec2 vMaskPosition;
       void main() {
         vOpacity = particleOpacity;
         vColor = particleColor;
         vUv = uv;
         vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vec4 mvEmitter = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+        vMaskPosition = mvPosition.xy - mvEmitter.xy;
         gl_Position = projectionMatrix * mvPosition;
       }
     `,
@@ -12134,9 +13276,12 @@ function createParticleEffectPreview(particle) {
       uniform sampler2D textureMap;
       uniform bool useTexture;
       uniform int textureColorMode;
+      uniform bool radialMaskEnabled;
+      uniform float radialMaskRadius;
       varying float vOpacity;
       varying vec3 vColor;
       varying vec2 vUv;
+      varying vec2 vMaskPosition;
 
       float sdSegment(vec2 p, vec2 a, vec2 b) {
         vec2 pa = p - a;
@@ -12188,6 +13333,7 @@ function createParticleEffectPreview(particle) {
       }
 
       void main() {
+        if (radialMaskEnabled && length(vMaskPosition) < radialMaskRadius) discard;
         vec2 centered = vUv - vec2(0.5);
         float dist = length(centered);
         float mask = smoothstep(0.5, 0.36, dist);
@@ -12320,8 +13466,17 @@ function applyEffectPreviewSettings(effect = getSelectedEffectSlot()) {
       "XYZ",
     );
     particlePreview.object.scale.setScalar(particle.scale);
+    particlePreview.object.updateMatrixWorld(true);
+    particlePreview.object.getWorldScale(effectParticleWorldScale);
+    if (material.uniforms?.radialMaskEnabled) {
+      material.uniforms.radialMaskEnabled.value = particle.spreadMode === "billboardPlane" && particle.radialMaskEnabled;
+    }
+    if (material.uniforms?.radialMaskRadius) {
+      const worldScale = (Math.abs(effectParticleWorldScale.x) + Math.abs(effectParticleWorldScale.y) + Math.abs(effectParticleWorldScale.z)) / 3;
+      material.uniforms.radialMaskRadius.value = particle.radialMaskDiameter * 0.5 * worldScale;
+    }
     if (particlePreview.marker) {
-      particlePreview.marker.visible = Boolean(state.effectGizmoVisible && particle.enabled);
+      particlePreview.marker.visible = Boolean(state.mode === "effect" && state.effectGizmoVisible && particle.enabled);
       particlePreview.marker.position.copy(particlePreview.object.position);
       particlePreview.marker.rotation.copy(particlePreview.object.rotation);
       const radiusCircle = particlePreview.marker.userData?.radiusCircle;
@@ -12353,7 +13508,7 @@ function updateEffectPreviewAnchor(effect = getSelectedEffectSlot()) {
 }
 
 function updateEffectPreviewRuntime(delta) {
-  if (state.mode !== "effect" && state.mode !== "linker2") {
+  if (state.mode !== "effect" && state.mode !== "linker2" && state.mode !== "expression") {
     clearEffectPreview();
     return;
   }
@@ -12538,6 +13693,7 @@ function updateParticleEffectPreview(effect, particlePreview, particle, t, delta
       continue;
     }
     setParticleQuadOpacity(opacities, index, evaluateParticleOpacityGraph(settings.opacityGraph, ages[index] / Math.max(lifetimes[index], 0.000001)));
+    applyParticleSequenceColor(colors, index, settings, ages[index], lifetimes[index], particlePreview.elapsed);
     velocities[index * 3] += effectLocalGravity.x;
     velocities[index * 3 + 1] += effectLocalGravity.y;
     velocities[index * 3 + 2] += effectLocalGravity.z;
@@ -12578,6 +13734,7 @@ function updateParticleEffectPreview(effect, particlePreview, particle, t, delta
       velocities,
       particlePreview.object,
       settings.shape === "texture" ? settings.texture.atlas.aspectRatio : 1,
+      settings.shape === "texture" ? settings.texture.pivot : [0.5, 0.5],
     );
   }
   geometry.attributes.position.needsUpdate = true;
@@ -12627,16 +13784,36 @@ function spawnEffectParticle(index, positions, uvs, opacities, colors, centers, 
   const angle = rng() * Math.PI * 2;
   const spreadRadius = settings.emitterRadiusEnabled ? settings.emitterRadius : settings.spread * 0.12;
   const radius = Math.sqrt(rng()) * spreadRadius;
-  const lift = settings.emitterRadiusEnabled ? 0 : (rng() - 0.25) * settings.spread * 0.18;
-  centers[index * 3] = Math.cos(angle) * radius;
-  centers[index * 3 + 1] = lift * 0.2;
-  centers[index * 3 + 2] = Math.sin(angle) * radius;
-  const lateral = settings.spread * (0.12 + rng() * 0.28);
-  const upward = 0.35 + rng() * 0.65;
   const speed = lerp(settings.speed[0], settings.speed[1], rng());
-  velocities[index * 3] = Math.cos(angle) * speed * lateral;
-  velocities[index * 3 + 1] = upward * speed;
-  velocities[index * 3 + 2] = Math.sin(angle) * speed * lateral;
+  if (settings.spreadMode === "billboardPlane") {
+    hostObject?.updateMatrixWorld(true);
+    hostObject?.getWorldQuaternion(effectWorldQuaternion);
+    effectParticleLocalCameraQuaternion.copy(camera.quaternion).premultiply(effectWorldQuaternion.invert());
+    effectParticlePlaneRight.set(1, 0, 0).applyQuaternion(effectParticleLocalCameraQuaternion).normalize();
+    effectParticlePlaneUp.set(0, 1, 0).applyQuaternion(effectParticleLocalCameraQuaternion).normalize();
+    const centerX = Math.cos(angle) * radius;
+    const centerY = Math.sin(angle) * radius;
+    centers[index * 3] = effectParticlePlaneRight.x * centerX + effectParticlePlaneUp.x * centerY;
+    centers[index * 3 + 1] = effectParticlePlaneRight.y * centerX + effectParticlePlaneUp.y * centerY;
+    centers[index * 3 + 2] = effectParticlePlaneRight.z * centerX + effectParticlePlaneUp.z * centerY;
+    const maxSpreadAngle = Math.min(Math.PI, settings.spread * Math.PI * 0.5);
+    const directionAngle = (rng() * 2 - 1) * maxSpreadAngle;
+    const directionX = Math.sin(directionAngle);
+    const directionY = Math.cos(directionAngle);
+    velocities[index * 3] = (effectParticlePlaneRight.x * directionX + effectParticlePlaneUp.x * directionY) * speed;
+    velocities[index * 3 + 1] = (effectParticlePlaneRight.y * directionX + effectParticlePlaneUp.y * directionY) * speed;
+    velocities[index * 3 + 2] = (effectParticlePlaneRight.z * directionX + effectParticlePlaneUp.z * directionY) * speed;
+  } else {
+    const lift = settings.emitterRadiusEnabled ? 0 : (rng() - 0.25) * settings.spread * 0.18;
+    centers[index * 3] = Math.cos(angle) * radius;
+    centers[index * 3 + 1] = lift * 0.2;
+    centers[index * 3 + 2] = Math.sin(angle) * radius;
+    const lateral = settings.spread * (0.12 + rng() * 0.28);
+    const upward = 0.35 + rng() * 0.65;
+    velocities[index * 3] = Math.cos(angle) * speed * lateral;
+    velocities[index * 3 + 1] = upward * speed;
+    velocities[index * 3 + 2] = Math.sin(angle) * speed * lateral;
+  }
   const driftAngle = rng() * Math.PI * 2;
   drift[index * 3] = Math.cos(driftAngle);
   drift[index * 3 + 1] = Math.sin(driftAngle);
@@ -12657,7 +13834,9 @@ function spawnEffectParticle(index, positions, uvs, opacities, colors, centers, 
   lifetimes[index] = lerp(settings.lifetime[0], settings.lifetime[1], rng());
   sizes[index] = lerp(settings.size[0], settings.size[1], rng());
   alive[index] = 1;
-  const color = settings.colorSlots[Math.min(settings.colorSlots.length - 1, Math.floor(rng() * settings.colorSlots.length))] ?? "#ffd166";
+  const color = settings.colorRandom
+    ? settings.colorSlots[Math.min(settings.colorSlots.length - 1, Math.floor(rng() * settings.colorSlots.length))]
+    : settings.colorSlots[0];
   writeParticleQuadUvs(uvs, index, getRandomParticleAtlasCell(settings, rng));
   setParticleQuadColor(colors, index, color);
   setParticleQuadOpacity(opacities, index, 0);
@@ -12673,6 +13852,7 @@ function spawnEffectParticle(index, positions, uvs, opacities, colors, centers, 
     velocities,
     hostObject,
     settings.shape === "texture" ? settings.texture.atlas.aspectRatio : 1,
+    settings.shape === "texture" ? settings.texture.pivot : [0.5, 0.5],
   );
 }
 
@@ -12811,6 +13991,7 @@ function normalizeCorrectionJson(json) {
   next.blush = normalizeBlushSettings(json.blush ?? legacyBlush);
   next.emotionImage = normalizeEmotionImageSettings(json.emotionImage);
   next.extraBoneFollowSettings = normalizeExtraBoneFollowSettings(json.extraBoneFollowSettings);
+  next.expressionPoseBoneMapping = normalizeExpressionPoseBoneMapping(json.expressionPoseBoneMapping);
   next.materialSettings = normalizeMaterialSettings(json.materialSettings);
   next.expressionPresets = normalizeExpressionPresets(json.expressionPresets);
   if (next.emotionImage?.image) {
@@ -12919,6 +14100,7 @@ function normalizeExpressionPresets(presets) {
     locked: Boolean(preset.locked),
     isDisableBlink: Boolean(preset.isDisableBlink),
     parameters: normalizeExpressionParameterValues(preset.parameters),
+    poseControls: normalizeExpressionPoseControls(preset.poseControls),
     blush: normalizePresetBlush(preset.blush),
     emotionImage: preset.emotionImage ? normalizePresetEmotionImage(preset.emotionImage) : null,
     rangeSlots: normalizeExpressionRangeSlots(preset.rangeSlots),
@@ -13014,6 +14196,20 @@ function isPresetBlushEnabled(preset) {
   return Boolean(preset?.blush && normalizePresetBlush(preset.blush).enabled);
 }
 
+function normalizeEmotionImageEffect(effect) {
+  const effectId = String(effect?.effectId ?? "").trim();
+  if (!effectId) return null;
+  return {
+    effectId,
+    positionOffset: normalizeEffectNumberArray(effect?.positionOffset, [0, 0, 0], 3).map((value) =>
+      clampNumber(value, -20, 20, 0),
+    ),
+    rotationOffset: normalizeEffectNumberArray(effect?.rotationOffset, [0, 0, 0], 3).map((value) => normalizeDegrees(value)),
+    scale: clampNumber(Number(effect?.scale), 0.01, 10, 1),
+    startTime: clampNumber(Number(effect?.startTime), 0, 30, 0),
+  };
+}
+
 function normalizeEmotionImageSettings(settings) {
   if (!settings || !settings.image) return null;
   return {
@@ -13033,6 +14229,7 @@ function normalizeEmotionImageSettings(settings) {
     opacityGraph: normalizeEmotionImageGraph(settings.opacityGraph, 1),
     headRotationAxes: normalizeHeadRotationAxes(settings.headRotationAxes),
     headRotationGraph: normalizeHeadRotationGraph(settings.headRotationGraph),
+    effect: normalizeEmotionImageEffect(settings.effect),
   };
 }
 
@@ -13337,6 +14534,7 @@ function normalizeExpressionRangeSlots(slots) {
       id: String(slot?.id ?? `range-${index}`),
       threshold: clampEmotionValue(Number(slot?.threshold ?? 0.5)),
       parameters: normalizeExpressionParameterValues(slot?.parameters),
+      poseControls: normalizeExpressionPoseControls(slot?.poseControls),
       ...(slot?.blushOpacity != null ? { blushOpacity: clampEmotionValue(Number(slot.blushOpacity)) } : {}),
       ...(slot?.emotionImage ? { emotionImage: normalizePresetEmotionImage(slot.emotionImage) } : {}),
     }))
@@ -13377,6 +14575,32 @@ function normalizeAnimationCorrectionEntry(animation) {
   }
   if (!next.props.length) delete next.props;
   return next;
+}
+
+function normalizeExpressionPoseControls(controls) {
+  return Object.fromEntries(EXPRESSION_POSE_CONTROL_SPECS.map(({ key }) => {
+    const source = controls?.[key];
+    return [key, {
+      value: normalizeExpressionPoseValue(key, source?.value),
+      mode: source?.mode === "override" || source?.override === true ? "override" : "offset",
+    }];
+  }));
+}
+
+function normalizeExpressionPoseBoneMapping(mapping) {
+  return {
+    leftEye: String(mapping?.leftEye ?? ""),
+    rightEye: String(mapping?.rightEye ?? ""),
+  };
+}
+
+function normalizeExpressionPoseValue(key, value) {
+  const spec = EXPRESSION_POSE_CONTROL_SPECS.find((item) => item.key === key);
+  if (!spec) return 0;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  const precision = spec.step < 1 ? 100 : 1;
+  return Math.round(clampNumber(number, spec.min, spec.max, 0) * precision) / precision;
 }
 
 function normalizeExpressionTimeline(timeline) {
@@ -13453,6 +14677,7 @@ function serializeCorrection() {
       locked: preset.locked,
       isDisableBlink: preset.isDisableBlink,
       parameters: preset.parameters,
+      poseControls: preset.poseControls,
       rangeSlots,
       blush,
       emotionImage: preset.emotionImage,
@@ -13527,6 +14752,8 @@ function captureBoneRestTransforms() {
   state.boneRestTransforms = new Map();
   lastCorrectionBases = new Map();
   lastExtraBoneFollowBases = new Map();
+  lastExpressionPoseBases = new Map();
+  expressionPoseBoneRestQuaternions = new WeakMap();
   for (const boneName of HUMAN_BONES) {
     const bone = getRawBoneNode(boneName);
     if (!bone) continue;
@@ -13536,6 +14763,9 @@ function captureBoneRestTransforms() {
       scale: bone.scale.clone(),
     });
   }
+  currentVrm?.scene?.traverse((object) => {
+    if (object?.isBone) expressionPoseBoneRestQuaternions.set(object, object.quaternion.clone());
+  });
 }
 
 function findBoneByName(name) {
@@ -13621,6 +14851,90 @@ function clearExtraBoneFollowPreview() {
     base.bone.quaternion.copy(base.quaternion);
   }
   lastExtraBoneFollowBases = new Map();
+  currentVrm.scene.updateMatrixWorld(true);
+}
+
+function applyExpressionPosePreview() {
+  if (!currentVrm || !state.boneRestTransforms.size) return;
+  clearExpressionPosePreview();
+  const preset = getSelectedEmotionPreset();
+  if (!preset || preset.value <= 0) return;
+  const controls = getExpressionPoseControlsAtValue(preset, preset.value, state.mode === "expression", null, true);
+  const headYaw = controls.headYaw;
+  const eyeGazeX = controls.eyeGazeX;
+  const eyeGazeY = controls.eyeGazeY;
+  if (Math.abs(headYaw.value) > 0.000001) {
+    applyExpressionPoseAxes("head", { y: THREE.MathUtils.degToRad(headYaw.value) }, { y: headYaw.mode });
+  }
+  if (Math.abs(eyeGazeX.value) <= 0.000001 && Math.abs(eyeGazeY.value) <= 0.000001) return;
+  const eyeAxes = {};
+  const eyeModes = {};
+  if (Math.abs(eyeGazeX.value) > 0.000001) {
+    eyeAxes.y = THREE.MathUtils.degToRad(eyeGazeX.value * EXPRESSION_EYE_YAW_MAX);
+    eyeModes.y = eyeGazeX.mode;
+  }
+  if (Math.abs(eyeGazeY.value) > 0.000001) {
+    eyeAxes.x = THREE.MathUtils.degToRad(-eyeGazeY.value * EXPRESSION_EYE_PITCH_MAX);
+    eyeModes.x = eyeGazeY.mode;
+  }
+  applyExpressionPoseParentAxes(getExpressionEyeBone("leftEye"), eyeAxes, eyeModes);
+  applyExpressionPoseParentAxes(getExpressionEyeBone("rightEye"), eyeAxes, eyeModes);
+  currentVrm.scene.updateMatrixWorld(true);
+}
+
+function getExpressionEyeBone(side) {
+  if (side !== "leftEye" && side !== "rightEye") return null;
+  const mapping = normalizeExpressionPoseBoneMapping(state.correction.expressionPoseBoneMapping);
+  if (mapping[side]) return findBoneByName(mapping[side]);
+  const standard = getRawBoneNode(side);
+  if (standard) return standard;
+  const aliases = side === "leftEye" ? ["J_Adj_L_FaceEye"] : ["J_Adj_R_FaceEye"];
+  for (const name of aliases) {
+    const bone = findBoneByName(name);
+    if (bone) return bone;
+  }
+  return null;
+}
+
+function applyExpressionPoseAxes(boneOrName, axes, modes) {
+  const bone = typeof boneOrName === "string" ? getRawBoneNode(boneOrName) : boneOrName;
+  const restQuaternion = bone ? expressionPoseBoneRestQuaternions.get(bone) : null;
+  if (!bone || !restQuaternion) return;
+  if (!lastExpressionPoseBases.has(bone)) {
+    lastExpressionPoseBases.set(bone, { bone, quaternion: bone.quaternion.clone() });
+  }
+  const relative = restQuaternion.clone().invert().multiply(bone.quaternion);
+  const euler = new THREE.Euler().setFromQuaternion(relative, "XYZ");
+  for (const axis of ["x", "y", "z"]) {
+    if (axes[axis] == null) continue;
+    if (modes[axis] === "override") euler[axis] = axes[axis];
+    else euler[axis] += axes[axis];
+  }
+  bone.quaternion.copy(restQuaternion).multiply(new THREE.Quaternion().setFromEuler(euler));
+}
+
+function applyExpressionPoseParentAxes(bone, axes, modes) {
+  const restQuaternion = bone ? expressionPoseBoneRestQuaternions.get(bone) : null;
+  if (!bone || !restQuaternion) return;
+  if (!lastExpressionPoseBases.has(bone)) {
+    lastExpressionPoseBases.set(bone, { bone, quaternion: bone.quaternion.clone() });
+  }
+  const relative = bone.quaternion.clone().multiply(restQuaternion.clone().invert());
+  const euler = new THREE.Euler().setFromQuaternion(relative, "XYZ");
+  for (const axis of ["x", "y", "z"]) {
+    if (axes[axis] == null) continue;
+    if (modes[axis] === "override") euler[axis] = axes[axis];
+    else euler[axis] += axes[axis];
+  }
+  bone.quaternion.copy(new THREE.Quaternion().setFromEuler(euler)).multiply(restQuaternion);
+}
+
+function clearExpressionPosePreview() {
+  if (!currentVrm || !lastExpressionPoseBases.size) return;
+  for (const base of lastExpressionPoseBases.values()) {
+    base.bone?.quaternion.copy(base.quaternion);
+  }
+  lastExpressionPoseBases = new Map();
   currentVrm.scene.updateMatrixWorld(true);
 }
 
@@ -14440,6 +15754,7 @@ function formatModeName(value) {
   if (value === "expression") return "Expression Editor";
   if (value === "emotionMap") return "Emotion Map";
   if (value === "effect") return "Effect Editor";
+  if (value === "space") return "Space Editor";
   if (value === "linker") return "Emotion Linker (view only)";
   if (value === "linker2") return "Emotion Linker 2 (view only)";
   if (value === "extraBone") return "Extra Bone Follow";
@@ -14513,6 +15828,7 @@ function tick() {
   requestAnimationFrame(tick);
   const delta = clock.getDelta();
   restoreEmotionImageHeadRotationOffset();
+  clearExpressionPosePreview();
   controls.update();
   updateCameraTransition(delta);
   updateTransitionTimelineProgress();
@@ -14541,11 +15857,14 @@ function tick() {
   updateLipSyncPreview(delta);
   updatePropOverlayRuntime();
   updateMotionSlotEffectTrigger();
+  updateEmotionImageEffectPlayback(delta);
   updateEffectPreviewRuntime(delta);
+  updateSpacePreviewRuntime();
   updateEmotionImageAnimation(delta);
   applyMotionCorrectionPreview();
   applyExtraBoneFollowPreview();
   applyEditDraftMorphPreview();
+  applyExpressionPosePreview();
   applyEmotionImageHeadRotation();
   updateEmotionImageBillboard();
   renderViewerScene();

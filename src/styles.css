@@ -989,6 +989,129 @@ input[type="range"] {
   overflow-y: auto;
 }
 
+.expression-pose-controls {
+  margin-bottom: 12px;
+}
+
+.expression-pose-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+
+.expression-pose-heading strong {
+  color: #f1f4f7;
+  font-size: 12px;
+}
+
+.expression-pose-heading span {
+  color: #8f9aa5;
+  font-size: 10px;
+}
+
+.expression-pose-row {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #34414c;
+  border-radius: 8px;
+  background: #20272e;
+}
+
+.expression-pose-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.expression-pose-row-head > label:first-child {
+  overflow: hidden;
+  color: #dce4ec;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.expression-pose-row-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 58px;
+  align-items: center;
+  gap: 8px;
+}
+
+.expression-pose-slider {
+  min-width: 0;
+  accent-color: #43bff4;
+}
+
+.expression-pose-value {
+  width: 58px;
+  min-height: 28px;
+  border: 1px solid #3a4651;
+  border-radius: 6px;
+  padding: 0 5px;
+  color: #f1f4f7;
+  background: #171b21;
+  text-align: right;
+  font-size: 12px;
+}
+
+.expression-pose-mode {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #b9c4ce;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
+.expression-pose-mode input {
+  margin: 0;
+  accent-color: #39ae84;
+}
+
+.expression-eye-bone-mapping {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #34414c;
+  border-radius: 8px;
+  background: #20272e;
+}
+
+.expression-eye-bone-heading {
+  color: #f1f4f7;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.expression-eye-bone-row {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: #b9c4ce;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.expression-eye-bone-row select {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid #3a4651;
+  border-radius: 6px;
+  padding: 0 7px;
+  color: #f1f4f7;
+  background: #171b21;
+  font-size: 11px;
+}
+
 .parameter-tray-footer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 150px;
@@ -1338,6 +1461,13 @@ input[type="range"] {
   display: grid;
   align-content: start;
   gap: 14px;
+}
+
+.motion-linker-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .emotion-link-card {
@@ -2562,8 +2692,10 @@ input[type="range"] {
 }
 
 .effect-texture-processed-viewport {
+  position: relative;
   display: block;
   overflow: hidden;
+  cursor: crosshair;
 }
 
 .effect-texture-processed-viewport img {
@@ -2572,6 +2704,19 @@ input[type="range"] {
   max-height: none;
   object-fit: fill;
   transform-origin: left top;
+}
+
+.effect-texture-pivot-marker {
+  position: absolute;
+  z-index: 2;
+  width: 10px;
+  height: 10px;
+  border: 1px solid #ffffff;
+  border-radius: 50%;
+  background: #ef5da8;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
 }
 
 .effect-texture-sprite-note {
@@ -2813,6 +2958,10 @@ input[type="range"] {
   grid-template-columns: minmax(0, 1fr) minmax(140px, 204px) !important;
 }
 
+.effect-emitter-radius-row.disabled {
+  opacity: 0.45;
+}
+
 .effect-stop-slow-check,
 .effect-stop-slow-threshold,
 .effect-emitter-radius-check {
@@ -2856,6 +3005,10 @@ input[type="range"] {
   gap: 8px;
 }
 
+.effect-color-slots-block.disabled {
+  opacity: 0.45;
+}
+
 .effect-color-slots-block > label {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(82px, 136px);
@@ -2871,6 +3024,20 @@ input[type="range"] {
   width: 100%;
   min-width: 0;
   margin-top: 0;
+}
+
+.effect-color-slots-block > label > select {
+  width: 100%;
+  min-width: 0;
+  margin-top: 0;
+}
+
+.effect-color-slots-block .effect-color-random-row {
+  justify-content: flex-start;
+}
+
+.effect-color-slots-block .effect-color-random-row input {
+  width: 18px;
 }
 
 .effect-color-slot-list {
@@ -3966,6 +4133,8 @@ canvas {
 
 .emotion-image-overlay-panel {
   bottom: 18px;
+  max-height: calc(100% - 36px);
+  overflow-y: auto;
 }
 
 .prop-overlay-panel {
@@ -4198,6 +4367,88 @@ canvas {
   width: 16px;
   height: 16px;
   accent-color: #2bad7f;
+}
+
+.emotion-image-effect-editor {
+  display: grid;
+  gap: 8px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.emotion-image-effect-head,
+.emotion-image-effect-select-row,
+.emotion-image-effect-compact-row label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #c8d0da;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.emotion-image-effect-select-row select {
+  width: min(210px, 72%);
+  min-width: 0;
+  min-height: 32px;
+  border: 1px solid #343b45;
+  border-radius: 6px;
+  padding: 0 8px;
+  color: #f1f4f7;
+  background: #171b21;
+}
+
+.emotion-image-effect-vector-block {
+  display: grid;
+  gap: 5px;
+}
+
+.emotion-image-effect-vector-block > strong {
+  color: #aeb7c1;
+  font-size: 12px;
+}
+
+.emotion-image-effect-vector {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.emotion-image-effect-vector label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  color: #aeb7c1;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.emotion-image-effect-vector input,
+.emotion-image-effect-compact-row input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  min-height: 30px;
+  border: 1px solid #343b45;
+  border-radius: 6px;
+  padding: 0 6px;
+  color: #f1f4f7;
+  background: #171b21;
+  text-align: right;
+  font-weight: 800;
+}
+
+.emotion-image-effect-compact-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.emotion-image-effect-compact-row label {
+  display: grid;
+  grid-template-columns: auto minmax(60px, 1fr);
 }
 
 .emotion-image-graph-block {

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "type": "vrm-space-meta",
+  "activeSpaceId": "space-default-room",
+  "spaces": [
+    {
+      "id": "space-default-room",
+      "name": "Default Cube Room",
+      "type": "cubeRoom",
+      "enabled": true,
+      "size": [
+        4,
+        2.8,
+        4
+      ],
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "wallColor": "#1f2933",
+      "floorColor": "#111827",
+      "opacity": 0.55,
+      "grid": true
+    }
+  ]
+}

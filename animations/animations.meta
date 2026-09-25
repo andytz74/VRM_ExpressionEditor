@@ -199,6 +199,132 @@
       "isFirst": false,
       "loop": false,
       "lookAtCamera": false
+    },
+    "cm_vrma_01.vrma": {
+      "fileName": "cm_vrma_01.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 10.375,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "cm_vrma_02.vrma": {
+      "fileName": "cm_vrma_02.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 10.375,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "cm_vrma_03.vrma": {
+      "fileName": "cm_vrma_03.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 10.375,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "cm_vrma_04.vrma": {
+      "fileName": "cm_vrma_04.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 10.375,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "cm_vrma_05.vrma": {
+      "fileName": "cm_vrma_05.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 10.375,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "cm_vrma_07.vrma": {
+      "fileName": "cm_vrma_07.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 10.375,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "cm_vrma_08.vrma": {
+      "fileName": "cm_vrma_08.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 10.375,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "cm_vrma_09.vrma": {
+      "fileName": "cm_vrma_09.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 10.375,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "cm_vrma_06.vrma": {
+      "fileName": "cm_vrma_06.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 10.375,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "cm_vrma_11.vrma": {
+      "fileName": "cm_vrma_11.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 10.375,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "cm_vrma_12.vrma": {
+      "fileName": "cm_vrma_12.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 10.375,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "cm_vrma_13.vrma": {
+      "fileName": "cm_vrma_13.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 10.375,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "cm_vrma_14.vrma": {
+      "fileName": "cm_vrma_14.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 10.375,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "a6_1.vrma": {
+      "fileName": "a6_1.vrma",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 2.458,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
     }
   }
 }
