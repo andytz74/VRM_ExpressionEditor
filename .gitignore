@@ -14,5 +14,6 @@ tmp/
 *.bak
 *.broken-*
 *.bundle
+VRM_Companion_Frontend_Package_*.zip
 
 animations/*.broken-*
