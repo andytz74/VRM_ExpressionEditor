@@ -3,6 +3,10 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from "@pixiv/three-vrm-animation";
 import {
@@ -189,6 +193,9 @@ const state = {
   spacePath: null,
   spaceDirty: false,
   spaceShowModel: true,
+  selectedSpacePropId: null,
+  spacePropTransformMode: "translate",
+  spaceAoBaking: false,
   selectedEffectId: null,
   selectedEffectParticleId: null,
   effectShowModel: true,
@@ -334,6 +341,32 @@ camera.position.set(0, 1.35, 3.2);
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
+let spaceBloomComposer = null;
+let spaceBloomPass = null;
+
+function ensureSpaceBloomComposer() {
+  if (spaceBloomComposer && spaceBloomPass) return spaceBloomComposer;
+  const size = renderer.getSize(new THREE.Vector2());
+  const renderTarget = new THREE.WebGLRenderTarget(Math.max(1, size.x), Math.max(1, size.y), {
+    type: THREE.UnsignedByteType,
+    depthBuffer: true,
+  });
+  renderTarget.texture.name = "SpaceBloomComposer.rt1";
+  spaceBloomComposer = new EffectComposer(renderer, renderTarget);
+  spaceBloomComposer.setPixelRatio(1);
+  spaceBloomComposer.addPass(new RenderPass(scene, camera));
+  spaceBloomPass = new UnrealBloomPass(new THREE.Vector2(Math.max(1, size.x), Math.max(1, size.y)), 0, 0.35, 0.9);
+  spaceBloomComposer.addPass(spaceBloomPass);
+  spaceBloomComposer.addPass(new OutputPass());
+  return spaceBloomComposer;
+}
+
+function disposeSpaceBloomComposer() {
+  spaceBloomComposer?.dispose();
+  spaceBloomComposer = null;
+  spaceBloomPass = null;
+}
+
 const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
 keyLight.position.set(1.4, 2.2, 2.6);
 scene.add(keyLight);
@@ -365,10 +398,26 @@ let propTransformDragging = false;
 let effectPreview = null;
 let effectTransformControls = null;
 let effectTransformDragging = false;
+let effectPreviewBackgroundCanvas = null;
+let effectPreviewBackgroundTexture = null;
+let effectPreviewBackgroundImage = null;
+let effectPreviewBackgroundImageName = "";
+let effectPreviewBackgroundSignature = "";
+let effectPreviewBackgroundRequestId = 0;
 let spacePreview = null;
+let spacePropTransformControls = null;
+let spacePropTransformDragging = false;
+const spacePropOverlays = new Map();
+const spacePropLoadPromises = new Map();
+let spaceTextureRequestSerial = 0;
+const spaceTextureCache = new Map();
+let spaceAoRequestSerial = 0;
+const spaceAoTextureCache = new Map();
 const effectTextureCache = new Map();
+const effectTextureVersions = new Map();
 const effectTexturePreviewUrlCache = new Map();
 const effectTexturePreviewUrlLoaders = new Map();
+const effectTexturePreviewVersions = new Map();
 const effectWhiteTexture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, THREE.RGBAFormat);
 effectWhiteTexture.needsUpdate = true;
 effectWhiteTexture.colorSpace = THREE.SRGBColorSpace;
@@ -826,6 +875,7 @@ function render() {
         ${renderLipSyncPreviewOverlay()}
         ${renderBlushOverlayPanel()}
         ${renderEmotionImageOverlayPanel()}
+        ${renderSpacePropOverlayPanel()}
         ${renderMetaImportOverlay()}
         ${renderMotionSlotTitleOverlay()}
         ${renderEmotionMapOverlay()}
@@ -924,6 +974,7 @@ function renderEffectRightTray() {
         </label>
       </div>
       <div class="effect-settings-area">
+        ${renderEffectPreviewBackgroundSettings()}
         ${
           selected
             ? renderEffectSlotSettings(selected)
@@ -931,6 +982,33 @@ function renderEffectRightTray() {
         }
       </div>
     </aside>
+  `;
+}
+
+function renderEffectPreviewBackgroundSettings() {
+  const background = normalizeEffectPreviewBackground(state.effects?.previewBackground);
+  const hasImage = Boolean(background.image);
+  return `
+    <section class="effect-preview-background-settings ${background.enabled ? "" : "disabled"}">
+      <div class="effect-preview-background-head">
+        <strong>Preview Background</strong>
+        <label class="effect-enabled-row">
+          <input type="checkbox" data-effect-preview-background-enabled ${background.enabled ? "checked" : ""} />
+          Use
+        </label>
+      </div>
+      <div class="effect-preview-background-row">
+        <label>
+          <span>Color</span>
+          <input type="color" value="${escapeHtml(background.color)}" data-effect-preview-background-color ${background.enabled ? "" : "disabled"} />
+        </label>
+        <button class="icon-button compact" type="button" id="selectEffectPreviewBackground" title="Select background image" ${background.enabled ? "" : "disabled"}>${iconSvg(FolderOpen, 16)}</button>
+      </div>
+      <div class="effect-preview-background-file ${hasImage ? "" : "empty"}">
+        <span title="${escapeHtml(background.image)}">${hasImage ? escapeHtml(background.image) : "No image"}</span>
+        <button class="mini-icon-button" type="button" id="clearEffectPreviewBackground" title="Remove background image" ${background.enabled && hasImage ? "" : "disabled"}>${iconSvg(X, 14)}</button>
+      </div>
+    </section>
   `;
 }
 
@@ -963,6 +1041,7 @@ function renderSpaceRightTray() {
       </div>
       <div class="effect-settings-area">
         ${renderSpaceRoomSettings(room)}
+        ${renderSpacePropsSection(room)}
       </div>
     </aside>
   `;
@@ -1032,14 +1111,8 @@ function renderSpaceRoomSettings(room) {
           )
           .join("")}
       </div>
-      <label>
-        Wall Color
-        <input type="color" value="${escapeHtml(room.wallColor)}" data-space-color="wallColor" />
-      </label>
-      <label>
-        Floor Color
-        <input type="color" value="${escapeHtml(room.floorColor)}" data-space-color="floorColor" />
-      </label>
+      ${renderSpaceSurfaceSettings("wall", "Wall", room.wallColor, room.wallTexture)}
+      ${renderSpaceSurfaceSettings("floor", "Floor", room.floorColor, room.floorTexture, room.floorReflection)}
       <label>
         Opacity
         <input type="number" min="0.05" max="1" step="0.01" value="${roundForInput(room.opacity)}" data-space-number="opacity" />
@@ -1048,7 +1121,192 @@ function renderSpaceRoomSettings(room) {
         <input type="checkbox" data-space-grid ${room.grid ? "checked" : ""} />
         Grid
       </label>
+      <div class="space-bloom-row">
+        <label class="effect-enabled-row">
+          <input type="checkbox" data-space-bloom-enabled ${room.bloom.enabled ? "checked" : ""} />
+          Bloom
+        </label>
+        <label class="space-bloom-intensity ${room.bloom.enabled ? "" : "disabled"}">
+          <span>Intensity</span>
+          <input type="number" min="0" max="3" step="0.05" value="${roundForInput(room.bloom.intensity)}" data-space-bloom-intensity ${room.bloom.enabled ? "" : "disabled"} />
+        </label>
+      </div>
     </div>
+  `;
+}
+
+function renderSpacePropsSection(room) {
+  const props = normalizeSpaceProps(room?.props);
+  return `
+    <section class="space-props-section">
+      <div class="space-props-head">
+        <strong>Objects</strong>
+        <button class="icon-button compact" type="button" id="addSpaceProp" title="Add GLB object">+</button>
+      </div>
+      <div class="space-props-list">
+        ${
+          props.length
+            ? props.map((prop) => renderSpacePropListItem(prop)).join("")
+            : `<div class="material-outline-empty">등록된 공간 오브젝트 없음</div>`
+        }
+      </div>
+      ${renderSpaceAoSettings(room)}
+    </section>
+  `;
+}
+
+function renderSpaceAoSettings(room) {
+  const ao = normalizeSpaceAmbientOcclusion(room?.ambientOcclusion);
+  const status = state.spaceAoBaking ? "Baking..." : ao.dirty ? "Rebake needed" : ao.image ? "Applied" : "Not baked";
+  return `
+    <section class="space-ao-settings ${ao.dirty ? "dirty" : ""}">
+      <div class="space-ao-head">
+        <strong>Room AO</strong>
+        <span data-space-ao-status>${escapeHtml(status)}</span>
+      </div>
+      <div class="space-ao-options">
+        <label>
+          <span>Quality</span>
+          <select data-space-ao-resolution ${state.spaceAoBaking ? "disabled" : ""}>
+            <option value="64" ${ao.resolution === 64 ? "selected" : ""}>Low</option>
+            <option value="128" ${ao.resolution === 128 ? "selected" : ""}>Medium</option>
+            <option value="256" ${ao.resolution === 256 ? "selected" : ""}>High</option>
+          </select>
+        </label>
+        <label>
+          <span>Intensity</span>
+          <input type="number" min="0" max="2" step="0.05" value="${roundForInput(ao.intensity)}" data-space-ao-intensity />
+        </label>
+      </div>
+      <div class="space-ao-actions">
+        <button class="primary-button" type="button" id="bakeSpaceAo" ${state.spaceAoBaking ? "disabled" : ""}>${state.spaceAoBaking ? "Baking..." : "Bake AO"}</button>
+        <button class="mini-icon-button" type="button" id="clearSpaceAo" title="Remove AO" ${ao.image && !state.spaceAoBaking ? "" : "disabled"}>${iconSvg(X, 15)}</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderSpacePropListItem(prop) {
+  const selected = getSelectedSpaceProp()?.id === prop.id;
+  return `
+    <div class="space-prop-list-item ${selected ? "selected" : ""}" data-space-prop-select="${escapeHtml(prop.id)}">
+      <button type="button" class="prop-enable-switch ${prop.visible ? "active" : ""}" data-space-prop-visible="${escapeHtml(prop.id)}" title="${prop.visible ? "Hide object" : "Show object"}">
+        <span></span>
+      </button>
+      <div class="prop-list-text">
+        <strong>${escapeHtml(prop.name)}</strong>
+        <small>${escapeHtml(prop.file)}</small>
+      </div>
+      <button class="prop-reload-button" type="button" data-space-prop-reload="${escapeHtml(prop.id)}" title="Reload GLB">${iconSvg(RotateCw, 14)}</button>
+    </div>
+  `;
+}
+
+function renderSpacePropOverlayPanel() {
+  if (state.mode !== "space") return "";
+  const prop = getSelectedSpaceProp();
+  if (!prop) return "";
+  return `
+    <section class="space-prop-overlay-panel">
+      <div class="blush-overlay-head space-prop-overlay-head">
+        <div>
+          <strong>${escapeHtml(prop.name)}</strong>
+          <span>${escapeHtml(prop.file)}</span>
+        </div>
+        <button class="blush-minimize-button" type="button" id="closeSpacePropSettings" title="Close settings">${iconSvg(X, 16)}</button>
+      </div>
+      <label class="prop-control-full">
+        Object Name
+        <input type="text" value="${escapeHtml(prop.name)}" data-space-prop-name />
+      </label>
+      <div class="space-prop-gizmo-mode-row">
+        <button class="${state.spacePropTransformMode === "translate" ? "active" : ""}" type="button" data-space-prop-transform-mode="translate">Move</button>
+        <button class="${state.spacePropTransformMode === "rotate" ? "active" : ""}" type="button" data-space-prop-transform-mode="rotate">Rotate</button>
+        <button class="${state.spacePropTransformMode === "scale" ? "active" : ""}" type="button" data-space-prop-transform-mode="scale">Scale</button>
+      </div>
+      ${renderSpacePropVector("position", "Position", prop.position, 0.01)}
+      ${renderSpacePropVector("rotation", "Rotation", prop.rotation, 0.1)}
+      ${renderSpacePropVector("scale", "Scale", prop.scale, 0.01, 0.001)}
+      <button class="secondary-button space-prop-remove-button" type="button" id="removeSelectedSpaceProp">Remove Object</button>
+    </section>
+  `;
+}
+
+function renderSpacePropVector(key, label, values, step, min = null) {
+  return `
+    <div class="space-prop-vector-block">
+      <strong>${escapeHtml(label)}</strong>
+      <div class="space-prop-vector-grid">
+        ${["X", "Y", "Z"]
+          .map(
+            (axis, index) => `
+              <label>
+                <span>${axis}</span>
+                <input type="number" ${min == null ? "" : `min="${min}"`} step="${step}" value="${roundForInput(values[index])}" data-space-prop-vector="${escapeHtml(key)}" data-axis="${index}" />
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderSpaceSurfaceSettings(surface, label, color, texture, reflectionValue = null) {
+  const normalized = normalizeSpaceTextureSettings(texture);
+  const reflection = surface === "floor" ? normalizeSpaceFloorReflection(reflectionValue) : null;
+  const colorKey = `${surface}Color`;
+  const hasTexture = Boolean(normalized.image);
+  return `
+    <section class="space-surface-settings">
+      <div class="space-surface-color-row">
+        <strong>${escapeHtml(label)} Color</strong>
+        <div class="space-surface-color-actions">
+          <input type="color" value="${escapeHtml(color)}" data-space-color="${colorKey}" aria-label="${escapeHtml(label)} color" />
+          <button class="icon-button compact" type="button" data-space-texture-select="${surface}" title="Select ${escapeHtml(label)} texture">${iconSvg(FolderOpen, 16)}</button>
+        </div>
+      </div>
+      <div class="space-texture-file-row ${hasTexture ? "" : "empty"}">
+        <span title="${escapeHtml(normalized.image)}">${hasTexture ? escapeHtml(normalized.image) : "No texture"}</span>
+        <button class="mini-icon-button" type="button" data-space-texture-clear="${surface}" title="Remove ${escapeHtml(label)} texture" ${hasTexture ? "" : "disabled"}>${iconSvg(X, 14)}</button>
+      </div>
+      <div class="space-tiling-row ${hasTexture ? "" : "disabled"}">
+        <strong>Tiling</strong>
+        ${["X", "Y"]
+          .map(
+            (axis, index) => `
+              <label>
+                <span>${axis}</span>
+                <input
+                  type="number"
+                  min="0.1"
+                  max="100"
+                  step="0.1"
+                  value="${roundForInput(normalized.tiling[index])}"
+                  data-space-tiling="${surface}"
+                  data-axis="${index}"
+                  ${hasTexture ? "" : "disabled"}
+                />
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
+      ${
+        reflection
+          ? `<div class="space-floor-reflection-row">
+              <label class="effect-enabled-row">
+                <input type="checkbox" data-space-floor-reflection-enabled ${reflection.enabled ? "checked" : ""} />
+                Reflection
+              </label>
+              <label class="space-floor-reflection-strength ${reflection.enabled ? "" : "disabled"}">
+                <span>Strength</span>
+                <input type="number" min="0" max="1" step="0.05" value="${roundForInput(reflection.strength)}" data-space-floor-reflection-strength ${reflection.enabled ? "" : "disabled"} />
+              </label>
+            </div>`
+          : ""
+      }
+    </section>
   `;
 }
 
@@ -1715,7 +1973,7 @@ function toggleScreenshotRegion() {
 
 async function captureScreenshotToClipboard() {
   try {
-    renderer.render(scene, camera);
+    renderViewerScene();
     const rect = normalizeScreenshotRect(state.screenshot.rect);
     const source = await loadImageFromDataUrl(renderer.domElement.toDataURL("image/png"));
     const crop = document.createElement("canvas");
@@ -3252,7 +3510,7 @@ function renderSpaceEditorPanel() {
     <div class="panel-header">
       <div class="title-block">
         <h1>Space Editor</h1>
-        <p>${state.spacePath ? escapeHtml(fileNameFromPath(state.spacePath)) : "spaces/space.meta"}</p>
+        <p>${state.spacePath ? escapeHtml(fileNameFromPath(state.spacePath)) : "vrSpace/vrSpace.meta"}</p>
       </div>
       <button class="icon-button" id="openFile" title="VRM 열기">${iconSvg(FolderOpen)}</button>
     </div>
@@ -3273,7 +3531,7 @@ function renderSpaceEditorPanel() {
       </div>
     </div>
     <div class="correction-footer">
-      ${renderMetaSaveButton("saveSpace", !state.spaceDirty, "Save Space", state.spacePath ? fileNameFromPath(state.spacePath) : "space.meta")}
+      ${renderMetaSaveButton("saveSpace", !state.spaceDirty, "Save Space", state.spacePath ? fileNameFromPath(state.spacePath) : "vrSpace.meta")}
     </div>
   `;
 }
@@ -3520,6 +3778,7 @@ function renderEffectTextureControl(effect, particle) {
           <button class="secondary-button" data-effect-particle-texture="${escapeHtml(effect.id)}" ${enabled ? "" : "disabled"}>
             ${texture.image ? escapeHtml(texture.image) : "Choose PNG/SVG"}
           </button>
+          <button class="mini-icon-button" type="button" data-effect-particle-texture-refresh="${escapeHtml(effect.id)}" ${enabled && texture.image ? "" : "disabled"} title="Reload texture">${iconSvg(RotateCw, 15)}</button>
           <button class="delete-emotion-button compact-delete" data-effect-particle-texture-clear="${escapeHtml(effect.id)}" ${enabled && texture.image ? "" : "disabled"} title="Clear texture">${iconSvg(X, 16)}</button>
         </div>
       </div>
@@ -4711,6 +4970,14 @@ function bindUi() {
   document.querySelector("#saveExpressionMeta")?.addEventListener("click", saveCorrection);
   document.querySelector("#saveEffects")?.addEventListener("click", saveEffectsMeta);
   document.querySelector("#saveSpace")?.addEventListener("click", saveSpaceMeta);
+  document.querySelector("[data-effect-preview-background-enabled]")?.addEventListener("change", (event) => {
+    updateEffectPreviewBackground({ enabled: event.target.checked }, true);
+  });
+  document.querySelector("[data-effect-preview-background-color]")?.addEventListener("input", (event) => {
+    updateEffectPreviewBackground({ color: event.target.value });
+  });
+  document.querySelector("#selectEffectPreviewBackground")?.addEventListener("click", chooseEffectPreviewBackgroundImage);
+  document.querySelector("#clearEffectPreviewBackground")?.addEventListener("click", () => updateEffectPreviewBackground({ image: "" }, true));
   document.querySelector("#toggleSpaceModelVisible")?.addEventListener("change", (event) => {
     state.spaceShowModel = event.target.checked;
     applySpaceModelVisibility();
@@ -4718,6 +4985,19 @@ function bindUi() {
   document.querySelector("[data-space-name]")?.addEventListener("input", (event) => updateSpaceRoom({ name: event.target.value }, false));
   document.querySelector("[data-space-enabled]")?.addEventListener("change", (event) => updateSpaceRoom({ enabled: event.target.checked }, true));
   document.querySelector("[data-space-grid]")?.addEventListener("change", (event) => updateSpaceRoom({ grid: event.target.checked }, true));
+  document.querySelector("[data-space-bloom-enabled]")?.addEventListener("change", (event) => {
+    const room = getActiveSpaceRoom();
+    updateSpaceRoom({ bloom: { ...normalizeSpaceBloom(room.bloom), enabled: event.target.checked } }, true);
+  });
+  document.querySelector("[data-space-bloom-intensity]")?.addEventListener("input", (event) => {
+    if (!isCompleteNumberInput(event.target.value)) return;
+    const room = getActiveSpaceRoom();
+    updateSpaceRoom({ bloom: { ...normalizeSpaceBloom(room.bloom), intensity: Number(event.target.value) } });
+  });
+  document.querySelector("[data-space-bloom-intensity]")?.addEventListener("change", (event) => {
+    const room = getActiveSpaceRoom();
+    updateSpaceRoom({ bloom: { ...normalizeSpaceBloom(room.bloom), intensity: Number(event.target.value) } }, true);
+  });
   for (const input of document.querySelectorAll("[data-space-number]")) {
     input.addEventListener("input", () => {
       if (!isCompleteNumberInput(input.value)) return;
@@ -4736,6 +5016,88 @@ function bindUi() {
   for (const input of document.querySelectorAll("[data-space-color]")) {
     input.addEventListener("input", () => updateSpaceRoom({ [input.dataset.spaceColor]: input.value }, false));
   }
+  for (const button of document.querySelectorAll("[data-space-texture-select]")) {
+    button.addEventListener("click", () => chooseSpaceTexture(button.dataset.spaceTextureSelect));
+  }
+  for (const button of document.querySelectorAll("[data-space-texture-clear]")) {
+    button.addEventListener("click", () => clearSpaceTexture(button.dataset.spaceTextureClear));
+  }
+  for (const input of document.querySelectorAll("[data-space-tiling]")) {
+    input.addEventListener("input", () => {
+      if (!isCompleteNumberInput(input.value)) return;
+      updateSpaceTextureTiling(input.dataset.spaceTiling, Number(input.dataset.axis), Number(input.value));
+    });
+    input.addEventListener("change", () => {
+      updateSpaceTextureTiling(input.dataset.spaceTiling, Number(input.dataset.axis), Number(input.value), true);
+    });
+  }
+  document.querySelector("[data-space-floor-reflection-enabled]")?.addEventListener("change", (event) => {
+    const room = getActiveSpaceRoom();
+    updateSpaceRoom(
+      { floorReflection: { ...normalizeSpaceFloorReflection(room.floorReflection), enabled: event.target.checked } },
+      true,
+    );
+  });
+  document.querySelector("[data-space-floor-reflection-strength]")?.addEventListener("input", (event) => {
+    if (!isCompleteNumberInput(event.target.value)) return;
+    const room = getActiveSpaceRoom();
+    updateSpaceRoom({
+      floorReflection: { ...normalizeSpaceFloorReflection(room.floorReflection), strength: Number(event.target.value) },
+    });
+  });
+  document.querySelector("[data-space-floor-reflection-strength]")?.addEventListener("change", (event) => {
+    const room = getActiveSpaceRoom();
+    updateSpaceRoom(
+      { floorReflection: { ...normalizeSpaceFloorReflection(room.floorReflection), strength: Number(event.target.value) } },
+      true,
+    );
+  });
+  document.querySelector("#addSpaceProp")?.addEventListener("click", addSpaceProp);
+  document.querySelector("#closeSpacePropSettings")?.addEventListener("click", closeSpacePropSettings);
+  document.querySelector("#removeSelectedSpaceProp")?.addEventListener("click", removeSelectedSpaceProp);
+  for (const item of document.querySelectorAll("[data-space-prop-select]")) {
+    item.addEventListener("click", (event) => {
+      if (event.target.closest("[data-space-prop-visible], [data-space-prop-reload]")) return;
+      selectSpaceProp(item.dataset.spacePropSelect);
+    });
+  }
+  for (const button of document.querySelectorAll("[data-space-prop-visible]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleSpacePropVisibility(button.dataset.spacePropVisible);
+    });
+  }
+  for (const button of document.querySelectorAll("[data-space-prop-reload]")) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      reloadSpaceProp(button.dataset.spacePropReload);
+    });
+  }
+  document.querySelector("[data-space-prop-name]")?.addEventListener("input", (event) => updateSelectedSpaceProp({ name: event.target.value }));
+  document.querySelector("[data-space-prop-name]")?.addEventListener("change", (event) => updateSelectedSpaceProp({ name: event.target.value }, true));
+  for (const input of document.querySelectorAll("[data-space-prop-vector]")) {
+    input.addEventListener("input", () => {
+      if (!isCompleteNumberInput(input.value)) return;
+      updateSelectedSpacePropVector(input.dataset.spacePropVector, Number(input.dataset.axis), Number(input.value));
+    });
+    input.addEventListener("change", () => syncSpacePropVectorInputs());
+  }
+  for (const button of document.querySelectorAll("[data-space-prop-transform-mode]")) {
+    button.addEventListener("click", () => updateSpacePropTransformMode(button.dataset.spacePropTransformMode));
+  }
+  document.querySelector("[data-space-ao-resolution]")?.addEventListener("change", (event) => {
+    const room = getActiveSpaceRoom();
+    updateSpaceRoom({
+      ambientOcclusion: {
+        ...normalizeSpaceAmbientOcclusion(room.ambientOcclusion),
+        resolution: Number(event.target.value),
+        dirty: Boolean(room.ambientOcclusion?.image),
+      },
+    }, true);
+  });
+  document.querySelector("[data-space-ao-intensity]")?.addEventListener("input", (event) => updateSpaceAoIntensity(Number(event.target.value)));
+  document.querySelector("#bakeSpaceAo")?.addEventListener("click", bakeSpaceAmbientOcclusion);
+  document.querySelector("#clearSpaceAo")?.addEventListener("click", clearSpaceAmbientOcclusion);
   document.querySelector("#addEffectSlot")?.addEventListener("click", addEffectSlot);
   document.querySelector("#toggleEffectModelVisible")?.addEventListener("change", (event) => {
     state.effectShowModel = event.target.checked;
@@ -4889,6 +5251,11 @@ function bindUi() {
   }
   for (const button of document.querySelectorAll("[data-effect-particle-texture]")) {
     button.addEventListener("click", () => chooseEffectParticleTexture(button.dataset.effectParticleTexture, getEffectParticleIdFromControl(button)));
+  }
+  for (const button of document.querySelectorAll("[data-effect-particle-texture-refresh]")) {
+    button.addEventListener("click", () =>
+      refreshEffectParticleTexture(button.dataset.effectParticleTextureRefresh, getEffectParticleIdFromControl(button)),
+    );
   }
   for (const button of document.querySelectorAll("[data-effect-particle-texture-clear]")) {
     button.addEventListener("click", () =>
@@ -6771,6 +7138,7 @@ function getStableElementSelector(element) {
 function captureEditableFocus() {
   const active = document.activeElement;
   if (!isEditableElement(active)) return null;
+  if (active instanceof HTMLInputElement && ["checkbox", "radio"].includes(active.type)) return null;
   const selector = getStableElementSelector(active);
   if (!selector) return null;
   const currentValue = "value" in active ? String(active.value ?? "") : "";
@@ -6835,6 +7203,17 @@ function renderPreservingEmotionLinkerScroll() {
   restoreEditableFocus(editableFocus);
 }
 
+let scrollRestoreRevision = 0;
+
+function restoreScrollableUiPositions(positions) {
+  for (const position of positions) {
+    const element = document.querySelector(position.selector);
+    if (!element) continue;
+    element.scrollTop = position.scrollTop;
+    element.scrollLeft = position.scrollLeft;
+  }
+}
+
 function renderPreservingScrollableUi() {
   const selectors = [
     ".expression-list",
@@ -6863,14 +7242,14 @@ function renderPreservingScrollableUi() {
     return { selector, scrollTop: element?.scrollTop ?? 0, scrollLeft: element?.scrollLeft ?? 0 };
   });
   const editableFocus = captureEditableFocus();
+  const revision = ++scrollRestoreRevision;
   render();
-  for (const position of positions) {
-    const element = document.querySelector(position.selector);
-    if (!element) continue;
-    element.scrollTop = position.scrollTop;
-    element.scrollLeft = position.scrollLeft;
-  }
+  restoreScrollableUiPositions(positions);
   restoreEditableFocus(editableFocus);
+  requestAnimationFrame(() => {
+    if (revision !== scrollRestoreRevision) return;
+    restoreScrollableUiPositions(positions);
+  });
 }
 
 function syncEmotionValueControls(id, value, source) {
@@ -10622,6 +11001,7 @@ function createEmptyEffectsMeta() {
   return {
     schemaVersion: 1,
     type: "vrm-effects-meta",
+    previewBackground: createDefaultEffectPreviewBackground(),
     effects: [],
   };
 }
@@ -10641,9 +11021,15 @@ function createEmptySpaceMeta() {
         position: [0, 0, 0],
         rotation: [0, 0, 0],
         wallColor: "#1f2933",
+        wallTexture: { image: "", tiling: [1, 1] },
         floorColor: "#111827",
+        floorTexture: { image: "", tiling: [1, 1] },
+        floorReflection: createDefaultSpaceFloorReflection(),
         opacity: 0.55,
         grid: true,
+        bloom: createDefaultSpaceBloom(),
+        props: [],
+        ambientOcclusion: createDefaultSpaceAmbientOcclusion(),
       },
     ],
   };
@@ -11233,15 +11619,109 @@ function normalizeSpaceRoom(room = {}) {
     position: normalizeEffectNumberArray(room?.position, fallback.position, 3).map((value) => clampNumber(value, -10, 10, 0)),
     rotation: normalizeEffectNumberArray(room?.rotation, fallback.rotation, 3).map((value) => clampNumber(value, -180, 180, 0)),
     wallColor: normalizeHexColor(room?.wallColor) ?? fallback.wallColor,
+    wallTexture: normalizeSpaceTextureSettings(room?.wallTexture),
     floorColor: normalizeHexColor(room?.floorColor) ?? fallback.floorColor,
+    floorTexture: normalizeSpaceTextureSettings(room?.floorTexture),
+    floorReflection: normalizeSpaceFloorReflection(room?.floorReflection),
     opacity: clampNumber(normalizeFiniteNumber(room?.opacity, fallback.opacity), 0.05, 1, fallback.opacity),
     grid: room?.grid !== false,
+    bloom: normalizeSpaceBloom(room?.bloom),
+    props: normalizeSpaceProps(room?.props),
+    ambientOcclusion: normalizeSpaceAmbientOcclusion(room?.ambientOcclusion),
   };
 }
 
 function normalizeSpaceSize(size) {
   const fallback = createEmptySpaceMeta().spaces[0].size;
   return normalizeEffectNumberArray(size, fallback, 3).map((value) => clampNumber(value, 0.5, 20, 4));
+}
+
+function normalizeSpaceTextureSettings(texture) {
+  const source = typeof texture === "string" ? { image: texture } : texture ?? {};
+  const image = fileNameFromPath(source.image ?? "");
+  return {
+    image: isSupportedSpaceTextureFile(image) ? image : "",
+    tiling: normalizeEffectNumberArray(source.tiling, [1, 1], 2).map((value) => clampNumber(value, 0.1, 100, 1)),
+  };
+}
+
+function isSupportedSpaceTextureFile(fileName) {
+  return /\.(png|jpe?g|webp)$/i.test(String(fileName ?? ""));
+}
+
+function createDefaultSpaceFloorReflection() {
+  return {
+    enabled: false,
+    strength: 0.45,
+  };
+}
+
+function normalizeSpaceFloorReflection(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    enabled: Boolean(source.enabled),
+    strength: clampNumber(Number(source.strength), 0, 1, 0.45),
+  };
+}
+
+function normalizeSpaceProps(props) {
+  if (!Array.isArray(props)) return [];
+  return props
+    .slice(0, 128)
+    .map((prop, index) => createSpaceProp({ ...prop, id: String(prop?.id || `space-prop-${index + 1}`) }))
+    .filter((prop) => prop.id && prop.file);
+}
+
+function createSpaceProp(prop = {}) {
+  const file = fileNameFromPath(prop.file ?? "");
+  const fallbackName = file.replace(/\.[^.]+$/, "") || "Object";
+  return {
+    id: String(prop.id || `space-prop-${Date.now()}`),
+    name: String(prop.name || fallbackName),
+    file: /\.glb$/i.test(file) ? file : "",
+    visible: prop.visible !== false,
+    position: normalizeEffectNumberArray(prop.position, [0, 0, 0], 3).map((value) => clampNumber(value, -100, 100, 0)),
+    rotation: normalizeEffectNumberArray(prop.rotation, [0, 0, 0], 3).map((value) => clampNumber(value, -3600, 3600, 0)),
+    scale: normalizeEffectNumberArray(prop.scale, [1, 1, 1], 3).map((value) => clampNumber(value, 0.001, 100, 1)),
+  };
+}
+
+function createDefaultSpaceAmbientOcclusion() {
+  return {
+    enabled: false,
+    image: "",
+    resolution: 128,
+    intensity: 1,
+    dirty: false,
+  };
+}
+
+function createDefaultSpaceBloom() {
+  return {
+    enabled: false,
+    intensity: 0.8,
+  };
+}
+
+function normalizeSpaceBloom(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    enabled: Boolean(source.enabled),
+    intensity: clampNumber(Number(source.intensity), 0, 3, 0.8),
+  };
+}
+
+function normalizeSpaceAmbientOcclusion(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const image = fileNameFromPath(source.image ?? "");
+  const requestedResolution = Math.round(Number(source.resolution));
+  return {
+    enabled: source.enabled !== false && /\.png$/i.test(image),
+    image: /\.png$/i.test(image) ? image : "",
+    resolution: [64, 128, 256].includes(requestedResolution) ? requestedResolution : 128,
+    intensity: clampNumber(Number(source.intensity), 0, 2, 1),
+    dirty: Boolean(source.dirty),
+  };
 }
 
 function serializeSpaceMeta() {
@@ -11264,7 +11744,15 @@ async function saveSpaceMeta() {
 
 function updateSpaceRoom(patch, shouldRender = false) {
   const room = getActiveSpaceRoom();
-  state.space.spaces = state.space.spaces.map((space) => (space.id === room.id ? normalizeSpaceRoom({ ...space, ...patch }) : space));
+  const affectsAo = hasOwnField(patch, "size") || hasOwnField(patch, "props");
+  const nextPatch = { ...patch };
+  if (affectsAo && room.ambientOcclusion?.image) {
+    nextPatch.ambientOcclusion = {
+      ...normalizeSpaceAmbientOcclusion(room.ambientOcclusion),
+      dirty: true,
+    };
+  }
+  state.space.spaces = state.space.spaces.map((space) => (space.id === room.id ? normalizeSpaceRoom({ ...space, ...nextPatch }) : space));
   state.spaceDirty = true;
   syncSaveMetaButton();
   syncSpacePreview();
@@ -11301,6 +11789,355 @@ function updateSpaceRoomVector(key, axis, value) {
   }
 }
 
+async function chooseSpaceTexture(surface) {
+  if (surface !== "wall" && surface !== "floor") return;
+  const result = await window.vrmFiles.storeSpaceTexture?.();
+  if (!result?.name) return;
+  const image = fileNameFromPath(result.name);
+  if (!isSupportedSpaceTextureFile(image)) {
+    window.alert?.("PNG, JPG 또는 WebP 텍스처만 사용할 수 있습니다.");
+    return;
+  }
+  invalidateSpaceTexture(image);
+  const room = getActiveSpaceRoom();
+  const key = `${surface}Texture`;
+  const current = normalizeSpaceTextureSettings(room[key]);
+  updateSpaceRoom({ [key]: { ...current, image } }, true);
+}
+
+function clearSpaceTexture(surface) {
+  if (surface !== "wall" && surface !== "floor") return;
+  const room = getActiveSpaceRoom();
+  const key = `${surface}Texture`;
+  const current = normalizeSpaceTextureSettings(room[key]);
+  updateSpaceRoom({ [key]: { ...current, image: "" } }, true);
+}
+
+function updateSpaceTextureTiling(surface, axis, value, shouldRender = false) {
+  if ((surface !== "wall" && surface !== "floor") || !Number.isInteger(axis) || axis < 0 || axis > 1 || !Number.isFinite(value)) return;
+  const room = getActiveSpaceRoom();
+  const key = `${surface}Texture`;
+  const texture = normalizeSpaceTextureSettings(room[key]);
+  texture.tiling[axis] = clampNumber(value, 0.1, 100, texture.tiling[axis]);
+  updateSpaceRoom({ [key]: texture }, shouldRender);
+}
+
+function getSelectedSpaceProp(room = getActiveSpaceRoom()) {
+  const props = normalizeSpaceProps(room?.props);
+  if (!props.length || !state.selectedSpacePropId) return null;
+  return props.find((prop) => prop.id === state.selectedSpacePropId) ?? null;
+}
+
+async function addSpaceProp() {
+  const result = await window.vrmFiles.storeSpaceProp?.();
+  if (!result?.name) return;
+  const room = getActiveSpaceRoom();
+  const props = normalizeSpaceProps(room.props);
+  const id = `space-prop-${Date.now()}-${props.length}`;
+  const prop = createSpaceProp({ id, file: result.name });
+  state.selectedSpacePropId = id;
+  updateSpaceRoom({ props: [...props, prop] }, true);
+  await ensureSpacePropOverlay(prop);
+  attachSpacePropTransformControls();
+}
+
+function removeSelectedSpaceProp() {
+  const room = getActiveSpaceRoom();
+  const prop = getSelectedSpaceProp(room);
+  if (!prop || !window.confirm(`"${prop.name}" 오브젝트를 공간에서 제거할까요?`)) return;
+  const props = normalizeSpaceProps(room.props).filter((item) => item.id !== prop.id);
+  clearSpacePropOverlay(prop.id);
+  state.selectedSpacePropId = null;
+  updateSpaceRoom({ props }, true);
+}
+
+function closeSpacePropSettings() {
+  state.selectedSpacePropId = null;
+  detachSpacePropTransformControls();
+  renderPreservingScrollableUi();
+}
+
+function selectSpaceProp(propId) {
+  const room = getActiveSpaceRoom();
+  const prop = normalizeSpaceProps(room.props).find((item) => item.id === propId);
+  if (!prop) return;
+  state.selectedSpacePropId = prop.id;
+  void ensureSpacePropOverlay(prop).then(() => attachSpacePropTransformControls());
+  renderPreservingScrollableUi();
+}
+
+function toggleSpacePropVisibility(propId) {
+  const room = getActiveSpaceRoom();
+  const prop = normalizeSpaceProps(room.props).find((item) => item.id === propId);
+  if (!prop) return;
+  updateSpaceRoom(
+    {
+      props: normalizeSpaceProps(room.props).map((item) => (item.id === prop.id ? createSpaceProp({ ...item, visible: !item.visible }) : item)),
+    },
+    true,
+  );
+}
+
+async function reloadSpaceProp(propId) {
+  const prop = normalizeSpaceProps(getActiveSpaceRoom()?.props).find((item) => item.id === propId);
+  if (!prop) return;
+  clearSpacePropOverlay(prop.id);
+  if (prop.visible) await ensureSpacePropOverlay(prop);
+  if (state.selectedSpacePropId === prop.id) attachSpacePropTransformControls();
+}
+
+function updateSelectedSpaceProp(patch, shouldRender = false) {
+  const room = getActiveSpaceRoom();
+  const selected = getSelectedSpaceProp(room);
+  if (!selected) return;
+  const props = normalizeSpaceProps(room.props).map((prop) => (prop.id === selected.id ? createSpaceProp({ ...prop, ...patch }) : prop));
+  updateSpaceRoom({ props }, shouldRender);
+}
+
+function updateSelectedSpacePropVector(key, axis, value) {
+  const selected = getSelectedSpaceProp();
+  if (!selected || !["position", "rotation", "scale"].includes(key) || !Number.isInteger(axis) || axis < 0 || axis > 2 || !Number.isFinite(value)) return;
+  const values = [...selected[key]];
+  values[axis] = key === "scale" ? clampNumber(value, 0.001, 100, selected[key][axis]) : value;
+  updateSelectedSpaceProp({ [key]: values });
+}
+
+function updateSpacePropTransformMode(mode) {
+  state.spacePropTransformMode = ["translate", "rotate", "scale"].includes(mode) ? mode : "translate";
+  attachSpacePropTransformControls();
+  renderPreservingScrollableUi();
+}
+
+function syncSpacePropVectorInputs(prop = getSelectedSpaceProp()) {
+  if (!prop) return;
+  for (const key of ["position", "rotation", "scale"]) {
+    for (const [axis, value] of prop[key].entries()) {
+      const input = document.querySelector(`[data-space-prop-vector="${key}"][data-axis="${axis}"]`);
+      if (input) input.value = roundForInput(value);
+    }
+  }
+}
+
+function updateSpaceAoIntensity(value) {
+  if (!Number.isFinite(value)) return;
+  const room = getActiveSpaceRoom();
+  updateSpaceRoom({
+    ambientOcclusion: {
+      ...normalizeSpaceAmbientOcclusion(room.ambientOcclusion),
+      intensity: clampNumber(value, 0, 2, 1),
+    },
+  });
+}
+
+function clearSpaceAmbientOcclusion() {
+  const room = getActiveSpaceRoom();
+  const ao = normalizeSpaceAmbientOcclusion(room.ambientOcclusion);
+  if (ao.image) invalidateSpaceAoTexture(ao.image);
+  updateSpaceRoom({
+    ambientOcclusion: {
+      ...ao,
+      enabled: false,
+      image: "",
+      dirty: false,
+    },
+  }, true);
+}
+
+async function bakeSpaceAmbientOcclusion() {
+  if (state.spaceAoBaking || state.mode !== "space" || !spacePreview?.group) return;
+  const room = getActiveSpaceRoom();
+  const ao = normalizeSpaceAmbientOcclusion(room.ambientOcclusion);
+  state.spaceAoBaking = true;
+  detachSpacePropTransformControls();
+  renderPreservingScrollableUi();
+  try {
+    const props = normalizeSpaceProps(room.props).filter((prop) => prop.visible);
+    await Promise.all(props.map((prop) => ensureSpacePropOverlay(prop)));
+    spacePreview.group.updateMatrixWorld(true);
+    const propMeshes = [];
+    for (const prop of props) {
+      spacePropOverlays.get(prop.id)?.scene?.traverse?.((object) => {
+        if (object.isMesh && object.visible) propMeshes.push(object);
+      });
+    }
+    const canvas = await renderSpaceAoAtlas(room, propMeshes, ao.resolution);
+    const saved = await window.vrmFiles.saveSpaceAo?.(room.id, canvas.toDataURL("image/png"));
+    if (!saved?.name) throw new Error("AO map could not be saved");
+    invalidateSpaceAoTexture(saved.name);
+    state.spaceAoBaking = false;
+    updateSpaceRoom({
+      ambientOcclusion: {
+        ...ao,
+        enabled: true,
+        image: saved.name,
+        dirty: false,
+      },
+    }, true);
+    setScreenshotMessage(`Room AO saved: ${saved.name}`);
+  } catch (error) {
+    console.error("Failed to bake room AO", error);
+    state.spaceAoBaking = false;
+    renderPreservingScrollableUi();
+    window.alert?.(`AO 맵을 만들지 못했습니다.\n${error?.message ?? error}`);
+  }
+}
+
+async function renderSpaceAoAtlas(room, propMeshes, faceResolution) {
+  const resolution = [64, 128, 256].includes(faceResolution) ? faceResolution : 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = resolution * 3;
+  canvas.height = resolution * 2;
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) throw new Error("Canvas is unavailable");
+  const image = context.createImageData(canvas.width, canvas.height);
+  const pixels = image.data;
+  const size = room.size;
+  const maxDistance = clampNumber(Math.min(size[0], size[1], size[2]) * 0.42, 0.25, 2, 1);
+  const edgeRadius = Math.max(0.06, Math.min(size[0], size[1], size[2]) * 0.12);
+  const samples = resolution >= 256 ? 4 : resolution >= 128 ? 6 : 8;
+  const raycaster = new THREE.Raycaster();
+  raycaster.near = 0.003;
+  raycaster.far = maxDistance;
+  const localPoint = new THREE.Vector3();
+  const worldPoint = new THREE.Vector3();
+  const localNormal = new THREE.Vector3();
+  const worldNormal = new THREE.Vector3();
+  const tangent = new THREE.Vector3();
+  const bitangent = new THREE.Vector3();
+  const direction = new THREE.Vector3();
+  const origin = new THREE.Vector3();
+  const worldQuaternion = new THREE.Quaternion();
+  const surfaces = createSpaceAoSurfaceDescriptors();
+  spacePreview.group.getWorldQuaternion(worldQuaternion);
+
+  for (let face = 0; face < 6; face += 1) {
+    const column = face % 3;
+    const row = Math.floor(face / 3);
+    for (let y = 0; y < resolution; y += 1) {
+      const v = 1 - (y + 0.5) / resolution;
+      for (let x = 0; x < resolution; x += 1) {
+        const u = (x + 0.5) / resolution;
+        const edgeDistance = sampleSpaceAoSurface(surfaces[face], u, v, localPoint, localNormal);
+        worldPoint.copy(localPoint);
+        spacePreview.group.localToWorld(worldPoint);
+        worldNormal.copy(localNormal).applyQuaternion(worldQuaternion).normalize();
+        origin.copy(worldPoint).addScaledVector(worldNormal, 0.004);
+        buildSpaceAoBasis(worldNormal, tangent, bitangent);
+        let objectOcclusion = 0;
+        const phase = ((x * 0.754877666 + y * 0.569840296 + face * 0.438289) % 1) * Math.PI * 2;
+        for (let sample = 0; sample < samples; sample += 1) {
+          const radius = Math.sqrt((sample + 0.5) / samples);
+          const angle = phase + sample * 2.399963229728653;
+          const normalWeight = Math.sqrt(Math.max(0, 1 - radius * radius));
+          direction
+            .copy(tangent)
+            .multiplyScalar(Math.cos(angle) * radius)
+            .addScaledVector(bitangent, Math.sin(angle) * radius)
+            .addScaledVector(worldNormal, normalWeight)
+            .normalize();
+          raycaster.set(origin, direction);
+          const hit = raycaster.intersectObjects(propMeshes, false)[0];
+          if (hit) objectOcclusion += 1 - hit.distance / maxDistance;
+        }
+        objectOcclusion /= samples;
+        const edgeOcclusion = 0.34 * Math.exp(-edgeDistance / edgeRadius);
+        const aoValue = 1 - Math.min(0.88, edgeOcclusion + objectOcclusion * 0.82);
+        const channel = Math.round(aoValue * 255);
+        const pixelX = column * resolution + x;
+        const pixelY = row * resolution + y;
+        const offset = (pixelY * canvas.width + pixelX) * 4;
+        pixels[offset] = channel;
+        pixels[offset + 1] = channel;
+        pixels[offset + 2] = channel;
+        pixels[offset + 3] = 255;
+      }
+      if (y % 4 === 3) {
+        const progress = Math.round(((face * resolution + y + 1) / (resolution * 6)) * 100);
+        const status = document.querySelector("[data-space-ao-status]");
+        if (status) status.textContent = `Baking ${progress}%`;
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+    }
+  }
+  context.putImageData(image, 0, 0);
+  return canvas;
+}
+
+function createSpaceAoSurfaceDescriptors() {
+  if (!spacePreview?.walls || !spacePreview?.floor) throw new Error("Room geometry is unavailable");
+  spacePreview.walls.updateMatrix();
+  spacePreview.floor.updateMatrix();
+  const surfaces = spacePreview.walls.geometry.groups.map((group) =>
+    createSpaceAoSurfaceDescriptor(spacePreview.walls, group.start, group.count, true),
+  );
+  const floorIndex = spacePreview.floor.geometry.getIndex();
+  surfaces[3] = createSpaceAoSurfaceDescriptor(
+    spacePreview.floor,
+    0,
+    floorIndex ? floorIndex.count : spacePreview.floor.geometry.getAttribute("position").count,
+    false,
+  );
+  return surfaces;
+}
+
+function createSpaceAoSurfaceDescriptor(object, start, count, invertNormal) {
+  const geometry = object.geometry;
+  const position = geometry.getAttribute("position");
+  const normal = geometry.getAttribute("normal");
+  const uv = geometry.getAttribute("uv");
+  const index = geometry.getIndex();
+  if (!position || !normal || !uv) throw new Error("Room UV data is unavailable");
+  const corners = new Map();
+  let surfaceNormal = null;
+  const normalMatrix = new THREE.Matrix3().getNormalMatrix(object.matrix);
+  for (let offset = start; offset < start + count; offset += 1) {
+    const vertex = index ? index.getX(offset) : offset;
+    const u = uv.getX(vertex) < 0.5 ? 0 : 1;
+    const v = uv.getY(vertex) < 0.5 ? 0 : 1;
+    const key = `${u}:${v}`;
+    if (!corners.has(key)) {
+      corners.set(
+        key,
+        new THREE.Vector3(position.getX(vertex), position.getY(vertex), position.getZ(vertex)).applyMatrix4(object.matrix),
+      );
+    }
+    if (!surfaceNormal) {
+      surfaceNormal = new THREE.Vector3(normal.getX(vertex), normal.getY(vertex), normal.getZ(vertex)).applyMatrix3(normalMatrix).normalize();
+      if (invertNormal) surfaceNormal.negate();
+    }
+  }
+  const p00 = corners.get("0:0");
+  const p10 = corners.get("1:0");
+  const p01 = corners.get("0:1");
+  const p11 = corners.get("1:1");
+  if (!p00 || !p10 || !p01 || !p11 || !surfaceNormal) throw new Error("Room UV corners are incomplete");
+  return {
+    p00,
+    p10,
+    p01,
+    p11,
+    normal: surfaceNormal,
+    uLength: p00.distanceTo(p10),
+    vLength: p00.distanceTo(p01),
+    scratch: new THREE.Vector3(),
+  };
+}
+
+function sampleSpaceAoSurface(surface, u, v, point, normal) {
+  if (!surface) throw new Error("Room AO surface is unavailable");
+  const lower = point.copy(surface.p00).lerp(surface.p10, u);
+  const upper = surface.scratch.copy(surface.p01).lerp(surface.p11, u);
+  lower.lerp(upper, v);
+  normal.copy(surface.normal);
+  return Math.min(u * surface.uLength, (1 - u) * surface.uLength, v * surface.vLength, (1 - v) * surface.vLength);
+}
+
+function buildSpaceAoBasis(normal, tangent, bitangent) {
+  tangent.set(Math.abs(normal.x) > 0.8 ? 0 : 1, 0, Math.abs(normal.x) > 0.8 ? 1 : 0);
+  tangent.cross(normal).normalize();
+  bitangent.crossVectors(normal, tangent).normalize();
+}
+
 function syncSpaceNumberInputFromState(input) {
   const room = getActiveSpaceRoom();
   const valueMap = {
@@ -11311,6 +12148,122 @@ function syncSpaceNumberInputFromState(input) {
   };
   if (!hasOwnField(valueMap, input.dataset.spaceNumber)) return;
   input.value = roundForInput(valueMap[input.dataset.spaceNumber]);
+}
+
+function updateEffectPreviewBackground(patch, shouldRender = false) {
+  const current = normalizeEffectPreviewBackground(state.effects?.previewBackground);
+  state.effects = {
+    ...state.effects,
+    previewBackground: normalizeEffectPreviewBackground({ ...current, ...patch }),
+  };
+  state.effectsDirty = true;
+  effectPreviewBackgroundSignature = "";
+  syncSaveMetaButton();
+  syncEffectPreviewBackground();
+  if (shouldRender) renderPreservingScrollableUi();
+}
+
+async function chooseEffectPreviewBackgroundImage() {
+  const result = await window.vrmFiles.storeImage?.();
+  const name = fileNameFromPath(result?.name ?? result?.fileName ?? result?.filePath ?? "");
+  if (!name) return;
+  updateEffectPreviewBackground({ image: name }, true);
+}
+
+function syncEffectPreviewBackground() {
+  if (state.mode !== "effect") {
+    if (effectPreviewBackgroundSignature !== "off") {
+      effectPreviewBackgroundSignature = "off";
+      effectPreviewBackgroundRequestId += 1;
+      scene.background = null;
+    }
+    return;
+  }
+
+  const background = normalizeEffectPreviewBackground(state.effects?.previewBackground);
+  const signature = `${background.enabled}:${background.color}:${background.image}`;
+  if (signature === effectPreviewBackgroundSignature) return;
+  effectPreviewBackgroundSignature = signature;
+
+  if (!background.enabled) {
+    effectPreviewBackgroundRequestId += 1;
+    scene.background = null;
+    return;
+  }
+
+  if (!background.image) {
+    effectPreviewBackgroundRequestId += 1;
+    effectPreviewBackgroundImage = null;
+    effectPreviewBackgroundImageName = "";
+    scene.background = new THREE.Color(background.color);
+    return;
+  }
+
+  const requestId = ++effectPreviewBackgroundRequestId;
+  if (effectPreviewBackgroundImage && effectPreviewBackgroundImageName === background.image) {
+    refreshEffectPreviewBackgroundCanvas(background.color);
+    return;
+  }
+
+  void loadEffectPreviewBackgroundImage(background.image)
+    .then((image) => {
+      if (requestId !== effectPreviewBackgroundRequestId || state.mode !== "effect") return;
+      const current = normalizeEffectPreviewBackground(state.effects?.previewBackground);
+      if (current.image !== background.image) return;
+      effectPreviewBackgroundImage = image;
+      effectPreviewBackgroundImageName = background.image;
+      refreshEffectPreviewBackgroundCanvas(current.color);
+    })
+    .catch((error) => {
+      if (requestId !== effectPreviewBackgroundRequestId) return;
+      console.warn("Failed to load effect preview background", background.image, error);
+      scene.background = new THREE.Color(background.color);
+    });
+}
+
+async function loadEffectPreviewBackgroundImage(fileName) {
+  const result = await window.vrmFiles.openStoredImage(fileName);
+  const blob = new Blob([new Uint8Array(result.data)], { type: getImageMimeType(result.name ?? fileName) });
+  const url = URL.createObjectURL(blob);
+  try {
+    return await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error(`Could not decode ${fileName}`));
+      image.src = url;
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function refreshEffectPreviewBackgroundCanvas(color = normalizeEffectPreviewBackground(state.effects?.previewBackground).color) {
+  if (state.mode !== "effect" || !effectPreviewBackgroundImage) return;
+  const size = renderer.getSize(new THREE.Vector2());
+  const width = Math.max(1, Math.round(size.x));
+  const height = Math.max(1, Math.round(size.y));
+  effectPreviewBackgroundCanvas ??= document.createElement("canvas");
+  effectPreviewBackgroundCanvas.width = width;
+  effectPreviewBackgroundCanvas.height = height;
+  const context = effectPreviewBackgroundCanvas.getContext("2d", { alpha: false });
+  if (!context) return;
+  context.fillStyle = color;
+  context.fillRect(0, 0, width, height);
+  const imageWidth = effectPreviewBackgroundImage.naturalWidth || effectPreviewBackgroundImage.width || 1;
+  const imageHeight = effectPreviewBackgroundImage.naturalHeight || effectPreviewBackgroundImage.height || 1;
+  const scale = Math.min(width / imageWidth, height / imageHeight);
+  const drawWidth = imageWidth * scale;
+  const drawHeight = imageHeight * scale;
+  context.drawImage(effectPreviewBackgroundImage, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+  if (!effectPreviewBackgroundTexture) {
+    effectPreviewBackgroundTexture = new THREE.CanvasTexture(effectPreviewBackgroundCanvas);
+    effectPreviewBackgroundTexture.colorSpace = THREE.SRGBColorSpace;
+    effectPreviewBackgroundTexture.generateMipmaps = false;
+    effectPreviewBackgroundTexture.minFilter = THREE.LinearFilter;
+  } else {
+    effectPreviewBackgroundTexture.needsUpdate = true;
+  }
+  scene.background = effectPreviewBackgroundTexture;
 }
 
 async function loadEffectsMeta() {
@@ -11330,7 +12283,26 @@ function normalizeEffectsMeta(json) {
   return {
     schemaVersion: 1,
     type: "vrm-effects-meta",
+    previewBackground: normalizeEffectPreviewBackground(json?.previewBackground),
     effects: normalizeEffectSlots(json?.effects),
+  };
+}
+
+function createDefaultEffectPreviewBackground() {
+  return {
+    enabled: false,
+    color: "#11151b",
+    image: "",
+  };
+}
+
+function normalizeEffectPreviewBackground(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const image = fileNameFromPath(source.image ?? "");
+  return {
+    enabled: source.enabled === true,
+    color: normalizeHexColor(source.color) ?? "#11151b",
+    image: /\.(png|jpe?g|webp|gif)$/i.test(image) ? image : "",
   };
 }
 
@@ -11887,6 +12859,7 @@ async function chooseEffectParticleTexture(effectId, particleId = null) {
     window.alert?.("PNG 또는 SVG 텍스처만 사용할 수 있습니다.");
     return;
   }
+  invalidateParticleTexture(name);
   const sourceType = name.toLowerCase().endsWith(".svg") ? "svgMask" : "bitmap";
   updateEffectSlotNested(
     effectId,
@@ -11910,6 +12883,15 @@ async function chooseEffectParticleTexture(effectId, particleId = null) {
     true,
     particleId,
   );
+}
+
+function refreshEffectParticleTexture(effectId, particleId = null) {
+  const particle = getEffectParticleSlotById(effectId, particleId);
+  const name = fileNameFromPath(particle?.texture?.image);
+  if (!particle || !isSupportedParticleTextureFile(name)) return;
+  invalidateParticleTexture(name);
+  applyEffectPreviewSettings();
+  renderPreservingScrollableUi();
 }
 
 function updateEffectTexturePivotFromPointer(event, picker) {
@@ -12583,6 +13565,7 @@ function syncSpacePreview() {
   }
   if (!spacePreview) createSpacePreview();
   applySpacePreviewSettings(room);
+  syncSpacePropOverlays(room);
 }
 
 function createSpacePreview() {
@@ -12590,31 +13573,49 @@ function createSpacePreview() {
   const group = new THREE.Group();
   group.name = "ExpressionEditor_SpacePreview";
 
+  const wallsGeometry = new THREE.BoxGeometry(1, 1, 1);
+  assignBoxAoUv(wallsGeometry);
+
   const walls = new THREE.Mesh(
-    new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshBasicMaterial({
+    wallsGeometry,
+    new THREE.MeshStandardMaterial({
       color: 0xffffff,
       transparent: true,
       opacity: 0.55,
       side: THREE.BackSide,
       depthWrite: false,
+      roughness: 0.88,
+      metalness: 0,
     }),
   );
   walls.name = "SpacePreview_Walls";
   group.add(walls);
 
+  const floorGeometry = new THREE.PlaneGeometry(1, 1);
+  assignPlaneAoUv(floorGeometry, 3);
+
   const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(1, 1),
-    new THREE.MeshBasicMaterial({
+    floorGeometry,
+    new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
       transparent: true,
       opacity: 0.86,
       side: THREE.DoubleSide,
+      roughness: 0.82,
+      metalness: 0,
+      clearcoat: 0,
+      clearcoatRoughness: 0.5,
     }),
   );
   floor.name = "SpacePreview_Floor";
   floor.rotation.x = -Math.PI / 2;
   group.add(floor);
+
+  const reflectionLight = new THREE.RectAreaLight(0xffd1a3, 0, 1, 0.25);
+  reflectionLight.name = "SpacePreview_FloorReflectionLight";
+  reflectionLight.rotation.x = -Math.PI / 2;
+  reflectionLight.visible = false;
+  group.add(reflectionLight);
 
   const edges = new THREE.LineSegments(
     new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
@@ -12627,26 +13628,220 @@ function createSpacePreview() {
   grid.name = "SpacePreview_Grid";
   group.add(grid);
 
+  const propsRoot = new THREE.Group();
+  propsRoot.name = "SpacePreview_Props";
+  group.add(propsRoot);
+
   scene.add(group);
-  spacePreview = { group, walls, floor, edges, grid };
+  spacePreview = { group, walls, floor, reflectionLight, edges, grid, propsRoot };
 }
 
 function clearSpacePreview() {
   if (!spacePreview?.group) return;
+  clearSpacePropOverlays();
   scene.remove(spacePreview.group);
   spacePreview.group.traverse((object) => {
     if (object.geometry) object.geometry.dispose();
     if (object.material) {
-      if (Array.isArray(object.material)) object.material.forEach((material) => material.dispose?.());
-      else object.material.dispose?.();
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        disposeSpaceMaterialTexture(material);
+        disposeSpaceAoMaterial(material);
+        material.dispose?.();
+      }
     }
   });
   spacePreview = null;
 }
 
+function syncSpacePropOverlays(room = getActiveSpaceRoom()) {
+  if (!spacePreview?.propsRoot || !room) return;
+  const props = normalizeSpaceProps(room.props);
+  const byId = new Map(props.map((prop) => [prop.id, prop]));
+  for (const [id, overlay] of [...spacePropOverlays.entries()]) {
+    const prop = byId.get(id);
+    if (!prop || !prop.visible || prop.file !== overlay.file) clearSpacePropOverlay(id);
+  }
+  for (const prop of props) {
+    if (!prop.visible) continue;
+    const overlay = spacePropOverlays.get(prop.id);
+    if (overlay) applySpacePropOverlaySettings(prop, overlay);
+    else void ensureSpacePropOverlay(prop);
+  }
+  const selected = getSelectedSpaceProp(room);
+  if (!selected?.visible) detachSpacePropTransformControls();
+  else if (spacePropOverlays.has(selected.id)) attachSpacePropTransformControls();
+}
+
+async function ensureSpacePropOverlay(prop) {
+  if (state.mode !== "space" || !spacePreview?.propsRoot || !prop?.visible || !prop.file) return null;
+  const existing = spacePropOverlays.get(prop.id);
+  if (existing?.file === prop.file) {
+    applySpacePropOverlaySettings(prop, existing);
+    return existing;
+  }
+  const pending = spacePropLoadPromises.get(prop.id);
+  if (pending) return pending;
+  const promise = loadSpacePropOverlay(prop);
+  spacePropLoadPromises.set(prop.id, promise);
+  try {
+    return await promise;
+  } finally {
+    if (spacePropLoadPromises.get(prop.id) === promise) spacePropLoadPromises.delete(prop.id);
+  }
+}
+
+async function loadSpacePropOverlay(prop) {
+  let result;
+  try {
+    result = await window.vrmFiles.openStoredSpaceProp(prop.file);
+  } catch {
+    setScreenshotMessage(`${prop.file} 파일을 vrSpace/props 폴더에서 찾지 못했습니다.`);
+    return null;
+  }
+  const url = URL.createObjectURL(new Blob([new Uint8Array(result.data)], { type: "model/gltf-binary" }));
+  let gltf;
+  try {
+    gltf = await new GLTFLoader().loadAsync(url);
+  } catch {
+    URL.revokeObjectURL(url);
+    setScreenshotMessage(`${prop.file} GLB를 읽지 못했습니다.`);
+    return null;
+  }
+  const current = normalizeSpaceProps(getActiveSpaceRoom()?.props).find((item) => item.id === prop.id);
+  if (state.mode !== "space" || !spacePreview?.propsRoot || !current?.visible || current.file !== prop.file) {
+    disposeSpacePropOverlay({ group: gltf.scene, url });
+    return null;
+  }
+  clearSpacePropOverlay(prop.id);
+  const group = new THREE.Group();
+  group.name = `ExpressionEditor_SpaceProp_${prop.id}`;
+  group.add(gltf.scene);
+  spacePreview.propsRoot.add(group);
+  const overlay = { id: prop.id, file: prop.file, group, scene: gltf.scene, url };
+  spacePropOverlays.set(prop.id, overlay);
+  applySpacePropOverlaySettings(current, overlay);
+  if (state.selectedSpacePropId === prop.id || getSelectedSpaceProp()?.id === prop.id) attachSpacePropTransformControls();
+  return overlay;
+}
+
+function applySpacePropOverlaySettings(prop, overlay = spacePropOverlays.get(prop?.id)) {
+  if (!overlay?.group || !prop) return;
+  const normalized = createSpaceProp(prop);
+  overlay.group.visible = normalized.visible;
+  overlay.group.position.set(...normalized.position);
+  overlay.group.rotation.set(
+    THREE.MathUtils.degToRad(normalized.rotation[0]),
+    THREE.MathUtils.degToRad(normalized.rotation[1]),
+    THREE.MathUtils.degToRad(normalized.rotation[2]),
+    "XYZ",
+  );
+  overlay.group.scale.set(...normalized.scale);
+  overlay.group.updateMatrixWorld(true);
+}
+
+function ensureSpacePropTransformControls() {
+  if (spacePropTransformControls) return spacePropTransformControls;
+  spacePropTransformControls = new TransformControls(camera, renderer.domElement);
+  spacePropTransformControls.setSize(0.75);
+  const helper = spacePropTransformControls.getHelper();
+  helper.name = "ExpressionEditor_SpacePropTransformControls";
+  scene.add(helper);
+  spacePropTransformControls.addEventListener("dragging-changed", (event) => {
+    spacePropTransformDragging = Boolean(event.value);
+    controls.enabled = !event.value;
+  });
+  spacePropTransformControls.addEventListener("objectChange", updateSpacePropTransformFromGizmo);
+  return spacePropTransformControls;
+}
+
+function attachSpacePropTransformControls() {
+  const prop = getSelectedSpaceProp();
+  const overlay = spacePropOverlays.get(prop?.id);
+  if (state.mode !== "space" || !prop?.visible || !overlay?.group) {
+    detachSpacePropTransformControls();
+    return;
+  }
+  const transform = ensureSpacePropTransformControls();
+  transform.setMode(state.spacePropTransformMode);
+  transform.setSpace?.(state.spacePropTransformMode === "translate" ? "world" : "local");
+  if (transform.object !== overlay.group) transform.attach(overlay.group);
+}
+
+function detachSpacePropTransformControls() {
+  if (!spacePropTransformControls) return;
+  spacePropTransformDragging = false;
+  spacePropTransformControls.detach();
+  controls.enabled = true;
+}
+
+function updateSpacePropTransformFromGizmo() {
+  const room = getActiveSpaceRoom();
+  const selected = getSelectedSpaceProp(room);
+  const overlay = spacePropOverlays.get(selected?.id);
+  if (!selected || !overlay?.group) return;
+  const next = createSpaceProp({
+    ...selected,
+    position: [overlay.group.position.x, overlay.group.position.y, overlay.group.position.z],
+    rotation: [
+      THREE.MathUtils.radToDeg(overlay.group.rotation.x),
+      THREE.MathUtils.radToDeg(overlay.group.rotation.y),
+      THREE.MathUtils.radToDeg(overlay.group.rotation.z),
+    ],
+    scale: [overlay.group.scale.x, overlay.group.scale.y, overlay.group.scale.z],
+  });
+  state.space.spaces = state.space.spaces.map((space) =>
+    space.id === room.id
+      ? normalizeSpaceRoom({
+          ...space,
+          props: normalizeSpaceProps(space.props).map((prop) => (prop.id === selected.id ? next : prop)),
+          ambientOcclusion: space.ambientOcclusion?.image
+            ? { ...normalizeSpaceAmbientOcclusion(space.ambientOcclusion), dirty: true }
+            : space.ambientOcclusion,
+        })
+      : space,
+  );
+  state.spaceDirty = true;
+  syncSaveMetaButton();
+  syncSpacePropVectorInputs(next);
+}
+
+function clearSpacePropOverlay(propId = null) {
+  if (propId == null) {
+    detachSpacePropTransformControls();
+    for (const overlay of spacePropOverlays.values()) disposeSpacePropOverlay(overlay);
+    spacePropOverlays.clear();
+    spacePropLoadPromises.clear();
+    return;
+  }
+  const overlay = spacePropOverlays.get(String(propId));
+  if (!overlay) return;
+  if (spacePropTransformControls?.object === overlay.group) detachSpacePropTransformControls();
+  disposeSpacePropOverlay(overlay);
+  spacePropOverlays.delete(String(propId));
+}
+
+function disposeSpacePropOverlay(overlay) {
+  overlay?.group?.parent?.remove(overlay.group);
+  overlay?.group?.traverse?.((object) => {
+    object.geometry?.dispose?.();
+    const materials = Array.isArray(object.material) ? object.material : object.material ? [object.material] : [];
+    for (const material of materials) {
+      for (const value of Object.values(material)) {
+        if (value?.isTexture) value.dispose();
+      }
+      material.dispose?.();
+    }
+  });
+  if (overlay?.url) URL.revokeObjectURL(overlay.url);
+}
+
 function applySpacePreviewSettings(room = getActiveSpaceRoom()) {
   if (!spacePreview?.group || !room) return;
   const [width, height, depth] = room.size;
+  const wallTexture = normalizeSpaceTextureSettings(room.wallTexture);
+  const floorTexture = normalizeSpaceTextureSettings(room.floorTexture);
+  const floorReflection = normalizeSpaceFloorReflection(room.floorReflection);
   spacePreview.group.position.set(room.position[0], room.position[1], room.position[2]);
   spacePreview.group.rotation.set(
     THREE.MathUtils.degToRad(room.rotation[0]),
@@ -12658,17 +13853,248 @@ function applySpacePreviewSettings(room = getActiveSpaceRoom()) {
   spacePreview.walls.position.set(0, height / 2, 0);
   spacePreview.walls.material.color.set(room.wallColor);
   spacePreview.walls.material.opacity = room.opacity;
+  syncSpaceMaterialTexture(spacePreview.walls.material, wallTexture);
+  syncSpaceAoMaterial(spacePreview.walls.material, room.ambientOcclusion);
 
   spacePreview.floor.scale.set(width, depth, 1);
   spacePreview.floor.position.set(0, 0.002, 0);
   spacePreview.floor.material.color.set(room.floorColor);
+  spacePreview.floor.material.roughness = floorReflection.enabled ? THREE.MathUtils.lerp(0.82, 0.28, floorReflection.strength) : 0.82;
+  spacePreview.floor.material.clearcoat = floorReflection.enabled ? floorReflection.strength * 0.8 : 0;
+  spacePreview.floor.material.clearcoatRoughness = THREE.MathUtils.lerp(0.5, 0.18, floorReflection.strength);
+  syncSpaceMaterialTexture(spacePreview.floor.material, floorTexture);
+  syncSpaceAoMaterial(spacePreview.floor.material, room.ambientOcclusion);
+
+  spacePreview.reflectionLight.visible = floorReflection.enabled && floorReflection.strength > 0;
+  spacePreview.reflectionLight.intensity = floorReflection.strength * 5;
+  spacePreview.reflectionLight.width = Math.max(0.5, width * 0.42);
+  spacePreview.reflectionLight.height = Math.max(0.15, depth * 0.12);
+  spacePreview.reflectionLight.position.set(width * 0.12, Math.max(0.2, height * 0.92), depth * 0.08);
 
   spacePreview.edges.scale.set(width, height, depth);
   spacePreview.edges.position.set(0, height / 2, 0);
+  spacePreview.edges.visible = Boolean(room.grid);
 
   spacePreview.grid.scale.set(width, 1, depth);
   spacePreview.grid.position.set(0, 0.006, 0);
   spacePreview.grid.visible = Boolean(room.grid);
+}
+
+function assignBoxAoUv(geometry) {
+  const uv = geometry.getAttribute("uv");
+  const index = geometry.getIndex();
+  if (!uv || !index) return;
+  const values = new Float32Array(uv.count * 2);
+  geometry.groups.forEach((group, faceIndex) => {
+    const column = faceIndex % 3;
+    const row = 1 - Math.floor(faceIndex / 3);
+    for (let offset = group.start; offset < group.start + group.count; offset += 1) {
+      const vertex = index.getX(offset);
+      values[vertex * 2] = (column + uv.getX(vertex)) / 3;
+      values[vertex * 2 + 1] = (row + uv.getY(vertex)) / 2;
+    }
+  });
+  geometry.setAttribute("uv1", new THREE.BufferAttribute(values, 2));
+}
+
+function assignPlaneAoUv(geometry, faceIndex) {
+  const uv = geometry.getAttribute("uv");
+  if (!uv) return;
+  const values = new Float32Array(uv.count * 2);
+  const column = faceIndex % 3;
+  const row = 1 - Math.floor(faceIndex / 3);
+  for (let vertex = 0; vertex < uv.count; vertex += 1) {
+    values[vertex * 2] = (column + uv.getX(vertex)) / 3;
+    values[vertex * 2 + 1] = (row + uv.getY(vertex)) / 2;
+  }
+  geometry.setAttribute("uv1", new THREE.BufferAttribute(values, 2));
+}
+
+function syncSpaceMaterialTexture(material, textureSettings) {
+  if (!material) return;
+  const settings = normalizeSpaceTextureSettings(textureSettings);
+  material.userData.spaceTextureTiling = [...settings.tiling];
+  if (!settings.image) {
+    if (!material.userData.spaceTextureImage && !material.map && !material.userData.spaceTextureLoading) return;
+    disposeSpaceMaterialTexture(material);
+    material.userData.spaceTextureRequestId = ++spaceTextureRequestSerial;
+    material.userData.spaceTextureImage = "";
+    material.userData.spaceTextureLoading = false;
+    material.needsUpdate = true;
+    return;
+  }
+
+  if (material.userData.spaceTextureImage === settings.image) {
+    if (material.map) {
+      if (material.map.repeat.x !== settings.tiling[0] || material.map.repeat.y !== settings.tiling[1]) {
+        material.map.repeat.set(settings.tiling[0], settings.tiling[1]);
+      }
+    }
+    return;
+  }
+
+  disposeSpaceMaterialTexture(material);
+  const requestId = ++spaceTextureRequestSerial;
+  material.userData.spaceTextureRequestId = requestId;
+  material.userData.spaceTextureImage = settings.image;
+  material.userData.spaceTextureLoading = true;
+  material.needsUpdate = true;
+  void loadSpaceTexture(settings.image)
+    .then((baseTexture) => {
+      if (material.userData.spaceTextureRequestId !== requestId || material.userData.spaceTextureImage !== settings.image) return;
+      const map = baseTexture.clone();
+      const tiling = material.userData.spaceTextureTiling ?? settings.tiling;
+      map.colorSpace = THREE.SRGBColorSpace;
+      map.wrapS = THREE.RepeatWrapping;
+      map.wrapT = THREE.RepeatWrapping;
+      map.repeat.set(tiling[0], tiling[1]);
+      map.needsUpdate = true;
+      material.map = map;
+      material.userData.spaceTextureOwned = true;
+      material.userData.spaceTextureLoading = false;
+      material.needsUpdate = true;
+    })
+    .catch((error) => {
+      if (material.userData.spaceTextureRequestId !== requestId || material.userData.spaceTextureImage !== settings.image) return;
+      console.warn("Failed to load space texture", settings.image, error);
+      material.userData.spaceTextureLoading = false;
+      material.map = null;
+      material.needsUpdate = true;
+    });
+}
+
+function disposeSpaceMaterialTexture(material) {
+  if (!material) return;
+  if (material.map && material.userData.spaceTextureOwned) material.map.dispose();
+  material.map = null;
+  material.userData.spaceTextureOwned = false;
+}
+
+function invalidateSpaceTexture(fileName) {
+  const name = fileNameFromPath(fileName);
+  const cached = spaceTextureCache.get(name);
+  spaceTextureCache.delete(name);
+  if (cached) void cached.then((texture) => texture.dispose()).catch(() => {});
+  for (const material of [spacePreview?.walls?.material, spacePreview?.floor?.material]) {
+    if (!material || material.userData.spaceTextureImage !== name) continue;
+    disposeSpaceMaterialTexture(material);
+    material.userData.spaceTextureRequestId = ++spaceTextureRequestSerial;
+    material.userData.spaceTextureImage = "";
+    material.userData.spaceTextureLoading = false;
+    material.needsUpdate = true;
+  }
+}
+
+async function loadSpaceTexture(fileName) {
+  const name = fileNameFromPath(fileName);
+  if (!isSupportedSpaceTextureFile(name)) throw new Error("Unsupported space texture");
+  if (spaceTextureCache.has(name)) return spaceTextureCache.get(name);
+  const promise = (async () => {
+    const result = await window.vrmFiles.openStoredSpaceTexture(name);
+    const blob = new Blob([new Uint8Array(result.data)], { type: getImageMimeType(result.name) });
+    const url = URL.createObjectURL(blob);
+    try {
+      const texture = await new THREE.TextureLoader().loadAsync(url);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.needsUpdate = true;
+      return texture;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  })();
+  spaceTextureCache.set(name, promise);
+  return promise;
+}
+
+function syncSpaceAoMaterial(material, settingsValue) {
+  if (!material) return;
+  const settings = normalizeSpaceAmbientOcclusion(settingsValue);
+  material.aoMapIntensity = settings.intensity;
+  if (!settings.enabled || !settings.image) {
+    if (!material.aoMap && !material.userData.spaceAoLoading) return;
+    disposeSpaceAoMaterial(material);
+    material.userData.spaceAoRequestId = ++spaceAoRequestSerial;
+    material.userData.spaceAoImage = "";
+    material.userData.spaceAoLoading = false;
+    material.needsUpdate = true;
+    return;
+  }
+  if (material.userData.spaceAoImage === settings.image && (material.aoMap || material.userData.spaceAoLoading)) return;
+  disposeSpaceAoMaterial(material);
+  const requestId = ++spaceAoRequestSerial;
+  material.userData.spaceAoRequestId = requestId;
+  material.userData.spaceAoImage = settings.image;
+  material.userData.spaceAoLoading = true;
+  void loadSpaceAoTexture(settings.image)
+    .then((baseTexture) => {
+      if (material.userData.spaceAoRequestId !== requestId || material.userData.spaceAoImage !== settings.image) return;
+      const texture = baseTexture.clone();
+      texture.colorSpace = THREE.NoColorSpace;
+      texture.channel = 1;
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      texture.needsUpdate = true;
+      material.aoMap = texture;
+      material.userData.spaceAoOwned = true;
+      material.userData.spaceAoLoading = false;
+      material.needsUpdate = true;
+    })
+    .catch((error) => {
+      if (material.userData.spaceAoRequestId !== requestId || material.userData.spaceAoImage !== settings.image) return;
+      console.warn("Failed to load space AO", settings.image, error);
+      material.userData.spaceAoLoading = false;
+      material.userData.spaceAoImage = "";
+      material.aoMap = null;
+      material.needsUpdate = true;
+    });
+}
+
+function disposeSpaceAoMaterial(material) {
+  if (!material) return;
+  if (material.aoMap && material.userData.spaceAoOwned) material.aoMap.dispose();
+  material.aoMap = null;
+  material.userData.spaceAoOwned = false;
+}
+
+function invalidateSpaceAoTexture(fileName) {
+  const name = fileNameFromPath(fileName);
+  const cached = spaceAoTextureCache.get(name);
+  spaceAoTextureCache.delete(name);
+  if (cached) void cached.then((texture) => texture.dispose()).catch(() => {});
+  for (const material of [spacePreview?.walls?.material, spacePreview?.floor?.material]) {
+    if (!material || material.userData.spaceAoImage !== name) continue;
+    disposeSpaceAoMaterial(material);
+    material.userData.spaceAoRequestId = ++spaceAoRequestSerial;
+    material.userData.spaceAoImage = "";
+    material.userData.spaceAoLoading = false;
+    material.needsUpdate = true;
+  }
+}
+
+async function loadSpaceAoTexture(fileName) {
+  const name = fileNameFromPath(fileName);
+  if (!/\.png$/i.test(name)) throw new Error("Unsupported space AO texture");
+  if (spaceAoTextureCache.has(name)) return spaceAoTextureCache.get(name);
+  const promise = (async () => {
+    const result = await window.vrmFiles.openStoredSpaceAo(name);
+    const blob = new Blob([new Uint8Array(result.data)], { type: "image/png" });
+    const url = URL.createObjectURL(blob);
+    try {
+      const texture = await new THREE.TextureLoader().loadAsync(url);
+      texture.colorSpace = THREE.NoColorSpace;
+      texture.channel = 1;
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      texture.needsUpdate = true;
+      return texture;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  })();
+  spaceAoTextureCache.set(name, promise);
+  return promise;
 }
 
 function updateSpacePreviewRuntime() {
@@ -12676,7 +14102,7 @@ function updateSpacePreviewRuntime() {
     clearSpacePreview();
     return;
   }
-  syncSpacePreview();
+  if (!spacePreview && getActiveSpaceRoom()?.enabled) syncSpacePreview();
 }
 
 function applySpaceModelVisibility() {
@@ -12935,6 +14361,7 @@ function syncParticleTextureUniform(particle, material) {
   if (!material?.uniforms) return;
   const texture = normalizeParticleTextureSettings(particle?.texture);
   const shouldUseTexture = particle?.shape === "texture" && Boolean(texture.image);
+  const textureVersion = effectTextureVersions.get(texture.image) ?? 0;
   material.uniforms.useTexture.value = false;
   material.uniforms.textureColorMode.value = texture.colorMode === "particleColor" ? 1 : 0;
   if (!shouldUseTexture) {
@@ -12943,23 +14370,28 @@ function syncParticleTextureUniform(particle, material) {
     material.userData.particleTextureReady = false;
     return;
   }
-  if (material.userData.particleTextureImage === texture.image && material.userData.particleTextureReady) {
+  if (
+    material.userData.particleTextureImage === texture.image &&
+    material.userData.particleTextureVersion === textureVersion &&
+    material.userData.particleTextureReady
+  ) {
     material.uniforms.useTexture.value = true;
     return;
   }
-  if (material.userData.particleTextureImage === texture.image) return;
+  if (material.userData.particleTextureImage === texture.image && material.userData.particleTextureVersion === textureVersion) return;
   material.userData.particleTextureImage = texture.image;
+  material.userData.particleTextureVersion = textureVersion;
   material.userData.particleTextureReady = false;
   void loadParticleTexture(texture.image)
     .then((loadedTexture) => {
-      if (material.userData.particleTextureImage !== texture.image) return;
+      if (material.userData.particleTextureImage !== texture.image || material.userData.particleTextureVersion !== textureVersion) return;
       material.uniforms.textureMap.value = loadedTexture;
       material.uniforms.useTexture.value = true;
       material.userData.particleTextureReady = true;
       material.needsUpdate = true;
     })
     .catch(() => {
-      if (material.userData.particleTextureImage !== texture.image) return;
+      if (material.userData.particleTextureImage !== texture.image || material.userData.particleTextureVersion !== textureVersion) return;
       material.uniforms.textureMap.value = effectWhiteTexture;
       material.uniforms.useTexture.value = false;
       material.userData.particleTextureReady = false;
@@ -12989,6 +14421,33 @@ async function loadParticleTexture(fileName) {
   return promise;
 }
 
+function invalidateParticleTexture(fileName) {
+  const name = fileNameFromPath(fileName);
+  if (!name) return;
+
+  effectTextureVersions.set(name, (effectTextureVersions.get(name) ?? 0) + 1);
+  const cachedTexture = effectTextureCache.get(name);
+  effectTextureCache.delete(name);
+
+  for (const particlePreview of effectPreview?.particles ?? []) {
+    const material = particlePreview.object?.material;
+    if (!material?.uniforms || material.userData.particleTextureImage !== name) continue;
+    material.uniforms.textureMap.value = effectWhiteTexture;
+    material.uniforms.useTexture.value = false;
+    material.userData.particleTextureImage = "";
+    material.userData.particleTextureVersion = -1;
+    material.userData.particleTextureReady = false;
+    material.needsUpdate = true;
+  }
+  if (cachedTexture) void cachedTexture.then((texture) => texture.dispose()).catch(() => {});
+
+  const previewUrl = effectTexturePreviewUrlCache.get(name);
+  effectTexturePreviewUrlCache.delete(name);
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  effectTexturePreviewUrlLoaders.delete(name);
+  effectTexturePreviewVersions.set(name, (effectTexturePreviewVersions.get(name) ?? 0) + 1);
+}
+
 function syncEffectTexturePreviewImages() {
   for (const node of document.querySelectorAll("[data-effect-texture-preview]")) {
     const name = fileNameFromPath(node.dataset.effectTexturePreview);
@@ -13005,10 +14464,15 @@ async function loadParticleTexturePreviewUrl(fileName) {
   if (!isSupportedParticleTextureFile(name)) return "";
   if (effectTexturePreviewUrlCache.has(name)) return effectTexturePreviewUrlCache.get(name);
   if (effectTexturePreviewUrlLoaders.has(name)) return effectTexturePreviewUrlLoaders.get(name);
+  const version = effectTexturePreviewVersions.get(name) ?? 0;
   const promise = (async () => {
     const result = await window.vrmFiles.openStoredImage(name);
     const blob = new Blob([new Uint8Array(result.data)], { type: getImageMimeType(result.name) });
     const url = URL.createObjectURL(blob);
+    if ((effectTexturePreviewVersions.get(name) ?? 0) !== version) {
+      URL.revokeObjectURL(url);
+      return "";
+    }
     effectTexturePreviewUrlCache.set(name, url);
     effectTexturePreviewUrlLoaders.delete(name);
     return url;
@@ -13876,6 +15340,21 @@ function createSeededRandom(seed) {
 }
 
 function renderViewerScene() {
+  syncEffectPreviewBackground();
+  const room =
+    state.mode === "space"
+      ? state.space?.spaces?.find((space) => space.id === state.space.activeSpaceId) ?? state.space?.spaces?.[0] ?? null
+      : null;
+  const bloom = room ? normalizeSpaceBloom(room.bloom) : null;
+  if (room?.enabled && bloom?.enabled && bloom.intensity > 0) {
+    const composer = ensureSpaceBloomComposer();
+    renderer.autoClear = true;
+    spaceBloomPass.strength = bloom.intensity;
+    composer.render();
+    return;
+  }
+  if (spaceBloomComposer) disposeSpaceBloomComposer();
+
   const activeEffect = getActiveEffectPreviewSlot();
   const beforeEffect =
     effectPreview?.group && activeEffect?.particles?.some((particle) => particle.renderQueue === "beforeModel") ? effectPreview.group : null;
@@ -13908,9 +15387,12 @@ function renderViewerScene() {
   for (const [object, visible] of particleVisibility) {
     if (object) object.visible = beforeParticleIds.has(effectPreview.particles?.find((particle) => particle.object === object || particle.marker === object)?.id) ? false : visible;
   }
+  const frameBackground = scene.background;
+  scene.background = null;
   renderer.autoClear = false;
   renderer.clearDepth();
   renderer.render(scene, camera);
+  scene.background = frameBackground;
   for (const [object, visible] of particleVisibility) {
     if (object) object.visible = visible;
   }
@@ -15815,6 +17297,8 @@ function resize() {
   if (!host) return;
   const rect = host.getBoundingClientRect();
   renderer.setSize(rect.width, rect.height, false);
+  spaceBloomComposer?.setSize(rect.width, rect.height);
+  if (state.mode === "effect" && effectPreviewBackgroundImage) refreshEffectPreviewBackgroundCanvas();
   camera.aspect = rect.width / Math.max(rect.height, 1);
   camera.updateProjectionMatrix();
 }

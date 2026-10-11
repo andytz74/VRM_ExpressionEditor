@@ -1,6 +1,6 @@
 # VRM Companion Resource Reference Rules
 
-Updated: 2026-09-26
+Updated: 2026-10-01
 
 이 문서는 VRM Expression Editor에서 제작한 캐릭터 리소스 묶음을 프론트/익스텐션 런타임에 전달할 때의 폴더 구조와 참조 규칙을 정의한다.
 
@@ -30,6 +30,20 @@ img/
 
 props/
   *.glb
+
+vrSpace/
+  vrSpace.meta
+  spaces/
+    *.meta
+  props/
+    *.glb
+  bakes/
+    *-ao.png
+  textures/
+    *.png
+    *.jpg
+    *.jpeg
+    *.webp
 ```
 
 현재 프로젝트에서 모델 파일을 별도 `models/` 폴더가 아니라 다른 위치에 두고 관리하더라도, 런타임 전달 시에는 위 구조처럼 모델과 메타파일을 함께 묶는 것을 권장한다.
@@ -68,6 +82,67 @@ models/CharacterName.vrm.meta
 
 Emotion Linker 관련 조합 정보는 캐릭터 메타에 넣지 않는다. 별도의 `emotionLinker/` 메타파일을 사용한다.
 
+### 공간 설정과 텍스처
+
+```text
+vrSpace/vrSpace.meta
+vrSpace/spaces/*.meta
+vrSpace/props/*.glb
+vrSpace/bakes/*-ao.png
+vrSpace/textures/*
+```
+
+`vrSpace.meta`는 여러 공간의 ID, 표시 이름, 활성 공간과 개별 메타의 상대 경로를 관리한다. 각 `vrSpace/spaces/*.meta`는 코드로 생성하는 공간 하나의 크기, 위치, 회전, 벽·바닥 재질과 배치 오브젝트 설정을 저장한다. 텍스처와 GLB 필드는 각각 `vrSpace/textures/`, `vrSpace/props/` 기준 파일명만 저장한다.
+
+```json
+{
+  "wallTexture": {
+    "image": "brick-wall.png",
+    "tiling": [4, 2]
+  },
+  "floorTexture": {
+    "image": "floor-tile.webp",
+    "tiling": [6, 6]
+  },
+  "floorReflection": {
+    "enabled": false,
+    "strength": 0.45
+  },
+  "bloom": {
+    "enabled": false,
+    "intensity": 0.8
+  },
+  "props": [
+    {
+      "id": "space-prop-desk",
+      "name": "Desk",
+      "file": "desk.glb",
+      "visible": true,
+      "position": [0, 0, -1],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1]
+    }
+  ],
+  "ambientOcclusion": {
+    "enabled": true,
+    "image": "space-default-room-ao.png",
+    "resolution": 128,
+    "intensity": 1,
+    "dirty": false
+  }
+}
+```
+
+`tiling`은 `[x, y]` 반복 횟수다. 런타임은 sRGB 텍스처와 repeat wrapping을 사용하고, 조명에 반응하는 PBR/standard 계열 재질의 base color map으로 적용한다. `wallColor`와 `floorColor`는 텍스처에 곱해지는 tint 색상이다.
+
+`floorReflection`은 별도의 반사 카메라 없이 바닥의 physical material 코팅 반사와 저비용 area light를 조합한다. `strength`는 `0`에서 `1` 사이이며, 값이 높을수록 바닥 roughness가 낮아지고 clearcoat와 반사광이 강해진다.
+
+공간 오브젝트의 `position`, `rotation`, `scale`은 공간 로컬 좌표 기준이다. `rotation`의 단위는 degree이며 GLB에 포함된 메시, 머티리얼과 텍스처를 그대로 사용한다.
+
+`ambientOcclusion`은 GLB를 가림 물체로 사용해 방의 여섯 면에만 베이크한다. `resolution`은 면 하나의 해상도이며 최종 아틀라스는 가로 3면, 세로 2면으로 구성된다. 방 크기 또는 오브젝트 배치가 바뀌면 `dirty`를 `true`로 설정하고 다시 베이크해야 한다.
+
+`bloom`은 공간 카메라의 후처리 설정이다. 기본값은 비활성이며, `intensity`는 `0`에서 `3` 사이의 Bloom 강도다. 밝기 기준과 번짐 반경은 뷰어가 고정값으로 관리한다.
+
 ### 이펙트 메타파일
 
 ```text
@@ -75,6 +150,8 @@ effects/effects.meta
 ```
 
 Effect Editor에서 만든 파티클 이펙트 설정 파일이다.
+
+`previewBackground`는 Effect Editor에서 블렌딩을 확인하기 위한 미리보기 전용 설정이다. `enabled`의 기본값은 `false`이며, `color`는 렌더러 배경색이고 `image`는 `img/` 기준 파일명이다. 런타임 이펙트 재생에는 포함하지 않아도 된다.
 
 주요 포함 정보:
 

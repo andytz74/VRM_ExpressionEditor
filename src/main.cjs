@@ -64,12 +64,36 @@ function effectsMetaPath() {
   return path.join(effectsDir(), "effects.meta");
 }
 
-function spaceDir() {
+function legacySpaceDir() {
   return path.join(__dirname, "..", "spaces");
 }
 
-function spaceMetaPath() {
-  return path.join(spaceDir(), "space.meta");
+function legacySpaceMetaPath() {
+  return path.join(legacySpaceDir(), "space.meta");
+}
+
+function vrSpaceDir() {
+  return path.join(__dirname, "..", "vrSpace");
+}
+
+function vrSpaceMetaPath() {
+  return path.join(vrSpaceDir(), "vrSpace.meta");
+}
+
+function vrSpaceEntriesDir() {
+  return path.join(vrSpaceDir(), "spaces");
+}
+
+function spaceTexturesDir() {
+  return path.join(vrSpaceDir(), "textures");
+}
+
+function spacePropsDir() {
+  return path.join(vrSpaceDir(), "props");
+}
+
+function spaceBakesDir() {
+  return path.join(vrSpaceDir(), "bakes");
 }
 
 function emotionLinkerDir() {
@@ -624,24 +648,182 @@ ipcMain.handle("effects:save", async (_event, data) => {
   return { filePath, name: path.basename(filePath) };
 });
 
+function spaceEntryFileName(id, index) {
+  const safeId = String(id ?? "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${safeId || `space-${index + 1}`}.meta`;
+}
+
+async function writeSpaceMetaBundle(data) {
+  const parsed = JSON.parse(data);
+  const spaces = Array.isArray(parsed?.spaces) ? parsed.spaces : [];
+  await fs.mkdir(vrSpaceEntriesDir(), { recursive: true });
+
+  const entries = [];
+  for (const [index, source] of spaces.entries()) {
+    const room = source && typeof source === "object" ? source : {};
+    const id = String(room.id || `space-${index + 1}`);
+    const fileName = spaceEntryFileName(id, index);
+    const roomMeta = {
+      schemaVersion: 1,
+      metaType: "vrm-space",
+      ...room,
+      id,
+    };
+    await fs.writeFile(path.join(vrSpaceEntriesDir(), fileName), JSON.stringify(roomMeta, null, 2), "utf8");
+    entries.push({
+      id,
+      name: String(room.name || `Space ${index + 1}`),
+      file: `spaces/${fileName}`,
+    });
+  }
+
+  const activeSpaceId = entries.some((entry) => entry.id === parsed?.activeSpaceId)
+    ? String(parsed.activeSpaceId)
+    : entries[0]?.id ?? null;
+  const indexMeta = {
+    schemaVersion: 1,
+    type: "vrm-space-index",
+    activeSpaceId,
+    spaces: entries,
+  };
+  await fs.writeFile(vrSpaceMetaPath(), JSON.stringify(indexMeta, null, 2), "utf8");
+  return { filePath: vrSpaceMetaPath(), name: path.basename(vrSpaceMetaPath()) };
+}
+
+async function readSpaceMetaBundle() {
+  const indexMeta = JSON.parse(await fs.readFile(vrSpaceMetaPath(), "utf8"));
+  const rooms = [];
+  for (const [index, entry] of (Array.isArray(indexMeta?.spaces) ? indexMeta.spaces : []).entries()) {
+    const referencedFileName = path.basename(String(entry?.file || ""));
+    const fileName = referencedFileName || spaceEntryFileName(entry?.id, index);
+    try {
+      const roomMeta = JSON.parse(await fs.readFile(path.join(vrSpaceEntriesDir(), fileName), "utf8"));
+      rooms.push({ ...roomMeta, id: String(entry?.id || roomMeta?.id || `space-${index + 1}`) });
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  return {
+    schemaVersion: 1,
+    type: "vrm-space-meta",
+    activeSpaceId: indexMeta?.activeSpaceId,
+    spaces: rooms,
+  };
+}
+
 ipcMain.handle("space:loadOrCreate", async (_event, data) => {
-  await fs.mkdir(spaceDir(), { recursive: true });
-  const filePath = spaceMetaPath();
+  await fs.mkdir(vrSpaceDir(), { recursive: true });
   try {
-    const existing = await fs.readFile(filePath);
-    return { filePath, name: path.basename(filePath), data: existing, created: false };
+    const existing = await readSpaceMetaBundle();
+    return {
+      filePath: vrSpaceMetaPath(),
+      name: path.basename(vrSpaceMetaPath()),
+      data: Buffer.from(JSON.stringify(existing, null, 2), "utf8"),
+      created: false,
+    };
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
-    await fs.writeFile(filePath, data, "utf8");
-    return { filePath, name: path.basename(filePath), data: Buffer.from(data, "utf8"), created: true };
+    let initialData = data;
+    try {
+      initialData = await fs.readFile(legacySpaceMetaPath(), "utf8");
+    } catch (legacyError) {
+      if (legacyError.code !== "ENOENT") throw legacyError;
+    }
+    const result = await writeSpaceMetaBundle(initialData);
+    return { ...result, data: Buffer.from(initialData, "utf8"), created: true };
   }
 });
 
 ipcMain.handle("space:save", async (_event, data) => {
-  await fs.mkdir(spaceDir(), { recursive: true });
-  const filePath = spaceMetaPath();
-  await fs.writeFile(filePath, data, "utf8");
-  return { filePath, name: path.basename(filePath) };
+  await fs.mkdir(vrSpaceDir(), { recursive: true });
+  return writeSpaceMetaBundle(data);
+});
+
+ipcMain.handle("spaceTexture:store", async () => {
+  const dir = spaceTexturesDir();
+  await fs.mkdir(dir, { recursive: true });
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Open Space Texture",
+    defaultPath: dir,
+    properties: ["openFile"],
+    filters: [
+      { name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+
+  const sourcePath = result.filePaths[0];
+  const ext = path.extname(sourcePath).toLowerCase();
+  if (![".png", ".jpg", ".jpeg", ".webp"].includes(ext)) return null;
+  const fileName = path.basename(sourcePath);
+  const targetPath = path.join(dir, fileName);
+  if (path.resolve(sourcePath) !== path.resolve(targetPath)) {
+    await fs.copyFile(sourcePath, targetPath);
+  }
+  const data = await fs.readFile(targetPath);
+  return { filePath: targetPath, name: fileName, data };
+});
+
+ipcMain.handle("spaceTexture:openStored", async (_event, fileName) => {
+  const filePath = path.join(spaceTexturesDir(), path.basename(fileName));
+  const data = await fs.readFile(filePath);
+  return { filePath, name: path.basename(filePath), data };
+});
+
+ipcMain.handle("spaceProp:store", async () => {
+  const dir = spacePropsDir();
+  await fs.mkdir(dir, { recursive: true });
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Open Space Prop GLB",
+    defaultPath: dir,
+    properties: ["openFile"],
+    filters: [
+      { name: "GLB", extensions: ["glb"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+
+  const sourcePath = result.filePaths[0];
+  if (path.extname(sourcePath).toLowerCase() !== ".glb") return null;
+  const fileName = path.basename(sourcePath);
+  const targetPath = path.join(dir, fileName);
+  if (path.resolve(sourcePath) !== path.resolve(targetPath)) {
+    await fs.copyFile(sourcePath, targetPath);
+  }
+  const data = await fs.readFile(targetPath);
+  return { filePath: targetPath, name: fileName, data };
+});
+
+ipcMain.handle("spaceProp:openStored", async (_event, fileName) => {
+  const filePath = path.join(spacePropsDir(), path.basename(fileName));
+  const data = await fs.readFile(filePath);
+  return { filePath, name: path.basename(filePath), data };
+});
+
+ipcMain.handle("spaceAo:save", async (_event, spaceId, dataUrl) => {
+  const dir = spaceBakesDir();
+  await fs.mkdir(dir, { recursive: true });
+  const safeId = String(spaceId ?? "space")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "space";
+  const fileName = `${safeId}-ao.png`;
+  const match = String(dataUrl ?? "").match(/^data:image\/png;base64,(.+)$/);
+  if (!match) throw new Error("Invalid AO image data");
+  const filePath = path.join(dir, fileName);
+  await fs.writeFile(filePath, Buffer.from(match[1], "base64"));
+  return { filePath, name: fileName };
+});
+
+ipcMain.handle("spaceAo:openStored", async (_event, fileName) => {
+  const filePath = path.join(spaceBakesDir(), path.basename(fileName));
+  const data = await fs.readFile(filePath);
+  return { filePath, name: path.basename(filePath), data };
 });
 
 ipcMain.handle("json:save", async (_event, currentPath, data) => {

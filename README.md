@@ -86,6 +86,12 @@ VRM 휴머노이드 본이 아닌 추가 본을 특정 휴머노이드 본의 �
 
 슬롯 제목, 애니메이션 파일, 표정 프리셋과 시간축 전환, 파티클 이펙트, loop, transition 값을 관리합니다. 이 정보는 `emotionLinker/emotion-linker2.meta`에 저장됩니다. 프런트에서는 슬롯 제목을 호출해 설정된 애니메이션, 표정, 이펙트 시퀀스를 함께 재생합니다.
 
+### Space Editor
+
+코드로 생성한 큐브룸의 크기, 위치, 회전, 벽과 바닥 재질을 설정하는 모드입니다.
+
+공간 목록과 현재 선택 정보는 `vrSpace/vrSpace.meta`에 저장되고, 각 공간의 실제 설정은 `vrSpace/spaces/*.meta`에 하나씩 분리해 저장됩니다. 선택한 벽·바닥 타일 텍스처는 `vrSpace/textures/`, 공간에 배치할 GLB는 `vrSpace/props/`에 복사됩니다. 벽과 바닥 및 GLB의 PBR 재질은 공간 조명의 영향을 받습니다.
+
 ### Transition Viewer
 
 애니메이션 전환 상태를 검수하는 view only 모드입니다.
@@ -112,6 +118,15 @@ props/
 emotionLinker/
   emotion-linker.meta
   emotion-linker2.meta
+vrSpace/
+  vrSpace.meta
+  spaces/
+    *.meta
+  props/
+    *.glb
+  bakes/
+    *-ao.png
+  textures/
 ```
 
 - `.vrm.meta`: 캐릭터별 표정, 모션 보정, 추가 본 설정, 감정맵, 보조 이미지, 아웃라인, props 정보를 저장합니다.
@@ -119,6 +134,11 @@ emotionLinker/
 - `img/`: 홍조 등 표정 보조 이미지 리소스를 저장합니다.
 - `props/`: GLB 소품 리소스를 저장합니다.
 - `emotionLinker/`: 확인용 애니메이션-표정 연결 정보를 저장합니다.
+- `vrSpace/vrSpace.meta`: Space Editor의 공간 목록, 표시 이름, 활성 공간과 개별 공간 메타 경로를 관리합니다.
+- `vrSpace/spaces/*.meta`: 공간 하나의 크기, 위치, 회전, 재질과 배치 오브젝트 설정을 파일 하나에 저장합니다.
+- `vrSpace/props/*.glb`: 공간에 배치하는 3D 오브젝트를 저장합니다.
+- `vrSpace/bakes/*-ao.png`: 방의 벽·바닥·천장에 적용하는 베이크된 AO 맵을 저장합니다.
+- `vrSpace/textures/`: 벽과 바닥에 사용하는 타일 텍스처를 저장합니다.
 
 ## 개발 메모
 
