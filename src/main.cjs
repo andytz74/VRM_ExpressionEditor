@@ -273,6 +273,11 @@ async function readAnimationCatalog() {
       entry.description = String(entry.description ?? "");
       changed = true;
     }
+    const normalizedCode = normalizeAnimationCode(entry.code);
+    if (entry.code !== normalizedCode) {
+      entry.code = normalizedCode;
+      changed = true;
+    }
     if (typeof entry.mustWatchFull !== "boolean") {
       entry.mustWatchFull = Boolean(entry.mustWatchFull);
       changed = true;
@@ -320,6 +325,7 @@ function parseJsonCatalog(text) {
 function createAnimationCatalogEntry(fileName, existing = {}) {
   return {
     fileName,
+    code: normalizeAnimationCode(existing.code),
     description: String(existing.description ?? ""),
     mustWatchFull: Boolean(existing.mustWatchFull),
     duration: Number(existing.duration) || 0,
@@ -327,6 +333,11 @@ function createAnimationCatalogEntry(fileName, existing = {}) {
     loop: Boolean(existing.loop),
     lookAtCamera: Boolean(existing.lookAtCamera),
   };
+}
+
+function normalizeAnimationCode(code) {
+  const normalized = String(code ?? "").trim();
+  return normalized || "noCode";
 }
 
 async function writeAnimationCatalog(catalog) {
@@ -529,6 +540,7 @@ ipcMain.handle("animation:updateInfo", async (_event, fileName, patch) => {
       return null;
     }
     catalog.animations[safeName] = createAnimationCatalogEntry(safeName, catalog.animations[safeName]);
+    if (Object.hasOwn(patch, "code")) catalog.animations[safeName].code = normalizeAnimationCode(patch.code);
     if (Object.hasOwn(patch, "description")) catalog.animations[safeName].description = String(patch.description ?? "");
     if (Object.hasOwn(patch, "mustWatchFull")) catalog.animations[safeName].mustWatchFull = Boolean(patch.mustWatchFull);
     if (Object.hasOwn(patch, "loop")) catalog.animations[safeName].loop = Boolean(patch.loop);

@@ -82,7 +82,13 @@ models/CharacterName.vrm.meta
 
 Emotion Linker 관련 조합 정보는 캐릭터 메타에 넣지 않는다. 별도의 `emotionLinker/` 메타파일을 사용한다.
 
+캐릭터 메타의 `animations[animationFile].hasBoneCorrections`는 해당 캐릭터와 애니메이션 조합에 실제 본 보정값이 있는지를 나타내는 자동 생성값이다. `false`면 본 보정 계산을 생략하고, `true`일 때만 `corrections`를 순회한다. 필드가 없는 이전 메타는 `Object.keys(corrections ?? {}).length > 0`으로 판단한다. `corrections`에 없는 관절에는 어떤 보정도 적용하지 않는다.
+
+`hasBoneCorrections`는 `corrections`에서 자동으로 유도되는 보조값이다. 현재 형식에서는 유지하지만 필수 원본 데이터는 아니다. 런타임이 `corrections` 누락 또는 빈 객체를 보정 없음으로, 하나 이상의 본 항목이 있는 객체를 보정 있음으로 판정하면 이 필드 없이도 동작할 수 있다. 따라서 `hasBoneCorrections`가 없는 메타도 정상 입력으로 받아들여야 한다.
+
 ### 공간 설정과 텍스처
+
+> 현재 Space Editor는 실험 단계이며 안정성 문제가 해결될 때까지 앱의 모드 버튼이 비활성화되어 있다. `vrSpace/` 리소스는 현 프런트 전달·배포 묶음에 포함하지 않는다.
 
 ```text
 vrSpace/vrSpace.meta
@@ -185,6 +191,7 @@ animations/animations.meta
 주요 포함 정보:
 
 - 파일명
+- 선택적 분류 코드 (`code`)
 - 설명
 - duration
 - loop 여부
@@ -193,6 +200,8 @@ animations/animations.meta
 - lookAtCamera 여부
 
 `lookAtCamera`는 에디터 UI의 `정면시선` 옵션이다. Emotion Linker 2 슬롯을 재생할 때도 `motionSlots[].animationFile`로 `animations.meta`를 조회해서 함께 적용해야 한다. 구체적인 런타임 규칙은 `docs/LOOK_AT_CAMERA_RUNTIME_SPEC.md`를 기준으로 한다.
+
+`code`의 기본값은 `noCode`다. 빈 값, `noCode`, 필드 누락은 코드가 지정되지 않은 상태로 처리하며 실제 조회 코드로 등록하지 않는다. `loop`는 `true`일 때만 반복하고 `false` 또는 필드 누락이면 반복하지 않는다.
 
 ### 이미지 폴더
 
@@ -616,6 +625,7 @@ props/OBJ_cheerBoard.glb
 ```json
 {
   "id": "emotion-0",
+  "code": "noCode",
   "name": "Neutral0",
   "parameters": {
     "BROW_Up": 0.2,
@@ -630,6 +640,16 @@ props/OBJ_cheerBoard.glb
 - 런타임 VRM에 존재하지 않는 parameter는 무시한다.
 - `name`은 UI 표시용 또는 fallback 식별값으로만 사용한다.
 - `id`가 있으면 `id`를 우선 사용한다.
+- `code`는 외부 분류·조회용 선택 필드다. 빈 값, `noCode`, 필드 누락은 코드 미지정으로 처리하며 `id`를 대체하지 않는다.
+
+### 선택적 애니메이션 기능의 공통 규칙
+
+캐릭터 메타의 애니메이션 항목은 필요한 기능만 기록할 수 있다.
+
+- `corrections`가 없거나 빈 객체이면 관절 보정을 계산하지 않는다.
+- `props`가 없거나 빈 배열이면 해당 애니메이션에서 Prop을 표시하지 않고 이전 애니메이션의 Prop도 숨긴다.
+- `loop`가 없거나 `false`이면 반복하지 않는다.
+- 값이 존재하는 기능만 적용하고, 필드 누락 자체를 오류로 취급하지 않는다.
 
 구간이 있는 표정은 `rangeSlots`를 사용한다.
 

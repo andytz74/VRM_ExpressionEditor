@@ -141,7 +141,7 @@
     {
       "id": "motion-slot-1787561532993-12",
       "title": "A0_1",
-      "animationFile": "a0_standSlantedL.vrma",
+      "animationFile": "a0_2.vrma",
       "expressionPresetId": "emotion-1785207956456-10",
       "expressionPresetName": "mapNeutral+1",
       "effectId": "",
@@ -159,7 +159,7 @@
       "effectId": "",
       "effectStartTime": 0,
       "loop": true,
-      "transitionSeconds": 0.2,
+      "transitionSeconds": 0.5,
       "expressionTimeline": []
     },
     {
@@ -171,7 +171,7 @@
       "effectId": "",
       "effectStartTime": 0,
       "loop": false,
-      "transitionSeconds": 0.2,
+      "transitionSeconds": 0.5,
       "expressionTimeline": []
     },
     {
@@ -652,6 +652,30 @@
       "effectId": "",
       "effectStartTime": 0,
       "loop": true,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1792540491251-41",
+      "title": "input title",
+      "animationFile": "CM_web_01_oldBone.vrma",
+      "expressionPresetId": "emotion-1792525571858-68",
+      "expressionPresetName": "new emotion",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
+      "transitionSeconds": 0.2,
+      "expressionTimeline": []
+    },
+    {
+      "id": "motion-slot-1793013319283-42",
+      "title": "A3",
+      "animationFile": "a3.vrma",
+      "expressionPresetId": "emotion-4",
+      "expressionPresetName": "Joy",
+      "effectId": "",
+      "effectStartTime": 0,
+      "loop": false,
       "transitionSeconds": 0.2,
       "expressionTimeline": []
     }

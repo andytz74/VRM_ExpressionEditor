@@ -1895,6 +1895,10 @@ input[type="range"] {
   gap: 7px;
 }
 
+.emotion-card-name-row {
+  margin-top: 7px;
+}
+
 .emotion-card-actions {
   display: flex;
   align-items: center;
@@ -1994,6 +1998,7 @@ input[type="range"] {
 }
 
 .emotion-name-input,
+.emotion-code-input,
 .emotion-value-input {
   min-height: 32px;
   border: 1px solid #343b45;
@@ -2006,6 +2011,32 @@ input[type="range"] {
   width: 100%;
   padding: 0 8px;
   font-size: 18px;
+}
+
+.emotion-code-input {
+  width: 100%;
+  min-width: 0;
+  padding: 0 8px;
+  font-size: 16px;
+}
+
+.emotion-code-input.no-code,
+.emotion-code-readonly.no-code {
+  color: #303030;
+}
+
+.emotion-code-input.assigned,
+.emotion-code-readonly.assigned {
+  color: #00ff00;
+}
+
+.emotion-code-readonly {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  line-height: 32px;
 }
 
 .emotion-name-readonly {
@@ -2183,6 +2214,15 @@ input[type="range"] {
   border: 1px solid #2c333d;
   border-radius: 8px;
   background: #20252c;
+}
+
+.correction-card.target-bone-card.has-corrections {
+  border-color: #f0bd4f;
+}
+
+.target-bone-correction-summary.has-corrections {
+  color: #f0bd4f;
+  font-weight: 700;
 }
 
 .correction-card label {
@@ -3589,6 +3629,32 @@ input[type="range"] {
   grid-template-columns: minmax(0, 1fr) 42px;
   align-items: end;
   gap: 8px;
+}
+
+.animation-code-line {
+  display: flex;
+  margin: 2px 0 8px;
+}
+
+.correction-card input.animation-code-input {
+  width: min(100%, 204px);
+  min-height: 38px;
+  margin-top: 0;
+  border: 1px solid #343b45;
+  border-radius: 7px;
+  padding: 0 10px;
+  background: #171b21;
+  font-size: 16px;
+}
+
+.correction-card input.animation-code-input.no-code {
+  color: #303030;
+  -webkit-text-fill-color: #303030;
+}
+
+.correction-card input.animation-code-input.assigned {
+  color: #00ff00;
+  -webkit-text-fill-color: #00ff00;
 }
 
 .animation-name-line {

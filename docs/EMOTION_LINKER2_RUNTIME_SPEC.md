@@ -165,6 +165,7 @@ function playMotionSlotByTitle(title: string) {
 | `expressionTimeline` | 슬롯 시간축에 따라 적용할 표정 전환 목록이다. |
 
 슬롯의 `loop`가 `animations.meta`의 기본 `loop`보다 우선한다.
+`loop`가 없거나 `false`이면 반복하지 않는다. `effectId`가 없거나 빈 문자열이면 이펙트를 재생하지 않고, `expressionTimeline`이 없으면 빈 배열로 취급한다.
 
 ## 5. 이름 호출부터 재생까지
 
@@ -463,8 +464,15 @@ const characterAnimation = characterMeta.animations?.[slot.animationFile];
 
 여기서 다음 항목을 함께 적용한다.
 
+- `hasBoneCorrections`: 이 캐릭터와 애니메이션 조합에 실제 본 보정값이 있는지 나타내는 자동 생성 boolean.
 - `corrections`: 애니메이션 결과 위에 적용할 본 보정값.
 - `props`: 이 애니메이션에서 표시할 Prop ID 목록.
+
+`hasBoneCorrections`가 `false`면 프런트는 본 보정 순회와 계산을 생략한다. `true`일 때만 `corrections`의 관절들을 적용한다. 이전 버전 메타처럼 이 필드가 없으면 `Object.keys(corrections ?? {}).length > 0`을 fallback으로 사용한다. `corrections`에 없는 관절은 보정하지 않는다.
+
+`hasBoneCorrections`는 편의를 위해 추가된 파생 상태값이며 보정 데이터의 원본은 `corrections`다. 현재 메타 형식에서는 이 필드를 유지하지만, 프런트가 `corrections`가 없거나 빈 객체이면 보정 없음, 하나 이상의 본 항목이 있으면 보정 있음으로 직접 판단한다면 `hasBoneCorrections` 없이도 같은 동작을 구현할 수 있다. 따라서 필드가 누락된 경우를 오류로 취급하지 말고 반드시 `corrections` 내용으로 fallback한다.
+
+Emotion Linker 2 슬롯을 전환할 때 관절 보정도 슬롯의 `transitionSeconds`를 사용한다. 이전 슬롯과 새 슬롯의 본별 회전 보정 쿼터니언을 slerp하며, 한쪽 슬롯에만 보정값이 있는 본은 항등 회전과 보정 회전 사이를 보간한다. 전환 도중 다른 슬롯으로 전환하면 현재 화면에 적용된 중간 보정값을 새 전환의 시작값으로 사용한다. `transitionSeconds`가 `0`이거나 이전 동작이 없으면 새 보정값을 즉시 적용한다.
 
 Prop은 캐릭터 메타 최상위 `props[]`에서 ID로 찾고 `props/{file}` GLB를 로드한다.
 
@@ -472,6 +480,7 @@ Prop은 캐릭터 메타 최상위 `props[]`에서 ID로 찾고 `props/{file}` G
 {
   "animations": {
     "cheerBoard.vrma": {
+      "hasBoneCorrections": false,
       "props": ["prop-1787309873132-0"],
       "corrections": {}
     }
@@ -543,6 +552,7 @@ lookAtCamera target
 ```json
 {
   "fileName": "a3_1.vrma",
+  "code": "A3",
   "duration": 2.458,
   "loop": false,
   "isFirst": false,
@@ -552,10 +562,13 @@ lookAtCamera target
 ```
 
 - `duration`: 타임라인 UI와 사전 검증용 길이. 실제 재생 시간은 로드된 clip duration을 우선한다.
+- `code`: 외부 시스템에서 동작을 분류하거나 조회할 때 사용할 수 있는 선택적 코드다. `noCode`, 빈 값 또는 필드 누락은 코드가 지정되지 않은 상태다.
 - `isFirst`: 캐릭터 로드 직후 기본 동작 후보로 사용할 수 있다.
 - `mustWatchFull`: 상위 대화/연출 시스템이 다른 슬롯으로 교체하기 전에 끝까지 재생할지 판단하는 정책값이다.
 - `lookAtCamera`: 반드시 11장의 규칙대로 적용한다.
 - `loop`: 직접 애니메이션을 재생할 때의 기본값이며 Emotion Linker 2에서는 `slot.loop`가 우선한다.
+
+`code`는 Emotion Linker 2 슬롯의 `title`이나 내부 `id`를 대체하지 않는다. 코드 기반 조회를 제공할 경우 `noCode`를 실제 조회 코드로 등록하지 않아야 한다.
 
 ## 16. 오류 격리와 fallback
 
@@ -604,6 +617,7 @@ interface CompanionMotionApi {
 [ ] 중복 title을 감지하고 오류 처리한다.
 [ ] slot.loop가 animations.meta.loop보다 우선한다.
 [ ] transitionSeconds로 동작과 시작 표정을 전환한다.
+[ ] transitionSeconds로 이전·새 애니메이션의 관절 보정도 전환한다.
 [ ] time=0 timeline 포인트가 기본 표정보다 우선한다.
 [ ] 프레임 드롭 시에도 지나간 timeline 포인트가 한 번 적용된다.
 [ ] 루프마다 timeline과 effect trigger가 재설정된다.

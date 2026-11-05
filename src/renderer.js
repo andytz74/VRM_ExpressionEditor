@@ -94,6 +94,7 @@ const BONE_GROUPS = [
 
 const HUMAN_BONES = BONE_GROUPS.flatMap((group) => group.bones);
 const HUMAN_BONE_SET = new Set(HUMAN_BONES);
+const DISABLED_EDITOR_MODES = new Set(["space"]);
 const PARTICLE_SHAPES = [
   { value: "texture", label: "Use Texture" },
   { value: "dot", label: "Dot" },
@@ -281,6 +282,7 @@ const state = {
   expressionParameterDirty: false,
   expressionTransition: null,
   expressionDecay: null,
+  motionCorrectionTransition: null,
   activeRorrInfluenceValues: {},
   blink: {
     elapsed: 0,
@@ -454,6 +456,7 @@ const clock = new THREE.Clock();
 function createDefaultEmotionPresets() {
   return DEFAULT_EMOTION_PRESET_NAMES.map((name, index) => ({
     id: `emotion-${index}`,
+    code: "noCode",
     name,
     value: 0,
     locked: false,
@@ -2902,14 +2905,16 @@ function renderModeBar(active) {
   return `
     <div class="mode-bar">
       ${modes
-        .map(
-          ([mode, label, icon]) => `
+        .map(([mode, label, icon]) => {
+          const disabled = DISABLED_EDITOR_MODES.has(mode);
+          const disabledAttributes = disabled ? `disabled aria-disabled="true" title="현재 비활성화된 기능입니다"` : "";
+          return `
             <div class="mode-row">
-              <button class="mode-button ${active === mode ? "active" : ""}" data-mode="${mode}">${iconSvg(icon, 14)}${label}</button>
-              <button class="camera-preset-button ${state.cameraSettingsOpen === mode ? "active" : ""}" data-camera-settings="${mode}" title="${label} camera">${iconSvg(Camera, 15)}</button>
+              <button class="mode-button ${active === mode ? "active" : ""}" data-mode="${mode}" ${disabledAttributes}>${iconSvg(icon, 14)}${label}</button>
+              <button class="camera-preset-button ${state.cameraSettingsOpen === mode ? "active" : ""}" data-camera-settings="${mode}" ${disabled ? disabledAttributes : `title="${label} camera"`}>${iconSvg(Camera, 15)}</button>
             </div>
-          `,
-        )
+          `;
+        })
         .join("")}
     </div>
     ${renderVrmVersionSelector()}
@@ -3047,14 +3052,16 @@ function renderEmotionPresetCard(preset) {
   const selected = preset.id === state.selectedExpressionPresetId;
   const slots = normalizeExpressionRangeSlots(preset.rangeSlots);
   const blushEnabled = isPresetBlushEnabled(preset);
+  const code = normalizeCodeValue(preset.code);
+  const codeClass = code === "noCode" ? "no-code" : "assigned";
   return `
     <div class="emotion-card ${preset.locked ? "locked" : "unlocked"} ${selected ? "selected" : ""}" data-emotion-select="${preset.id}" data-emotion-drop="${preset.id}">
       <div class="emotion-card-top">
         <button class="lock-button ${preset.locked ? "locked" : ""}" draggable="true" data-emotion-lock="${preset.id}" data-emotion-drag="${preset.id}" title="${preset.locked ? "Unlock" : "Lock"}">${iconSvg(preset.locked ? Lock : Unlock, 18)}</button>
         ${
           preset.locked
-            ? `<div class="emotion-name-readonly">${escapeHtml(preset.name)}</div>`
-            : `<input class="emotion-name-input" type="text" value="${escapeHtml(preset.name)}" data-emotion-name="${preset.id}" />`
+            ? `<div class="emotion-code-readonly ${codeClass}">${escapeHtml(code)}</div>`
+            : `<input class="emotion-code-input ${codeClass}" type="text" value="${escapeHtml(code)}" data-emotion-code="${preset.id}" />`
         }
         <div class="emotion-card-actions">
           <button class="blink-emotion-button ${preset.isDisableBlink ? "active" : ""}" data-emotion-blink="${preset.id}" title="Disable blink">${blinkDisabledSvg(18)}</button>
@@ -3063,6 +3070,13 @@ function renderEmotionPresetCard(preset) {
           <button class="duplicate-emotion-button" data-emotion-duplicate="${preset.id}" title="Duplicate">${iconSvg(Copy, 15)}</button>
           ${preset.locked ? `<span class="delete-emotion-placeholder"></span>` : `<button class="delete-emotion-button" data-emotion-delete="${preset.id}" title="Delete">${iconSvg(X, 16)}</button>`}
         </div>
+      </div>
+      <div class="emotion-card-name-row">
+        ${
+          preset.locked
+            ? `<div class="emotion-name-readonly">${escapeHtml(preset.name)}</div>`
+            : `<input class="emotion-name-input" type="text" value="${escapeHtml(preset.name)}" data-emotion-name="${preset.id}" />`
+        }
       </div>
       <div class="emotion-card-controls">
         <div class="emotion-slider-wrap">
@@ -3279,6 +3293,10 @@ function renderMotionCorrectionPanel() {
   const selectedAnimation = getSelectedAnimationEntry();
   const selectedAnimationMeta = getAnimationMetaEntry(state.selectedAnimationName);
   const selected = getSelectedCorrection();
+  const correctedBoneNames = getCorrectedBoneNames();
+  const hasCorrectedBones = correctedBoneNames.length > 0;
+  const animationCode = normalizeCodeValue(selectedAnimation?.code);
+  const animationCodeClass = animationCode === "noCode" ? "no-code" : "assigned";
   return `
     <div class="panel-header">
       <div class="title-block">
@@ -3332,6 +3350,9 @@ function renderMotionCorrectionPanel() {
           </label>
           <button class="prop-load-button" data-add-prop-glb ${currentVrm ? "" : "disabled"} title="GLB Prop 불러오기">GLB</button>
         </div>
+        <div class="animation-code-line">
+          <input class="animation-code-input ${animationCodeClass}" type="text" value="${escapeHtml(animationCode)}" data-animation-code ${selectedAnimation ? "" : "disabled"} />
+        </div>
         <div class="animation-description-line">
           <label>
             설명
@@ -3350,7 +3371,7 @@ function renderMotionCorrectionPanel() {
       ${
         selectedAnimation && currentVrm
           ? `
-            <div class="correction-card">
+            <div class="correction-card target-bone-card ${hasCorrectedBones ? "has-corrections" : ""}">
               <div class="row-top">
                 <div class="name">Target Bone</div>
                 <div class="target-bone-tools">
@@ -3361,7 +3382,7 @@ function renderMotionCorrectionPanel() {
                 </div>
               </div>
               <select id="selectedBone">${renderBoneOptions()}</select>
-              <p class="parameter-meta">${getBoneAvailabilityText(state.selectedBone)} ${getMirrorBoneName(state.selectedBone) ? (state.separateMirrorBoneCorrection ? "좌우를 따로 보정합니다." : "좌우를 대칭으로 함께 보정합니다.") : ""}</p>
+              <p class="parameter-meta target-bone-correction-summary ${hasCorrectedBones ? "has-corrections" : ""}" aria-live="polite">${escapeHtml(getTargetBoneCorrectionSummary(correctedBoneNames))}</p>
             </div>
             ${renderCorrectionVector("rotationOffset", "Rotation Offset", selected.rotationOffset, -45, 45, 0.1, "deg")}
           `
@@ -5683,6 +5704,17 @@ function bindUi() {
     updateSelectedAnimationDescription(event.target.value);
   });
 
+  const animationCodeInput = document.querySelector("[data-animation-code]");
+  animationCodeInput?.addEventListener("input", () => {
+    const assigned = animationCodeInput.value.trim() && animationCodeInput.value.trim() !== "noCode";
+    animationCodeInput.classList.toggle("assigned", Boolean(assigned));
+    animationCodeInput.classList.toggle("no-code", !assigned);
+  });
+  animationCodeInput?.addEventListener("blur", () => updateSelectedAnimationCode(animationCodeInput.value));
+  animationCodeInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") animationCodeInput.blur();
+  });
+
   for (const input of document.querySelectorAll("[data-animation-time]")) {
     input.addEventListener("input", () => setAnimationTime(Number(input.value)));
   }
@@ -5736,6 +5768,7 @@ function bindUi() {
 
   for (const button of document.querySelectorAll("[data-mode]")) {
     button.addEventListener("click", () => {
+      if (DISABLED_EDITOR_MODES.has(button.dataset.mode)) return;
       state.mode = button.dataset.mode;
       state.editing = null;
       state.confirmBack = false;
@@ -5768,6 +5801,7 @@ function bindUi() {
   for (const button of document.querySelectorAll("[data-camera-settings]")) {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
+      if (DISABLED_EDITOR_MODES.has(button.dataset.cameraSettings)) return;
       state.cameraSettingsOpen = state.cameraSettingsOpen === button.dataset.cameraSettings ? null : button.dataset.cameraSettings;
       render();
     });
@@ -6018,6 +6052,19 @@ function bindUi() {
     });
   }
 
+  for (const input of document.querySelectorAll("[data-emotion-code]")) {
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("input", () => {
+      const assigned = input.value.trim() && input.value.trim() !== "noCode";
+      input.classList.toggle("assigned", Boolean(assigned));
+      input.classList.toggle("no-code", !assigned);
+    });
+    input.addEventListener("blur", () => updateEmotionPresetCode(input.dataset.emotionCode, input.value));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") input.blur();
+    });
+  }
+
   for (const slider of document.querySelectorAll("[data-emotion-slider]")) {
     slider.addEventListener("click", (event) => event.stopPropagation());
     slider.addEventListener("input", () => updateEmotionPresetValue(slider.dataset.emotionSlider, Number(slider.value), slider));
@@ -6215,6 +6262,7 @@ function addEmotionPreset() {
   const id = `emotion-${Date.now()}-${state.expressionPresets.length}`;
   state.expressionPresets.push({
     id,
+    code: "noCode",
     name: "new emotion",
     value: 0,
     locked: false,
@@ -6241,6 +6289,7 @@ function duplicateEmotionPreset(id) {
   const source = state.expressionPresets[sourceIndex];
   const copy = {
     id: `emotion-${Date.now()}-${state.expressionPresets.length}`,
+    code: normalizeCodeValue(source.code),
     name: source.name,
     value: 0,
     locked: false,
@@ -6929,6 +6978,16 @@ function updateEmotionPresetName(id, name) {
   const nextName = name.trim() || "new emotion";
   if (preset.name === nextName) return;
   preset.name = nextName;
+  markExpressionMetaDirty();
+  renderPreservingExpressionScroll();
+}
+
+function updateEmotionPresetCode(id, code) {
+  const preset = state.expressionPresets.find((item) => item.id === id);
+  if (!preset || preset.locked) return;
+  const nextCode = normalizeCodeValue(code);
+  if (preset.code === nextCode) return;
+  preset.code = nextCode;
   markExpressionMetaDirty();
   renderPreservingExpressionScroll();
 }
@@ -7992,6 +8051,7 @@ function importCorrectionMeta(source) {
       if (nextCorrections[boneName]) boneCount += 1;
     }
     targetEntry.corrections = nextCorrections;
+    targetEntry.hasBoneCorrections = Object.keys(nextCorrections).length > 0;
     animationCount += 1;
   }
   return {
@@ -8835,6 +8895,16 @@ function updateSelectedAnimationDescription(value) {
   window.vrmFiles.updateAnimationInfo(entry.fileName, { description: value });
 }
 
+function updateSelectedAnimationCode(value) {
+  const entry = getSelectedAnimationEntry();
+  if (!entry) return;
+  const code = normalizeCodeValue(value);
+  if (entry.code === code) return;
+  entry.code = code;
+  window.vrmFiles.updateAnimationInfo(entry.fileName, { code });
+  renderPreservingScrollableUi();
+}
+
 function updateAnimationExpressionLink(animationName, presetId) {
   const entry = ensureEmotionLinkerEntry(animationName);
   if (!entry) return;
@@ -9563,12 +9633,19 @@ async function playMotionSlot(slotId) {
   const scrollTop = scroller?.scrollTop ?? 0;
   const slot = getMotionSlot(slotId);
   if (!slot?.animationFile) return;
+  const transitionSeconds = clampTimelineTransitionSeconds(slot.transitionSeconds);
+  const correctionFrom = getCurrentMotionCorrectionQuaternions();
+  holdMotionCorrectionTransition(correctionFrom);
   state.selectedMotionSlotId = slot.id;
   state.selectedAnimationName = slot.animationFile;
   const transition = await loadSelectedAnimation({ preserveCurrentAction: true });
+  startMotionCorrectionTransition(
+    correctionFrom,
+    slot.animationFile,
+    transition?.previousAction ? transitionSeconds : 0,
+  );
   startActiveMotionSlotTimeline(slot);
   applyInitialMotionSlotExpression(slot);
-  const transitionSeconds = clampTimelineTransitionSeconds(slot.transitionSeconds);
   playAnimationFromStart(Boolean(slot.loop), {
     previousAction: transition?.previousAction,
     transitionSeconds: transition?.previousAction ? transitionSeconds : 0,
@@ -9972,6 +10049,7 @@ function applyLinkedExpressionPreset(presetId, duration = 0.2) {
 function clearReferenceAnimation() {
   clearMotionCorrectionPreview();
   clearExtraBoneFollowPreview();
+  state.motionCorrectionTransition = null;
   state.activeLinkTimeline = null;
   animationMixer?.stopAllAction();
   animationMixer = null;
@@ -10969,8 +11047,9 @@ function createEmptyCorrection() {
       },
       points: [],
     },
-    expressionPresets: createDefaultEmotionPresets().map(({ id, name, locked, isDisableBlink, poseControls, rangeSlots, emotionImage }) => ({
+    expressionPresets: createDefaultEmotionPresets().map(({ id, code, name, locked, isDisableBlink, poseControls, rangeSlots, emotionImage }) => ({
       id,
+      code,
       name,
       locked,
       isDisableBlink,
@@ -11291,6 +11370,27 @@ function getSelectedAnimationCorrections() {
   return state.correction.animations?.[state.selectedAnimationName]?.corrections ?? {};
 }
 
+function getCorrectedBoneNames() {
+  const corrections = getSelectedAnimationCorrections();
+  const names = Object.keys(corrections).filter((boneName) => !isDefaultBoneCorrectionValue(corrections[boneName]));
+  const boneOrder = new Map(HUMAN_BONES.map((boneName, index) => [boneName, index]));
+  return names.sort((left, right) => {
+    const leftIndex = boneOrder.get(left) ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = boneOrder.get(right) ?? Number.MAX_SAFE_INTEGER;
+    return leftIndex - rightIndex || left.localeCompare(right);
+  });
+}
+
+function getTargetBoneCorrectionSummary(correctedBoneNames = getCorrectedBoneNames()) {
+  if (correctedBoneNames.length) return correctedBoneNames.map(formatBoneName).join(" , ");
+  const mirrorDescription = getMirrorBoneName(state.selectedBone)
+    ? state.separateMirrorBoneCorrection
+      ? "좌우를 따로 보정합니다."
+      : "좌우를 대칭으로 함께 보정합니다."
+    : "";
+  return `${getBoneAvailabilityText(state.selectedBone)} ${mirrorDescription}`.trim();
+}
+
 function ensureSelectedAnimationCorrections() {
   if (!state.selectedAnimationName || !getSelectedAnimationEntry()) return null;
   const entry = ensureAnimationMetaEntry(state.selectedAnimationName);
@@ -11364,6 +11464,7 @@ function updateCorrectionValue(key, axis, value) {
   state.correctionDirty = true;
   applyMotionCorrectionPreview();
   syncCorrectionInputs(key, axis, next[key][axis]);
+  syncTargetBoneCorrectionStatus();
   syncSaveMetaButton();
 }
 
@@ -11392,6 +11493,16 @@ function syncCorrectionStepButtons(key) {
     const value = Number(button.dataset.step);
     button.classList.toggle("active", Math.abs(current - value) < 0.000001);
   }
+}
+
+function syncTargetBoneCorrectionStatus() {
+  const correctedBoneNames = getCorrectedBoneNames();
+  const hasCorrectedBones = correctedBoneNames.length > 0;
+  const card = document.querySelector(".target-bone-card");
+  const summary = document.querySelector(".target-bone-correction-summary");
+  card?.classList.toggle("has-corrections", hasCorrectedBones);
+  summary?.classList.toggle("has-corrections", hasCorrectedBones);
+  if (summary) summary.textContent = getTargetBoneCorrectionSummary(correctedBoneNames);
 }
 
 function syncSaveMetaButton() {
@@ -11431,6 +11542,7 @@ function resetCorrectionField(key) {
   if (mirrorBone) resetCorrectionFieldForBone(mirrorBone, key);
   state.correctionDirty = true;
   applyMotionCorrectionPreview();
+  syncTargetBoneCorrectionStatus();
   syncSaveMetaButton();
   for (let axis = 0; axis < 3; axis += 1) {
     syncCorrectionInputs(key, axis, next[key][axis]);
@@ -11453,6 +11565,7 @@ function resetSelectedBoneCorrection() {
   delete corrections[state.selectedBone];
   const mirrorBone = getActiveMirrorBoneName(state.selectedBone);
   if (mirrorBone) delete corrections[mirrorBone];
+  syncAnimationBoneCorrectionFlag();
   state.correctionDirty = true;
   applyMotionCorrectionPreview();
   syncSaveMetaButton();
@@ -11468,6 +11581,15 @@ function pruneDefaultCorrection(boneName) {
     correction.rotationOffset.every((value) => Math.abs(value) < 0.000001) &&
     correction.scaleMultiplier.every((value) => Math.abs(value - 1) < 0.000001);
   if (isDefault) delete corrections[boneName];
+  syncAnimationBoneCorrectionFlag();
+}
+
+function syncAnimationBoneCorrectionFlag(animationName = state.selectedAnimationName) {
+  if (!animationName) return false;
+  const entry = state.correction.animations?.[animationName];
+  if (!entry) return false;
+  entry.hasBoneCorrections = Object.keys(entry.corrections ?? {}).length > 0;
+  return entry.hasBoneCorrections;
 }
 
 async function saveCorrection() {
@@ -11502,6 +11624,9 @@ async function loadOrCreateVrmMeta(vrmPath, vrmName) {
   } catch {
     rawMeta = initial;
     await window.vrmFiles.saveMeta(result.filePath, JSON.stringify(initial, null, 2));
+  }
+  if (synchronizeBoneCorrectionFlagsInMeta(rawMeta)) {
+    await window.vrmFiles.saveMeta(result.filePath, JSON.stringify(rawMeta, null, 2));
   }
   const needsOverlayBaseHeightSave = hasMissingOverlayBaseHeight(rawMeta);
   state.correction = normalizeCorrectionJson(rawMeta);
@@ -15414,6 +15539,7 @@ async function refreshAnimationCatalog() {
     const safeName = fileNameFromPath(fileName);
     state.animationCatalog[safeName] = {
       fileName: safeName,
+      code: normalizeCodeValue(animation.code),
       description: String(animation.description ?? ""),
       mustWatchFull: Boolean(animation.mustWatchFull),
       duration: normalizeFiniteNumber(animation.duration, 0),
@@ -15577,6 +15703,7 @@ function normalizeExpressionPresets(presets) {
   const source = Array.isArray(presets) && presets.length ? presets : createDefaultEmotionPresets();
   return source.map((preset, index) => ({
     id: String(preset.id ?? `emotion-${index}`),
+    code: normalizeCodeValue(preset.code),
     name: String(preset.name ?? "new emotion"),
     value: 0,
     locked: Boolean(preset.locked),
@@ -15587,6 +15714,11 @@ function normalizeExpressionPresets(presets) {
     emotionImage: preset.emotionImage ? normalizePresetEmotionImage(preset.emotionImage) : null,
     rangeSlots: normalizeExpressionRangeSlots(preset.rangeSlots),
   }));
+}
+
+function normalizeCodeValue(code) {
+  const normalized = String(code ?? "").trim();
+  return normalized || "noCode";
 }
 
 function normalizeMotionSlots(slots, presets = state.expressionPresets) {
@@ -16049,14 +16181,50 @@ function normalizeAnimationCorrectionEntry(animation) {
     loop: Boolean(animation?.loop),
     props: normalizeStringList(animation?.props),
     corrections: {},
+    hasBoneCorrections: false,
   };
   for (const [boneName, correction] of Object.entries(animation.corrections ?? {})) {
     if (!HUMAN_BONES.includes(boneName)) continue;
     next.corrections[boneName] = normalizeBoneCorrection(correction);
     pruneCorrectionObject(next.corrections, boneName);
   }
+  next.hasBoneCorrections = Object.keys(next.corrections).length > 0;
   if (!next.props.length) delete next.props;
   return next;
+}
+
+function synchronizeBoneCorrectionFlagsInMeta(meta) {
+  if (!meta?.animations || typeof meta.animations !== "object") return false;
+  let changed = false;
+  for (const animation of Object.values(meta.animations)) {
+    if (!animation || typeof animation !== "object") continue;
+    if (!animation.corrections || typeof animation.corrections !== "object" || Array.isArray(animation.corrections)) {
+      animation.corrections = {};
+      changed = true;
+    }
+    for (const [boneName, correction] of Object.entries(animation.corrections)) {
+      if (!isDefaultBoneCorrectionValue(correction)) continue;
+      delete animation.corrections[boneName];
+      changed = true;
+    }
+    const hasBoneCorrections = Object.keys(animation.corrections).length > 0;
+    if (animation.hasBoneCorrections !== hasBoneCorrections) {
+      animation.hasBoneCorrections = hasBoneCorrections;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function isDefaultBoneCorrectionValue(correction) {
+  const position = normalizeVector(correction?.positionOffset, [0, 0, 0]);
+  const rotation = normalizeVector(correction?.rotationOffset, [0, 0, 0]);
+  const scale = normalizeVector(correction?.scaleMultiplier, [1, 1, 1]);
+  return (
+    position.every((value) => Math.abs(value) < 0.000001) &&
+    rotation.every((value) => Math.abs(value) < 0.000001) &&
+    scale.every((value) => Math.abs(value - 1) < 0.000001)
+  );
 }
 
 function normalizeExpressionPoseControls(controls) {
@@ -16140,6 +16308,7 @@ function serializeCorrection() {
     for (const boneName of Object.keys(animation.corrections)) {
       pruneCorrectionObject(animation.corrections, boneName);
     }
+    animation.hasBoneCorrections = Object.keys(animation.corrections).length > 0;
   }
   next.blush = normalizeBlushSettings(state.correction.blush);
   next.emotionImage = null;
@@ -16155,6 +16324,7 @@ function serializeCorrection() {
     );
     return {
       id: preset.id,
+      code: normalizeCodeValue(preset.code),
       name: preset.name,
       locked: preset.locked,
       isDisableBlink: preset.isDisableBlink,
@@ -16423,6 +16593,7 @@ function clearExpressionPosePreview() {
 function applyMotionCorrectionPreview() {
   if (!currentVrm || !state.boneRestTransforms.size) return;
   lastCorrectionBases = new Map();
+  const correctionQuaternions = getCurrentMotionCorrectionQuaternions();
   for (const boneName of HUMAN_BONES) {
     const bone = getRawBoneNode(boneName);
     if (!bone) continue;
@@ -16432,18 +16603,85 @@ function applyMotionCorrectionPreview() {
       scale: bone.scale.clone(),
     });
 
-    const correction = getSelectedAnimationCorrections()[boneName];
-    if (!correction) continue;
-    const normalized = normalizeBoneCorrection(correction);
-    const euler = new THREE.Euler(
-      THREE.MathUtils.degToRad(normalized.rotationOffset[0]),
-      THREE.MathUtils.degToRad(normalized.rotationOffset[1]),
-      THREE.MathUtils.degToRad(normalized.rotationOffset[2]),
-      "XYZ",
-    );
-    bone.quaternion.multiply(new THREE.Quaternion().setFromEuler(euler));
+    const correctionQuaternion = correctionQuaternions.get(boneName);
+    if (!correctionQuaternion) continue;
+    bone.quaternion.multiply(correctionQuaternion);
   }
   currentVrm.scene.updateMatrixWorld(true);
+}
+
+function getMotionCorrectionQuaternions(animationName = state.selectedAnimationName) {
+  const result = new Map();
+  const corrections = state.correction.animations?.[animationName]?.corrections ?? {};
+  for (const [boneName, correction] of Object.entries(corrections)) {
+    if (!HUMAN_BONE_SET.has(boneName) || isDefaultBoneCorrectionValue(correction)) continue;
+    const rotation = normalizeBoneCorrection(correction).rotationOffset;
+    const euler = new THREE.Euler(
+      THREE.MathUtils.degToRad(rotation[0]),
+      THREE.MathUtils.degToRad(rotation[1]),
+      THREE.MathUtils.degToRad(rotation[2]),
+      "XYZ",
+    );
+    result.set(boneName, new THREE.Quaternion().setFromEuler(euler));
+  }
+  return result;
+}
+
+function getCurrentMotionCorrectionQuaternions() {
+  const transition = state.motionCorrectionTransition;
+  if (!transition) return getMotionCorrectionQuaternions();
+  if (transition.holding) return cloneMotionCorrectionQuaternions(transition.from);
+  const progress = Math.min(1, transition.elapsed / Math.max(transition.duration, 0.001));
+  const eased = progress * progress * (3 - 2 * progress);
+  return blendMotionCorrectionQuaternions(transition.from, transition.to, eased);
+}
+
+function cloneMotionCorrectionQuaternions(source) {
+  return new Map([...source].map(([boneName, quaternion]) => [boneName, quaternion.clone()]));
+}
+
+function blendMotionCorrectionQuaternions(from, to, progress) {
+  const result = new Map();
+  const identity = new THREE.Quaternion();
+  const boneNames = new Set([...from.keys(), ...to.keys()]);
+  for (const boneName of boneNames) {
+    const fromQuaternion = from.get(boneName) ?? identity;
+    const toQuaternion = to.get(boneName) ?? identity;
+    result.set(boneName, fromQuaternion.clone().slerp(toQuaternion, progress));
+  }
+  return result;
+}
+
+function holdMotionCorrectionTransition(from) {
+  const held = cloneMotionCorrectionQuaternions(from);
+  state.motionCorrectionTransition = {
+    elapsed: 0,
+    duration: 0,
+    holding: true,
+    from: held,
+    to: cloneMotionCorrectionQuaternions(held),
+  };
+}
+
+function startMotionCorrectionTransition(from, animationName, duration) {
+  if (!(duration > 0)) {
+    state.motionCorrectionTransition = null;
+    return;
+  }
+  state.motionCorrectionTransition = {
+    elapsed: 0,
+    duration,
+    holding: false,
+    from: cloneMotionCorrectionQuaternions(from),
+    to: getMotionCorrectionQuaternions(animationName),
+  };
+}
+
+function updateMotionCorrectionTransition(delta) {
+  const transition = state.motionCorrectionTransition;
+  if (!transition || transition.holding) return;
+  transition.elapsed += delta;
+  if (transition.elapsed >= transition.duration) state.motionCorrectionTransition = null;
 }
 
 function clearMotionCorrectionPreview() {
@@ -17345,6 +17583,7 @@ function tick() {
   updateEffectPreviewRuntime(delta);
   updateSpacePreviewRuntime();
   updateEmotionImageAnimation(delta);
+  updateMotionCorrectionTransition(delta);
   applyMotionCorrectionPreview();
   applyExtraBoneFollowPreview();
   applyEditDraftMorphPreview();
