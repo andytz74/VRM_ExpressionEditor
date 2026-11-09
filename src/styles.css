@@ -890,6 +890,13 @@ input[type="range"] {
   gap: 10px;
 }
 
+.parameter-tray-header-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
 .parameter-tray-header h2 {
   margin: 0;
   color: #eef0f3;
@@ -897,7 +904,8 @@ input[type="range"] {
   font-weight: 800;
 }
 
-.filter-button {
+.filter-button,
+.parameter-clipboard-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -908,6 +916,12 @@ input[type="range"] {
   color: #dce2e8;
   background: #252b33;
   cursor: pointer;
+}
+
+.parameter-clipboard-button.copied {
+  color: #f4fbf8;
+  border-color: #2a906d;
+  background: #1f7a5a;
 }
 
 .filter-button.active {

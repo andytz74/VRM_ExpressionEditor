@@ -13,6 +13,8 @@ import {
   ArrowDownAZ,
   ArrowLeft,
   Camera,
+  ClipboardCopy,
+  ClipboardPaste,
   Download,
   FolderOpen,
   GitCompare,
@@ -279,6 +281,7 @@ const state = {
   cameraTransition: null,
   expressionParameterDraft: {},
   expressionPoseDraft: createDefaultExpressionPoseControls(),
+  expressionParameterClipboard: null,
   expressionParameterDirty: false,
   expressionTransition: null,
   expressionDecay: null,
@@ -2653,7 +2656,11 @@ function renderEmotionParameterTrayWithSave() {
             <h2>Parameters</h2>
             <p>${escapeHtml(getSelectedExpressionEditLabel())}</p>
           </div>
-          <button class="filter-button ${state.parameterFilterOpen ? "active" : ""}" id="toggleParameterFilter" title="Filter">${iconSvg(SlidersHorizontal, 16)}</button>
+          <div class="parameter-tray-header-actions">
+            <button class="parameter-clipboard-button" id="copySelectedParameters" ${selected ? "" : "disabled"} title="Copy parameters">${iconSvg(ClipboardCopy, 16)}</button>
+            <button class="parameter-clipboard-button" id="pasteSelectedParameters" ${selected && !selected.locked && state.expressionParameterClipboard ? "" : "disabled"} title="Paste parameters">${iconSvg(ClipboardPaste, 16)}</button>
+            <button class="filter-button ${state.parameterFilterOpen ? "active" : ""}" id="toggleParameterFilter" title="Filter">${iconSvg(SlidersHorizontal, 16)}</button>
+          </div>
         </div>
         ${state.parameterFilterOpen ? renderParameterFilterPopup() : ""}
       </div>
@@ -5351,6 +5358,8 @@ function bindUi() {
   }
   document.querySelector("#addExtraBoneFollow")?.addEventListener("click", addExtraBoneFollowSetting);
   document.querySelector("#saveSelectedParameters")?.addEventListener("click", saveSelectedExpressionParameters);
+  document.querySelector("#copySelectedParameters")?.addEventListener("click", copySelectedExpressionParameters);
+  document.querySelector("#pasteSelectedParameters")?.addEventListener("click", pasteSelectedExpressionParameters);
   document.querySelector("#toggleParameterFilter")?.addEventListener("click", () => {
     state.parameterFilterOpen = !state.parameterFilterOpen;
     renderPreservingScrollableUi();
@@ -7116,6 +7125,31 @@ function saveSelectedExpressionParameters() {
   renderPreservingExpressionEditorScrolls();
 }
 
+function copySelectedExpressionParameters() {
+  if (!getSelectedEmotionPreset()) return;
+  state.expressionParameterClipboard = {
+    parameters: normalizeExpressionParameterValues(state.expressionParameterDraft),
+    poseControls: normalizeExpressionPoseControls(state.expressionPoseDraft),
+  };
+  const copyButton = document.querySelector("#copySelectedParameters");
+  const pasteButton = document.querySelector("#pasteSelectedParameters");
+  copyButton?.classList.add("copied");
+  if (pasteButton && !getSelectedEmotionPreset()?.locked) pasteButton.disabled = false;
+  window.setTimeout(() => copyButton?.classList.remove("copied"), 500);
+}
+
+function pasteSelectedExpressionParameters() {
+  const selected = getSelectedEmotionPreset();
+  const clipboard = state.expressionParameterClipboard;
+  if (!selected || selected.locked || !clipboard) return;
+  state.expressionDecay = null;
+  state.expressionParameterDraft = normalizeExpressionParameterValues(clipboard.parameters);
+  state.expressionPoseDraft = normalizeExpressionPoseControls(clipboard.poseControls);
+  state.expressionParameterDirty = true;
+  applySelectedEmotionPreset();
+  renderPreservingExpressionEditorScrolls();
+}
+
 function confirmPendingExpressionParameterChanges() {
   if (!state.expressionParameterDirty) return true;
   if (window.confirm("편집한 파라미터를 저장할까요?")) {
@@ -7240,13 +7274,13 @@ function renderPreservingExpressionScroll(options = {}) {
 
 function renderPreservingExpressionEditorScrolls() {
   const expressionScroller = document.querySelector(".expression-editor-panel");
-  const parameterScroller = document.querySelector(".expression-parameter-tray");
+  const parameterScroller = document.querySelector(".parameter-tray-empty");
   const expressionScrollTop = expressionScroller?.scrollTop ?? 0;
   const parameterScrollTop = parameterScroller?.scrollTop ?? 0;
   const editableFocus = captureEditableFocus();
   render();
   const nextExpressionScroller = document.querySelector(".expression-editor-panel");
-  const nextParameterScroller = document.querySelector(".expression-parameter-tray");
+  const nextParameterScroller = document.querySelector(".parameter-tray-empty");
   if (nextExpressionScroller) nextExpressionScroller.scrollTop = expressionScrollTop;
   if (nextParameterScroller) nextParameterScroller.scrollTop = parameterScrollTop;
   restoreEditableFocus(editableFocus);
@@ -7281,6 +7315,7 @@ function renderPreservingScrollableUi() {
     ".correction-panel",
     ".expression-editor-panel",
     ".expression-parameter-tray",
+    ".parameter-tray-empty",
     ".emotion-linker-panel",
     ".emotion-map-preset-list",
     ".emotion-map-slot-list",

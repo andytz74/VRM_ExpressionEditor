@@ -419,7 +419,7 @@
       "mustWatchFull": false,
       "duration": 2.5,
       "isFirst": false,
-      "loop": true,
+      "loop": false,
       "lookAtCamera": false
     }
   }
