@@ -40,14 +40,22 @@ function electronExecutable() {
   return path.join(root, "node_modules", "electron", "dist", "electron");
 }
 
-function electronVersionNeedsInstall() {
+// package-lock.json에 적힌 직접 의존성 버전과 실제 설치된 버전이 하나라도 다르면 다시 설치한다.
+// (Electron 버전 변경, vendor/ 업로더 패키지 교체 모두 여기서 걸린다)
+function dependenciesNeedInstall() {
   try {
-    const expected = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"))?.dependencies?.electron;
-    const installed = JSON.parse(
-      fs.readFileSync(path.join(root, "node_modules", "electron", "package.json"), "utf8"),
-    )?.version;
-    const normalizedExpected = String(expected ?? "").replace(/^[~^]/, "");
-    return !normalizedExpected || normalizedExpected !== String(installed ?? "");
+    const lock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));
+    const direct = Object.keys(lock?.packages?.[""]?.dependencies ?? {});
+    if (!direct.length) return true;
+    return direct.some((name) => {
+      const expected = lock.packages[`node_modules/${name}`]?.version;
+      try {
+        const installed = JSON.parse(fs.readFileSync(path.join(root, "node_modules", name, "package.json"), "utf8"))?.version;
+        return !expected || expected !== installed;
+      } catch {
+        return true;
+      }
+    });
   } catch {
     return true;
   }
@@ -56,7 +64,7 @@ function electronVersionNeedsInstall() {
 fs.mkdirSync(cacheDir, { recursive: true });
 fs.mkdirSync(npmCacheDir, { recursive: true });
 
-if (electronVersionNeedsInstall()) {
+if (dependenciesNeedInstall()) {
   console.log("Installing app dependencies...");
   run(npmCmd, ["install", "--cache", npmCacheDir]);
 }
