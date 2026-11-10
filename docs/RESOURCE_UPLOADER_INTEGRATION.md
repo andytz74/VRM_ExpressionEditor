@@ -14,7 +14,7 @@ VRM Expression Editor에서 디자이너가 작업을 마친 뒤 개발자를 �
 - 업로드 진행률과 CDN 검증 결과를 표시합니다.
 - 렌더러에는 AWS 자격 증명과 S3 클라이언트를 노출하지 않습니다.
 
-UI와 IPC 흐름은 구현 및 mock 검증이 완료되었습니다. 실제 dev S3 연동 검증은 업로더 패키지와 프로그램용 AWS 프로필을 받은 뒤 진행해야 합니다.
+UI와 IPC 흐름은 구현 및 mock 검증이 완료되었습니다. 업로더 패키지는 `vendor/`에 포함되어 있으며, 실제 dev S3 연동 검증은 PC에 프로그램용 AWS 프로필이 설정된 뒤 진행합니다.
 
 ## 업로더 모듈 계약
 
@@ -24,7 +24,12 @@ Electron main 프로세스에서 기본적으로 다음 패키지를 지연 로�
 @piecomp/rorr-resource-uploader
 ```
 
-로컬 패키지로 먼저 연동할 때는 `RORR_RESOURCE_UPLOADER_PATH` 환경 변수에 모듈 경로를 지정할 수 있습니다.
+패키지는 `vendor/piecomp-rorr-resource-uploader-<버전>.tgz` 파일로 저장소에 포함되고, `package.json`에서 `file:vendor/...` 의존성으로 설치됩니다. 별도 npm 레지스트리 로그인은 필요 없습니다.
+
+- `npm start`(또는 실행 배치 파일)는 `package-lock.json`의 버전과 설치된 버전이 다르면 `npm install`을 다시 실행하므로, 새 버전 tgz로 교체된 커밋을 받으면 다음 실행 때 자동으로 설치됩니다.
+- 새 버전은 익스텐션 담당자가 `rorr-vrm-resources` 저장소에서 `npm pack`으로 만들어 tgz 교체와 `package.json`/`package-lock.json` 갱신을 함께 PR로 올립니다.
+
+업로더를 수정하면서 로컬 소스로 바로 연동할 때는 `RORR_RESOURCE_UPLOADER_PATH` 환경 변수에 모듈 경로를 지정할 수 있습니다.
 
 업로더 모듈은 다음 함수를 제공해야 합니다.
 
@@ -41,7 +46,11 @@ await uploader.run(plan, options)
 - `upload:run`: main 프로세스에 보관된 plan 실행
 - `upload:progress`: 렌더러에 단계와 진행률 전달
 
-렌더러가 파일 목록이나 S3 대상 키를 임의로 변경하지 못하도록 실행할 plan은 main 프로세스에 보관합니다.
+렌더러가 파일 목록이나 S3 대상 키를 임의로 변경하지 못하도록 실행할 plan은 main 프로세스에 보관하고, 렌더러에는 내부 업로드 목록(`_uploads`, `_references`)을 뺀 화면 표시용 값만 보냅니다.
+
+- 검사·업로드가 진행 중이면 다른 검사·업로드 요청은 `UPLOAD_BUSY`로 거절합니다.
+- 업로드 중에는 창 닫기와 앱 종료를 막습니다.
+- 한 번 실행한 plan은 성공·실패와 관계없이 버립니다. 다시 올리려면 다시 검사해야 하며, 이미 올라간 파일은 `같음`으로 건너뜁니다.
 
 ## 설정
 
@@ -56,12 +65,11 @@ UploaderName=<OS user name>
 
 AWS access key, secret key, 콘솔 비밀번호는 저장하지 않습니다. 에디터 실행 계정에는 AWS SDK/CLI가 사용할 수 있는 프로그램용 프로필이 별도로 구성되어야 합니다.
 
-AWS 프로필 이름은 자료 간 표기가 다릅니다.
+디자이너 PC의 프로필 이름은 `rorr-resources-dev`로 확정합니다. (`resources-dev`는 익스텐션 담당자 PC의 프로필 이름입니다.)
 
-- 상세 구현 문서: `rorr-resources-dev`
-- 기존 AWS 인벤토리: `resources-dev`
-
-개발 담당자가 실제 발급 프로필 이름을 하나로 확정한 뒤 에디터 기본값 또는 운영 배포 설정과 맞춰야 합니다.
+- 익스텐션 담당자가 디자이너 PC에서 직접 `%USERPROFILE%\.aws\credentials`(macOS: `~/.aws/credentials`)에 `[rorr-resources-dev]` 프로필을 입력합니다. AWS CLI 설치는 필요 없습니다.
+- 키는 dev 버킷 업로드 전용(삭제 권한 없음)이며, 메신저·문서·노션으로 전달하지 않습니다.
+- 프로필이 없으면 검사 단계에서 `NO_CREDENTIALS`, 키가 틀리거나 만료되면 `ACCESS_DENIED`로 안내합니다.
 
 운영 업로드는 에디터에서 수행하지 않고 CI 절차를 사용합니다. 운영 콘솔 계정과 비밀번호를 앱, 저장소, 설정 파일에 넣으면 안 됩니다.
 

@@ -8,6 +8,8 @@ let editorConfigCache = null;
 let configSavedForQuit = false;
 let animationCatalogQueue = Promise.resolve();
 let currentResourceUploadPlan = null;
+// 검사나 업로드가 진행 중이면 "plan"/"run", 아니면 null. 중복 실행과 창 닫기를 막는 데 쓴다
+let resourceUploadBusy = null;
 
 function resourceUploader() {
   const moduleName = process.env.RORR_RESOURCE_UPLOADER_PATH || "@piecomp/rorr-resource-uploader";
@@ -23,6 +25,40 @@ function resourceUploader() {
     missing.cause = error;
     throw missing;
   }
+}
+
+// 패키징하지 않고 실행하면 app.getVersion()은 Electron 버전을 돌려주므로 에디터 package.json 버전을 직접 읽는다.
+// git 저장소에서 실행 중이면 커밋도 붙여서 업로드 기록만 보고 어떤 에디터 코드로 올렸는지 알 수 있게 한다
+let editorVersionCache = null;
+function editorVersion() {
+  if (editorVersionCache) return editorVersionCache;
+  const root = path.join(__dirname, "..");
+  let version = "unknown";
+  try {
+    version = require(path.join(root, "package.json")).version || version;
+  } catch {}
+  let commit = "";
+  try {
+    commit = require("node:child_process")
+      .execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root, timeout: 3000, stdio: ["ignore", "pipe", "ignore"], windowsHide: true })
+      .toString()
+      .trim();
+  } catch {}
+  editorVersionCache = commit ? `${version}+${commit}` : version;
+  return editorVersionCache;
+}
+
+function uploadBusyError() {
+  const error = new Error("이미 검사나 업로드가 진행 중입니다. 끝날 때까지 기다려 주세요.");
+  error.code = "UPLOAD_BUSY";
+  return error;
+}
+
+/** 렌더러에는 화면 표시에 필요한 값만 보낸다. 실제 업로드 목록(_uploads)은 main 프로세스에만 둔다 */
+function publicUploadPlan(plan) {
+  if (!plan || typeof plan !== "object") return plan;
+  const { _uploads, _references, ...rest } = plan;
+  return rest;
 }
 
 function serializeUploadError(error, fallbackStage = "check") {
@@ -57,6 +93,15 @@ function createWindow() {
   });
 
   mainWindow.setMenuBarVisibility(false);
+  mainWindow.on("close", (event) => {
+    if (resourceUploadBusy !== "run") return;
+    event.preventDefault();
+    dialog.showMessageBox(mainWindow, {
+      type: "warning",
+      title: "리소스 업로드 중",
+      message: "리소스 업로드가 진행 중입니다. 완료된 뒤에 창을 닫아 주세요.",
+    });
+  });
   mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"));
 }
 
@@ -403,6 +448,10 @@ app.on("activate", () => {
 });
 
 app.on("before-quit", async (event) => {
+  if (resourceUploadBusy === "run") {
+    event.preventDefault();
+    return;
+  }
   if (!editorConfigCache || configSavedForQuit) return;
   event.preventDefault();
   const config = editorConfigCache;
@@ -628,6 +677,8 @@ ipcMain.handle("config:updateMemory", async (_event, config) => {
 ipcMain.handle("config:save", async (_event, config) => writeEditorConfig(config));
 
 ipcMain.handle("upload:plan", async (_event, request) => {
+  if (resourceUploadBusy) return { ok: false, error: serializeUploadError(uploadBusyError(), "check") };
+  resourceUploadBusy = "plan";
   try {
     const uploader = resourceUploader();
     if (typeof uploader.plan !== "function") {
@@ -653,14 +704,18 @@ ipcMain.handle("upload:plan", async (_event, request) => {
         emotionLinkerDir: emotionLinkerDir(),
       },
     });
-    return { ok: true, plan: currentResourceUploadPlan };
+    return { ok: true, plan: publicUploadPlan(currentResourceUploadPlan) };
   } catch (error) {
     currentResourceUploadPlan = null;
     return { ok: false, error: serializeUploadError(error, "check") };
+  } finally {
+    resourceUploadBusy = null;
   }
 });
 
 ipcMain.handle("upload:run", async (event, request) => {
+  if (resourceUploadBusy) return serializeUploadError(uploadBusyError(), "upload");
+  resourceUploadBusy = "run";
   try {
     if (!currentResourceUploadPlan) {
       const error = new Error("업로드 계획이 없습니다. 파일 검사를 다시 실행해 주세요.");
@@ -676,15 +731,18 @@ ipcMain.handle("upload:run", async (event, request) => {
     const result = await uploader.run(currentResourceUploadPlan, {
       note: String(request?.note || "").trim(),
       by: String(request?.by || os.userInfo().username || "designer").trim(),
-      editorVersion: app.getVersion(),
+      editorVersion: editorVersion(),
       onProgress: (progress) => {
         if (!event.sender.isDestroyed()) event.sender.send("upload:progress", progress ?? {});
       },
     });
-    if (result?.ok) currentResourceUploadPlan = null;
     return result?.ok === false ? result : { ok: true, ...result };
   } catch (error) {
     return serializeUploadError(error, "upload");
+  } finally {
+    // 성공이든 실패든 한 번 실행한 계획은 버린다. 다시 올리려면 새로 검사해야 서버 상태가 반영된다
+    currentResourceUploadPlan = null;
+    resourceUploadBusy = null;
   }
 });
 

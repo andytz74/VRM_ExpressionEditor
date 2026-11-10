@@ -884,19 +884,29 @@ function uploadStageLabel(stage) {
   return labels[stage] || "처리";
 }
 
+const UPLOAD_FRIENDLY_MESSAGES = {
+  NO_CREDENTIALS: "이 PC에 업로드용 AWS 프로필이 설정되지 않았습니다. 익스텐션 담당자에게 설정을 요청하세요.",
+  ACCESS_DENIED: "업로드 권한이 없거나 키가 만료되었습니다. 익스텐션 담당자에게 문의하세요.",
+  UPLOADER_NOT_INSTALLED: "업로더 패키지가 설치되지 않았습니다. 에디터를 다시 실행하거나 익스텐션 담당자에게 문의하세요.",
+};
+
+const UPLOAD_ISSUE_TITLES = {
+  NO_CREDENTIALS: "권한 설정 필요",
+  ACCESS_DENIED: "권한 없음",
+  UPLOADER_NOT_INSTALLED: "업로더 미설치",
+};
+
 function uploadFailureMessage(failure) {
-  if (failure?.code === "NO_CREDENTIALS" || failure?.code === "ACCESS_DENIED") {
-    return "업로드 권한이 설정되지 않았습니다. 익스텐션 담당자에게 문의하세요.";
-  }
-  return String(failure?.message || "리소스 업로드 처리 중 오류가 발생했습니다.");
+  return UPLOAD_FRIENDLY_MESSAGES[failure?.code] || String(failure?.message || "리소스 업로드 처리 중 오류가 발생했습니다.");
 }
 
 function renderUploadIssue(issue, tone) {
   const needsReview = issue?.code === "unknownField" || issue?.code === "removedField";
+  const friendly = UPLOAD_FRIENDLY_MESSAGES[issue?.code];
   return `
     <li class="resource-upload-issue ${tone}">
-      <strong>${needsReview ? "익스텐션 담당 확인 필요" : escapeHtml(issue?.code || tone)}</strong>
-      <span>${escapeHtml(issue?.message || "확인할 항목이 있습니다.")}</span>
+      <strong title="${escapeHtml(issue?.code || "")}">${needsReview ? "익스텐션 담당 확인 필요" : escapeHtml(UPLOAD_ISSUE_TITLES[issue?.code] || issue?.code || tone)}</strong>
+      <span${friendly ? ` title="${escapeHtml(issue?.message || "")}"` : ""}>${escapeHtml(friendly || issue?.message || "확인할 항목이 있습니다.")}</span>
       ${issue?.file ? `<small>${escapeHtml(issue.file)}</small>` : ""}
     </li>
   `;
@@ -995,7 +1005,7 @@ function renderResourceUploadDialog() {
         <footer class="resource-upload-actions">
           ${plan && upload.phase !== "uploading" && !upload.result?.ok ? `<button class="secondary-button" id="refreshResourceUpload" ${busy ? "disabled" : ""}>다시 검사</button>` : ""}
           <button class="secondary-button" id="cancelResourceUpload" ${busy ? "disabled" : ""}>${upload.result?.ok ? "닫기" : "취소"}</button>
-          ${plan && !upload.result?.ok ? `<button class="primary-button" id="runResourceUpload" ${plan.canUpload && !busy ? "" : "disabled"}>업로드</button>` : ""}
+          ${plan && !upload.result ? `<button class="primary-button" id="runResourceUpload" ${plan.canUpload && !busy ? "" : "disabled"}>업로드</button>` : ""}
         </footer>
       </section>
     </div>
