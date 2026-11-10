@@ -17,6 +17,13 @@ contextBridge.exposeInMainWorld("vrmFiles", {
   loadConfig: () => ipcRenderer.invoke("config:load"),
   updateConfigMemory: (config) => ipcRenderer.invoke("config:updateMemory", config),
   saveConfig: (config) => ipcRenderer.invoke("config:save", config),
+  planResourceUpload: (request) => ipcRenderer.invoke("upload:plan", request),
+  runResourceUpload: (request) => ipcRenderer.invoke("upload:run", request),
+  onResourceUploadProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on("upload:progress", listener);
+    return () => ipcRenderer.removeListener("upload:progress", listener);
+  },
   writeClipboardImage: (dataUrl) => ipcRenderer.invoke("clipboard:image", dataUrl),
   loadOrCreateMeta: (vrmPath, data) => ipcRenderer.invoke("meta:loadOrCreate", vrmPath, data),
   openMeta: () => ipcRenderer.invoke("meta:open"),

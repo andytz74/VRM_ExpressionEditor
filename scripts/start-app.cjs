@@ -4,6 +4,7 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
 const cacheDir = path.join(root, "work", "electron-cache");
 const npmCacheDir = path.join(root, "work", "npm-cache");
 const env = {
@@ -39,12 +40,35 @@ function electronExecutable() {
   return path.join(root, "node_modules", "electron", "dist", "electron");
 }
 
+function electronVersionNeedsInstall() {
+  try {
+    const expected = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"))?.dependencies?.electron;
+    const installed = JSON.parse(
+      fs.readFileSync(path.join(root, "node_modules", "electron", "package.json"), "utf8"),
+    )?.version;
+    const normalizedExpected = String(expected ?? "").replace(/^[~^]/, "");
+    return !normalizedExpected || normalizedExpected !== String(installed ?? "");
+  } catch {
+    return true;
+  }
+}
+
 fs.mkdirSync(cacheDir, { recursive: true });
 fs.mkdirSync(npmCacheDir, { recursive: true });
 
-if (!fs.existsSync(electronExecutable())) {
+if (electronVersionNeedsInstall()) {
   console.log("Installing app dependencies...");
   run(npmCmd, ["install", "--cache", npmCacheDir]);
+}
+
+if (!fs.existsSync(electronExecutable())) {
+  console.log("Installing Electron runtime...");
+  run(npxCmd, ["--no-install", "install-electron", "--no"]);
+}
+
+if (!fs.existsSync(electronExecutable())) {
+  console.error(`Electron runtime was not installed: ${electronExecutable()}`);
+  process.exit(1);
 }
 
 run(npmCmd, ["run", "build"]);
@@ -56,4 +80,8 @@ const child = spawn(electronExecutable(), [path.join(root, "src", "main.cjs")], 
   detached: true,
 });
 
-child.unref();
+child.once("error", (error) => {
+  console.error(`VRM Expression Editor could not start: ${error.message}`);
+  process.exitCode = 1;
+});
+child.once("spawn", () => child.unref());

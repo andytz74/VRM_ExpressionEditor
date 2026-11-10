@@ -1,11 +1,39 @@
 const { app, BrowserWindow, dialog, ipcMain, clipboard, nativeImage } = require("electron");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const os = require("node:os");
 
 let mainWindow;
 let editorConfigCache = null;
 let configSavedForQuit = false;
 let animationCatalogQueue = Promise.resolve();
+let currentResourceUploadPlan = null;
+
+function resourceUploader() {
+  const moduleName = process.env.RORR_RESOURCE_UPLOADER_PATH || "@piecomp/rorr-resource-uploader";
+  try {
+    const resolved = require.resolve(moduleName);
+    return require(resolved);
+  } catch (error) {
+    if (error?.code !== "MODULE_NOT_FOUND") throw error;
+    const missing = new Error(
+      "리소스 업로더 모듈이 설치되지 않았습니다. 익스텐션 담당자에게 업로더 패키지 설치를 요청하세요.",
+    );
+    missing.code = "UPLOADER_NOT_INSTALLED";
+    missing.cause = error;
+    throw missing;
+  }
+}
+
+function serializeUploadError(error, fallbackStage = "check") {
+  return {
+    ok: false,
+    stage: String(error?.stage || fallbackStage),
+    code: String(error?.code || "UPLOAD_ERROR"),
+    message: String(error?.message || "리소스 업로드 처리 중 오류가 발생했습니다."),
+    verify: error?.verify ?? null,
+  };
+}
 
 function queueAnimationCatalogWrite(operation) {
   const next = animationCatalogQueue.then(operation, operation);
@@ -123,6 +151,11 @@ function createDefaultConfig() {
     viewer: {
       lightIntensity: 0.75,
     },
+    resourceUpload: {
+      characterId: "seoha-rorr",
+      awsProfile: "rorr-resources-dev",
+      uploaderName: os.userInfo().username || "designer",
+    },
     transitionViewer: {
       idle: [],
       transition: [],
@@ -183,6 +216,15 @@ function parseIniConfig(text) {
       const intensity = Number(value);
       config.viewer.lightIntensity = Number.isFinite(intensity) ? intensity : config.viewer.lightIntensity;
     }
+    if (section === "ResourceUpload" && key === "CharacterId") {
+      config.resourceUpload.characterId = value || config.resourceUpload.characterId;
+    }
+    if (section === "ResourceUpload" && key === "AwsProfile") {
+      config.resourceUpload.awsProfile = value || config.resourceUpload.awsProfile;
+    }
+    if (section === "ResourceUpload" && key === "UploaderName") {
+      config.resourceUpload.uploaderName = value || config.resourceUpload.uploaderName;
+    }
     if (section === "TransitionViewer" && key === "StateJson") {
       try {
         const viewer = JSON.parse(value);
@@ -216,6 +258,11 @@ function serializeIniConfig(config) {
     "",
     "[Viewer]",
     `LightIntensity=${Number.isFinite(Number(config?.viewer?.lightIntensity)) ? Number(config.viewer.lightIntensity) : 0.75}`,
+    "",
+    "[ResourceUpload]",
+    `CharacterId=${String(config?.resourceUpload?.characterId || "seoha-rorr")}`,
+    `AwsProfile=${String(config?.resourceUpload?.awsProfile || "rorr-resources-dev")}`,
+    `UploaderName=${String(config?.resourceUpload?.uploaderName || os.userInfo().username || "designer")}`,
     "",
     "[TransitionViewer]",
     `StateJson=${JSON.stringify(config?.transitionViewer && typeof config.transitionViewer === "object" ? config.transitionViewer : createDefaultConfig().transitionViewer)}`,
@@ -579,6 +626,67 @@ ipcMain.handle("config:updateMemory", async (_event, config) => {
 });
 
 ipcMain.handle("config:save", async (_event, config) => writeEditorConfig(config));
+
+ipcMain.handle("upload:plan", async (_event, request) => {
+  try {
+    const uploader = resourceUploader();
+    if (typeof uploader.plan !== "function") {
+      const error = new Error("업로더 모듈에서 plan()을 찾을 수 없습니다.");
+      error.code = "UPLOADER_INTERFACE_ERROR";
+      throw error;
+    }
+    const vrmPath = String(request?.vrmPath || "");
+    if (!vrmPath) {
+      const error = new Error("업로드할 VRM 파일을 먼저 열어 주세요.");
+      error.code = "VRM_NOT_OPEN";
+      throw error;
+    }
+    currentResourceUploadPlan = await uploader.plan({
+      characterId: String(request?.characterId || "seoha-rorr"),
+      awsProfile: String(request?.awsProfile || "rorr-resources-dev"),
+      sources: {
+        vrmPath,
+        animationsDir: animationsDir(),
+        imageDir: imageDir(),
+        propsDir: propsDir(),
+        effectsMetaPath: effectsMetaPath(),
+        emotionLinkerDir: emotionLinkerDir(),
+      },
+    });
+    return { ok: true, plan: currentResourceUploadPlan };
+  } catch (error) {
+    currentResourceUploadPlan = null;
+    return { ok: false, error: serializeUploadError(error, "check") };
+  }
+});
+
+ipcMain.handle("upload:run", async (event, request) => {
+  try {
+    if (!currentResourceUploadPlan) {
+      const error = new Error("업로드 계획이 없습니다. 파일 검사를 다시 실행해 주세요.");
+      error.code = "UPLOAD_PLAN_MISSING";
+      throw error;
+    }
+    const uploader = resourceUploader();
+    if (typeof uploader.run !== "function") {
+      const error = new Error("업로더 모듈에서 run()을 찾을 수 없습니다.");
+      error.code = "UPLOADER_INTERFACE_ERROR";
+      throw error;
+    }
+    const result = await uploader.run(currentResourceUploadPlan, {
+      note: String(request?.note || "").trim(),
+      by: String(request?.by || os.userInfo().username || "designer").trim(),
+      editorVersion: app.getVersion(),
+      onProgress: (progress) => {
+        if (!event.sender.isDestroyed()) event.sender.send("upload:progress", progress ?? {});
+      },
+    });
+    if (result?.ok) currentResourceUploadPlan = null;
+    return result?.ok === false ? result : { ok: true, ...result };
+  } catch (error) {
+    return serializeUploadError(error, "upload");
+  }
+});
 
 ipcMain.handle("clipboard:image", async (_event, dataUrl) => {
   const image = nativeImage.createFromDataURL(String(dataUrl ?? ""));

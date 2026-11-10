@@ -25,6 +25,7 @@ import {
   RotateCw,
   Save,
   SlidersHorizontal,
+  Upload,
   Unlock,
   X,
 } from "lucide";
@@ -276,6 +277,20 @@ const state = {
     viewer: {
       lightIntensity: 0.75,
     },
+    resourceUpload: {
+      characterId: "seoha-rorr",
+      awsProfile: "rorr-resources-dev",
+      uploaderName: "designer",
+    },
+  },
+  resourceUpload: {
+    open: false,
+    phase: "idle",
+    plan: null,
+    error: null,
+    result: null,
+    note: "",
+    progress: { done: 0, total: 0, key: "", stage: "" },
   },
   cameraSettingsOpen: null,
   cameraTransition: null,
@@ -500,6 +515,11 @@ function normalizeEditorConfig(config) {
     viewer: {
       lightIntensity: clampLightIntensity(config?.viewer?.lightIntensity),
     },
+    resourceUpload: {
+      characterId: String(config?.resourceUpload?.characterId || "seoha-rorr"),
+      awsProfile: String(config?.resourceUpload?.awsProfile || "rorr-resources-dev"),
+      uploaderName: String(config?.resourceUpload?.uploaderName || "designer"),
+    },
     transitionViewer: normalizeTransitionViewerConfig(config?.transitionViewer),
   };
 }
@@ -678,6 +698,7 @@ function buildCurrentEditorConfig() {
     },
     cameraPresets: state.config?.cameraPresets ?? {},
     viewer: state.config?.viewer ?? {},
+    resourceUpload: state.config?.resourceUpload ?? {},
     transitionViewer: serializeTransitionViewerState(),
   });
 }
@@ -706,6 +727,7 @@ window.addEventListener("beforeunload", () => {
 
 async function initialize() {
   await loadEditorConfig();
+  window.vrmFiles.onResourceUploadProgress?.(handleResourceUploadProgress);
   applyViewerLightIntensity(state.config.viewer.lightIntensity);
   await refreshAnimationCatalog();
   await loadEffectsMeta();
@@ -827,6 +849,237 @@ function getCharacterMetaFileName() {
   return state.correctionPath ? fileNameFromPath(state.correctionPath) : "character.vrm.meta";
 }
 
+function hasUnsavedUploadChanges() {
+  return Boolean(
+    state.hasWorkspaceChanges ||
+      state.correctionDirty ||
+      state.expressionDirty ||
+      state.expressionParameterDirty ||
+      state.effectsDirty,
+  );
+}
+
+function formatUploadBytes(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function uploadStatusLabel(status) {
+  if (status === "added") return "추가";
+  if (status === "changed") return "변경";
+  if (status === "remoteOnly") return "서버에만 있음";
+  return String(status || "확인");
+}
+
+function uploadStageLabel(stage) {
+  const labels = {
+    check: "검사",
+    upload: "업로드",
+    invalidate: "캐시 무효화",
+    verify: "CDN 확인",
+    record: "기록",
+  };
+  return labels[stage] || "처리";
+}
+
+function uploadFailureMessage(failure) {
+  if (failure?.code === "NO_CREDENTIALS" || failure?.code === "ACCESS_DENIED") {
+    return "업로드 권한이 설정되지 않았습니다. 익스텐션 담당자에게 문의하세요.";
+  }
+  return String(failure?.message || "리소스 업로드 처리 중 오류가 발생했습니다.");
+}
+
+function renderUploadIssue(issue, tone) {
+  const needsReview = issue?.code === "unknownField" || issue?.code === "removedField";
+  return `
+    <li class="resource-upload-issue ${tone}">
+      <strong>${needsReview ? "익스텐션 담당 확인 필요" : escapeHtml(issue?.code || tone)}</strong>
+      <span>${escapeHtml(issue?.message || "확인할 항목이 있습니다.")}</span>
+      ${issue?.file ? `<small>${escapeHtml(issue.file)}</small>` : ""}
+    </li>
+  `;
+}
+
+function renderResourceUploadDialog() {
+  if (!state.resourceUpload.open) return "";
+  const upload = state.resourceUpload;
+  const plan = upload.plan;
+  const files = Array.isArray(plan?.files) ? plan.files : [];
+  const errors = Array.isArray(plan?.errors) ? plan.errors : [];
+  const warnings = Array.isArray(plan?.warnings) ? plan.warnings : [];
+  const busy = upload.phase === "planning" || upload.phase === "uploading";
+  const progress = upload.progress ?? {};
+  const total = Math.max(0, Number(progress.total) || 0);
+  const done = Math.max(0, Number(progress.done) || 0);
+  const percent = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const failure = upload.result?.ok === false ? upload.result : null;
+  const verifyProblems = Array.isArray(failure?.verify?.problems) ? failure.verify.problems : [];
+  return `
+    <div class="resource-upload-backdrop" role="presentation">
+      <section class="resource-upload-dialog" role="dialog" aria-modal="true" aria-labelledby="resourceUploadTitle">
+        <header class="resource-upload-dialog-head">
+          <div>
+            <h2 id="resourceUploadTitle">리소스 업로드</h2>
+            <p>dev 익스텐션에서 확인할 리소스를 검사하고 업로드합니다.</p>
+          </div>
+          <button class="icon-button" id="closeResourceUpload" title="닫기" ${busy ? "disabled" : ""}>${iconSvg(X, 18)}</button>
+        </header>
+
+        <div class="resource-upload-settings">
+          <label><span>캐릭터 ID</span><input type="text" data-upload-setting="characterId" value="${escapeHtml(state.config.resourceUpload.characterId)}" ${busy ? "disabled" : ""} /></label>
+          <label><span>AWS 프로필</span><input type="text" data-upload-setting="awsProfile" value="${escapeHtml(state.config.resourceUpload.awsProfile)}" ${busy ? "disabled" : ""} /></label>
+          <label><span>업로더 이름</span><input type="text" data-upload-setting="uploaderName" value="${escapeHtml(state.config.resourceUpload.uploaderName)}" ${busy ? "disabled" : ""} /></label>
+        </div>
+
+        ${
+          upload.phase === "idle"
+            ? `<div class="resource-upload-empty"><p>현재 열린 VRM과 관련 리소스를 dev 서버와 비교합니다.</p><button class="primary-button" id="planResourceUpload">파일 검사</button></div>`
+            : ""
+        }
+        ${upload.phase === "planning" ? `<div class="resource-upload-empty"><p>서버 파일과 비교하는 중입니다...</p></div>` : ""}
+
+        ${
+          plan
+            ? `<div class="resource-upload-plan">
+                <div class="resource-upload-section-head"><strong>변경 파일</strong><span>${files.length}</span></div>
+                <div class="resource-upload-file-list">
+                  ${
+                    files.length
+                      ? files
+                          .map(
+                            (file) => `<div class="resource-upload-file ${escapeHtml(file.status || "")}">
+                              <span class="resource-upload-file-status">${uploadStatusLabel(file.status)}</span>
+                              <code title="${escapeHtml(file.localPath || file.key || "")}">${escapeHtml(file.key || file.localPath || "")}</code>
+                              <small>${formatUploadBytes(file.size)}</small>
+                            </div>`,
+                          )
+                          .join("")
+                      : `<p class="resource-upload-no-change">변경 사항이 없습니다.</p>`
+                  }
+                </div>
+                ${errors.length ? `<ul class="resource-upload-issues">${errors.map((issue) => renderUploadIssue(issue, "error")).join("")}</ul>` : ""}
+                ${warnings.length ? `<ul class="resource-upload-issues">${warnings.map((issue) => renderUploadIssue(issue, "warning")).join("")}</ul>` : ""}
+                <label class="resource-upload-note"><span>업로드 메모 <em>선택</em></span><textarea id="resourceUploadNote" rows="2" ${busy ? "disabled" : ""} placeholder="예: Joy 표정 입꼬리 수정">${escapeHtml(upload.note)}</textarea></label>
+              </div>`
+            : ""
+        }
+
+        ${
+          upload.phase === "uploading"
+            ? `<div class="resource-upload-progress">
+                <div><strong>${progress.stage === "verify" ? "CDN 확인 중" : "업로드 중"}</strong><span>${total ? `${done} / ${total}` : "처리 중"}</span></div>
+                <progress max="100" value="${percent}"></progress>
+                <code>${escapeHtml(progress.key || "")}</code>
+              </div>`
+            : ""
+        }
+
+        ${upload.error ? `<div class="resource-upload-message error"><strong>${escapeHtml(uploadStageLabel(upload.error.stage))} 실패</strong><span>${escapeHtml(uploadFailureMessage(upload.error))}</span></div>` : ""}
+        ${
+          upload.result?.ok
+            ? `<div class="resource-upload-message success"><strong>${Number(upload.result.uploaded) || 0}개 파일 업로드 완료</strong><span>dev 익스텐션에서 바로 확인할 수 있습니다.</span></div>`
+            : ""
+        }
+        ${
+          failure
+            ? `<div class="resource-upload-message error"><strong>${escapeHtml(uploadStageLabel(failure.stage))} 실패</strong><span>${escapeHtml(uploadFailureMessage(failure))}</span>${
+                verifyProblems.length
+                  ? `<ul>${verifyProblems.map((problem) => `<li>${escapeHtml(problem.key || "")}: ${escapeHtml(problem.message || problem.code || "확인 실패")}</li>`).join("")}</ul><small>S3 업로드는 끝난 상태일 수 있습니다. 익스텐션 담당자에게 알려 주세요.</small>`
+                  : ""
+              }</div>`
+            : ""
+        }
+
+        <footer class="resource-upload-actions">
+          ${plan && upload.phase !== "uploading" && !upload.result?.ok ? `<button class="secondary-button" id="refreshResourceUpload" ${busy ? "disabled" : ""}>다시 검사</button>` : ""}
+          <button class="secondary-button" id="cancelResourceUpload" ${busy ? "disabled" : ""}>${upload.result?.ok ? "닫기" : "취소"}</button>
+          ${plan && !upload.result?.ok ? `<button class="primary-button" id="runResourceUpload" ${plan.canUpload && !busy ? "" : "disabled"}>업로드</button>` : ""}
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
+function openResourceUploadDialog() {
+  state.resourceUpload = {
+    open: true,
+    phase: "idle",
+    plan: null,
+    error: null,
+    result: null,
+    note: "",
+    progress: { done: 0, total: 0, key: "", stage: "" },
+  };
+  render();
+}
+
+function closeResourceUploadDialog() {
+  if (state.resourceUpload.phase === "planning" || state.resourceUpload.phase === "uploading") return;
+  state.resourceUpload.open = false;
+  render();
+}
+
+async function planResourceUpload() {
+  if (hasUnsavedUploadChanges()) {
+    state.resourceUpload.error = { stage: "check", message: "저장하지 않은 변경사항이 있습니다. 먼저 각 모드의 저장 버튼을 눌러 주세요." };
+    render();
+    return;
+  }
+  state.resourceUpload.phase = "planning";
+  state.resourceUpload.plan = null;
+  state.resourceUpload.error = null;
+  state.resourceUpload.result = null;
+  render();
+  await saveEditorConfig();
+  const response = await window.vrmFiles.planResourceUpload({
+    vrmPath: state.filePath,
+    characterId: state.config.resourceUpload.characterId,
+    awsProfile: state.config.resourceUpload.awsProfile,
+  });
+  if (!response?.ok) {
+    state.resourceUpload.phase = "idle";
+    state.resourceUpload.error = response?.error ?? { stage: "check", message: "파일 검사를 완료하지 못했습니다." };
+  } else {
+    state.resourceUpload.phase = "review";
+    state.resourceUpload.plan = response.plan;
+  }
+  render();
+}
+
+async function runResourceUpload() {
+  if (!state.resourceUpload.plan?.canUpload || state.resourceUpload.phase === "uploading") return;
+  state.resourceUpload.phase = "uploading";
+  state.resourceUpload.error = null;
+  state.resourceUpload.result = null;
+  state.resourceUpload.progress = { done: 0, total: 0, key: "", stage: "upload" };
+  render();
+  const result = await window.vrmFiles.runResourceUpload({
+    note: state.resourceUpload.note,
+    by: state.config.resourceUpload.uploaderName,
+  });
+  state.resourceUpload.phase = "result";
+  state.resourceUpload.result = result ?? { ok: false, stage: "upload", message: "업로더가 결과를 반환하지 않았습니다." };
+  render();
+}
+
+function handleResourceUploadProgress(progress) {
+  state.resourceUpload.progress = { ...state.resourceUpload.progress, ...(progress ?? {}) };
+  const dialog = document.querySelector(".resource-upload-progress");
+  if (!dialog) return;
+  const total = Math.max(0, Number(state.resourceUpload.progress.total) || 0);
+  const done = Math.max(0, Number(state.resourceUpload.progress.done) || 0);
+  const progressElement = dialog.querySelector("progress");
+  if (progressElement) progressElement.value = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const strong = dialog.querySelector("strong");
+  if (strong) strong.textContent = state.resourceUpload.progress.stage === "verify" ? "CDN 확인 중" : "업로드 중";
+  const span = dialog.querySelector("span");
+  if (span) span.textContent = total ? `${done} / ${total}` : "처리 중";
+  const code = dialog.querySelector("code");
+  if (code) code.textContent = state.resourceUpload.progress.key || "";
+}
+
 function render() {
   const editableFocus = captureEditableFocus();
   if (!app.innerHTML) {
@@ -902,6 +1155,7 @@ function render() {
           ? renderEmptyRightTray()
           : ""
       }
+      ${renderResourceUploadDialog()}
     </main>
   `;
 
@@ -924,6 +1178,18 @@ function attachHeaderMetaButtons() {
     metaButton.textContent = ".m";
     metaButton.disabled = !state.correctionPath;
     openButton.insertAdjacentElement("afterend", metaButton);
+  }
+  const header = document.querySelector(".panel-header");
+  if (header && !header.querySelector("#openResourceUpload")) {
+    const uploadButton = document.createElement("button");
+    uploadButton.type = "button";
+    uploadButton.className = "icon-button resource-upload-button";
+    uploadButton.id = "openResourceUpload";
+    uploadButton.title = "리소스 업로드";
+    uploadButton.setAttribute("aria-label", "리소스 업로드");
+    uploadButton.innerHTML = `${iconSvg(Upload, 17)}<span>업로드</span>`;
+    uploadButton.disabled = !state.filePath;
+    header.appendChild(uploadButton);
   }
 }
 
@@ -4939,6 +5205,21 @@ function renderDropHint() {
 function bindUi() {
   document.querySelector("#openFile")?.addEventListener("click", openFile);
   document.querySelector("#openFileEmpty")?.addEventListener("click", openFile);
+  document.querySelector("#openResourceUpload")?.addEventListener("click", openResourceUploadDialog);
+  document.querySelector("#closeResourceUpload")?.addEventListener("click", closeResourceUploadDialog);
+  document.querySelector("#cancelResourceUpload")?.addEventListener("click", closeResourceUploadDialog);
+  document.querySelector("#planResourceUpload")?.addEventListener("click", planResourceUpload);
+  document.querySelector("#refreshResourceUpload")?.addEventListener("click", planResourceUpload);
+  document.querySelector("#runResourceUpload")?.addEventListener("click", runResourceUpload);
+  document.querySelector("#resourceUploadNote")?.addEventListener("input", (event) => {
+    state.resourceUpload.note = event.target.value;
+  });
+  for (const input of document.querySelectorAll("[data-upload-setting]")) {
+    input.addEventListener("input", () => {
+      state.config.resourceUpload[input.dataset.uploadSetting] = input.value;
+    });
+    input.addEventListener("change", () => saveEditorConfig().catch(() => {}));
+  }
   for (const button of document.querySelectorAll("#importMetaSettings")) {
     button.addEventListener("click", importMetaSettings);
   }

@@ -26,10 +26,26 @@ VRM Expression Editor.command
 npm start
 ```
 
+## dev 리소스 업로드
+
+VRM을 연 뒤 상단의 **업로드** 버튼을 누르면 현재 캐릭터 리소스를 dev 서버와 비교하고, 확인 후 업로드할 수 있습니다.
+
+- 변경 파일은 추가, 변경, 서버에만 있음으로 구분해 표시합니다. 서버에만 있는 파일은 자동으로 삭제하지 않습니다.
+- 오류가 있거나 변경 파일이 없으면 업로드 버튼이 비활성화됩니다.
+- 새 meta 필드 등 익스텐션 검토가 필요한 경고는 업로드 전에 별도로 표시합니다.
+- 업로드 중에는 창을 닫거나 중복 실행할 수 없으며, 완료 후 CDN 검증 결과를 표시합니다.
+- `ExpressionEditorConfig.ini`의 `[ResourceUpload]` 섹션에 캐릭터 ID, AWS 프로필 이름, 업로더 이름을 저장합니다. AWS 키 자체는 저장하지 않습니다.
+- `ExpressionEditorConfig.ini`, `spaces/`, `vrSpace/`, `work/`, `output/`은 업로드 대상이 아닙니다.
+
+실제 비교와 업로드는 Electron main 프로세스에서 `@piecomp/rorr-resource-uploader`의 `plan()`과 `run()`을 호출합니다. 업로더 패키지와 dev 전용 AWS 자격 증명이 준비되지 않은 PC에서는 안내 메시지만 표시하며, 렌더러에는 자격 증명을 노출하지 않습니다.
+
+개발 연동 계약과 실제 dev 검증 항목은 [Resource Uploader Integration](docs/RESOURCE_UPLOADER_INTEGRATION.md)에 정리되어 있습니다.
+
 ## 프론트/익스텐션 전달 문서
 
 - [VRM Expression Editor Frontend Runtime Guide](docs/VRM_ExpressionEditor_Frontend_Runtime_Guide.pdf)
 - [Resource Reference Rules](docs/RESOURCE_REFERENCE_RULES.md)
+- [Resource Uploader Integration](docs/RESOURCE_UPLOADER_INTEGRATION.md)
 - [Emotion Linker 2 Frontend Runtime Spec](docs/EMOTION_LINKER2_RUNTIME_SPEC.md)
 - [Effect Runtime Spec](docs/EFFECT_RUNTIME_SPEC.md)
 - [Look At Camera Runtime Spec](docs/LOOK_AT_CAMERA_RUNTIME_SPEC.md)
