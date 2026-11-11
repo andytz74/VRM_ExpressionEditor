@@ -122,6 +122,7 @@ function playMotionSlotByTitle(title: string) {
 {
   "schemaVersion": 1,
   "type": "vrm-emotion-linker2-meta",
+  "transitionEnabled": true,
   "motionSlots": [
     {
       "id": "motion-slot-1789001845503-26",
@@ -149,6 +150,8 @@ function playMotionSlotByTitle(title: string) {
 }
 ```
 
+`transitionEnabled`는 Emotion Linker 2 전체의 전환 사용 여부다. `true`이면 슬롯과 타임라인의 `transitionSeconds`를 사용하고, `false`이면 애니메이션, 시작 표정, 타임라인 표정, 관절 보정을 즉시 전환한다. 이전 메타처럼 필드가 없으면 `true`로 해석한다.
+
 ### Motion Slot 필드
 
 | 필드 | 의미 |
@@ -175,7 +178,7 @@ function playMotionSlotByTitle(title: string) {
 1. title을 정확히 비교하여 슬롯 하나를 찾는다.
 2. 이전 슬롯의 예약 작업과 재생 토큰을 취소한다.
 3. animationFile로 VRMA와 animations.meta 항목을 찾는다.
-4. 이전 animation action에서 새 action으로 transitionSeconds 동안 전환한다.
+4. transitionEnabled가 true이면 이전 animation action에서 새 action으로 transitionSeconds 동안 전환하고, false이면 즉시 교체한다.
 5. 캐릭터 메타의 Motion Correction과 연결된 Props를 활성화한다.
 6. animations.meta의 lookAtCamera를 적용하거나 해제한다.
 7. time=0인 timeline 표정이 있으면 그것을 적용한다.
@@ -207,7 +210,8 @@ class MotionSlotPlayer {
     const action = await loadVrmaAction(`animations/${slot.animationFile}`);
     if (runId !== this.runId) return;
 
-    crossFadeTo(action, slot.transitionSeconds);
+    const duration = emotionLinker2Meta.transitionEnabled === false ? 0 : slot.transitionSeconds;
+    crossFadeTo(action, duration);
     action.setLoop(slot.loop);
     action.play();
 
@@ -616,6 +620,7 @@ interface CompanionMotionApi {
 [ ] 배열 순서가 바뀌어도 title/id 참조가 유지된다.
 [ ] 중복 title을 감지하고 오류 처리한다.
 [ ] slot.loop가 animations.meta.loop보다 우선한다.
+[ ] transitionEnabled가 없으면 true로 처리하고 false이면 모든 전환을 즉시 적용한다.
 [ ] transitionSeconds로 동작과 시작 표정을 전환한다.
 [ ] transitionSeconds로 이전·새 애니메이션의 관절 보정도 전환한다.
 [ ] time=0 timeline 포인트가 기본 표정보다 우선한다.

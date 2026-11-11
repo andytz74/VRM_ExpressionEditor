@@ -214,6 +214,19 @@ function createDefaultConfig() {
       transitionPivot: 0,
       trayMode: "transition",
       sequence: [],
+      lipSyncPreview: {
+        speed: 1.15,
+        returnDuration: 0.6,
+        headMotion: {
+          x: { enabled: true, min: -1.2, max: 1.8 },
+          y: { enabled: true, min: -3, max: 3 },
+          z: { enabled: true, min: -1, max: 1 },
+          hold: { min: 0.25, max: 0.8 },
+          transition: { min: 0.25, max: 0.65 },
+          neckFollow: 0.35,
+          shapeParameters: [],
+        },
+      },
     },
   };
 }

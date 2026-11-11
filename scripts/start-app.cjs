@@ -47,7 +47,7 @@ function dependenciesNeedInstall() {
     const lock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));
     const direct = Object.keys(lock?.packages?.[""]?.dependencies ?? {});
     if (!direct.length) return true;
-    return direct.some((name) => {
+    const directDependencyMismatch = direct.some((name) => {
       const expected = lock.packages[`node_modules/${name}`]?.version;
       try {
         const installed = JSON.parse(fs.readFileSync(path.join(root, "node_modules", name, "package.json"), "utf8"))?.version;
@@ -56,6 +56,12 @@ function dependenciesNeedInstall() {
         return true;
       }
     });
+    if (directDependencyMismatch) return true;
+
+    // The uploader can exist while a transitive AWS SDK dependency is missing
+    // after an interrupted npm install. Loading it verifies the usable package tree.
+    require("@piecomp/rorr-resource-uploader");
+    return false;
   } catch {
     return true;
   }

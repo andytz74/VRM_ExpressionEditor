@@ -13,12 +13,16 @@ import {
   ArrowDownAZ,
   ArrowLeft,
   Camera,
+  ChevronDown,
+  ChevronUp,
   ClipboardCopy,
   ClipboardPaste,
   Download,
   FolderOpen,
+  Gauge,
   GitCompare,
   Lock,
+  Plus,
   Copy,
   Play,
   RotateCcw,
@@ -260,7 +264,22 @@ const state = {
     playing: false,
     elapsed: 0,
     duration: 0,
+    speed: 1.15,
+    returnDuration: 0.6,
+    typedText: "",
+    headMotionCollapsed: false,
     timeline: [],
+    headMotionTimeline: [],
+    punctuationHeadEvents: [],
+    headMotion: {
+      x: { enabled: true, min: -1.2, max: 1.8 },
+      y: { enabled: true, min: -3, max: 3 },
+      z: { enabled: true, min: -1, max: 1 },
+      hold: { min: 0.25, max: 0.8 },
+      transition: { min: 0.25, max: 0.65 },
+      neckFollow: 0.35,
+      shapeParameters: [],
+    },
     activeShape: "",
   },
   rorrParameters: [],
@@ -358,7 +377,12 @@ scene.background = null;
 const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 100);
 camera.position.set(0, 1.35, 3.2);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  alpha: true,
+  preserveDrawingBuffer: false,
+  powerPreference: "high-performance",
+});
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
 let spaceBloomComposer = null;
@@ -399,15 +423,20 @@ let currentUrl = null;
 let animationUrl = null;
 let animationMixer = null;
 let animationAction = null;
+let animationBlendTransition = null;
 let lastCorrectionBases = new Map();
 let lastExtraBoneFollowBases = new Map();
 let lastExpressionPoseBases = new Map();
 let expressionPoseBoneRestQuaternions = new WeakMap();
+let boneNameCache = new Map();
+let lastAnimationUiUpdateAt = 0;
 let blushOverlay = null;
 let emotionImageOverlay = null;
 let emotionImageTransformControls = null;
 let emotionImageTransformDragging = false;
 let emotionImageHeadRotationOffset = null;
+let lipSyncHeadMotionOffsets = new Map();
+let lipSyncShapeMotionOffsets = [];
 let blushOverlayRequestId = 0;
 let emotionImageOverlayRequestId = 0;
 let propOverlay = null;
@@ -500,6 +529,10 @@ async function loadEditorConfig() {
     sequencePlaying: false,
     runId: 0,
   };
+  const lipSyncConfig = normalizeLipSyncPreviewConfig(state.transitionViewer.lipSyncPreview);
+  state.lipSyncPreview.speed = lipSyncConfig.speed;
+  state.lipSyncPreview.returnDuration = lipSyncConfig.returnDuration;
+  state.lipSyncPreview.headMotion = lipSyncConfig.headMotion;
 }
 
 function normalizeEditorConfig(config) {
@@ -538,7 +571,61 @@ function createEmptyTransitionViewerConfig() {
     transitionPivot: 0,
     trayMode: "transition",
     sequence: [],
+    lipSyncPreview: normalizeLipSyncPreviewConfig(null),
   };
+}
+
+function normalizeLipSyncPreviewConfig(config) {
+  const defaults = {
+    speed: 1.15,
+    returnDuration: 0.6,
+    headMotion: {
+      x: { enabled: true, min: -1.2, max: 1.8 },
+      y: { enabled: true, min: -3, max: 3 },
+      z: { enabled: true, min: -1, max: 1 },
+      hold: { min: 0.25, max: 0.8 },
+      transition: { min: 0.25, max: 0.65 },
+      neckFollow: 0.35,
+      shapeParameters: [],
+    },
+  };
+  const normalizeRange = (range, fallback, limits) => {
+    const min = clampNumber(range?.min, limits[0], limits[1], fallback.min);
+    const max = clampNumber(range?.max, limits[0], limits[1], fallback.max);
+    return {
+      ...(Object.hasOwn(fallback, "enabled") ? { enabled: range?.enabled !== false } : {}),
+      min: Math.min(min, max),
+      max: Math.max(min, max),
+    };
+  };
+  return {
+    speed: clampNumber(config?.speed, 0.5, 4, defaults.speed),
+    returnDuration: clampNumber(config?.returnDuration, 0, 2, defaults.returnDuration),
+    headMotion: {
+      x: normalizeRange(config?.headMotion?.x, defaults.headMotion.x, [-30, 30]),
+      y: normalizeRange(config?.headMotion?.y, defaults.headMotion.y, [-30, 30]),
+      z: normalizeRange(config?.headMotion?.z, defaults.headMotion.z, [-30, 30]),
+      hold: normalizeRange(config?.headMotion?.hold, defaults.headMotion.hold, [0, 3]),
+      transition: normalizeRange(config?.headMotion?.transition, defaults.headMotion.transition, [0, 3]),
+      neckFollow: clampNumber(config?.headMotion?.neckFollow, 0, 1, defaults.headMotion.neckFollow),
+      shapeParameters: normalizeLipSyncShapeParameters(config?.headMotion?.shapeParameters),
+    },
+  };
+}
+
+function normalizeLipSyncShapeParameters(parameters) {
+  const normalized = [];
+  const used = new Set();
+  for (const parameter of Array.isArray(parameters) ? parameters : []) {
+    if (normalized.length >= 3) break;
+    const id = String(parameter?.id ?? "").trim();
+    if (id && used.has(id)) continue;
+    const min = clampNumber(Number(parameter?.min), 0, 1, 0);
+    const max = clampNumber(Number(parameter?.max), 0, 1, 0);
+    normalized.push({ id, min: Math.min(min, max), max: Math.max(min, max) });
+    if (id) used.add(id);
+  }
+  return normalized;
 }
 
 function normalizeTransitionViewerConfig(config) {
@@ -571,6 +658,7 @@ function normalizeTransitionViewerConfig(config) {
   next.transitionPivot = Math.max(0, normalizeFiniteNumber(config?.transitionPivot, 0));
   next.trayMode = config?.trayMode === "sequence" ? "sequence" : "transition";
   next.sequence = normalizeTransitionSequence(config?.sequence);
+  next.lipSyncPreview = normalizeLipSyncPreviewConfig(config?.lipSyncPreview);
   return next;
 }
 
@@ -685,17 +773,19 @@ function updateEditorConfigMemory() {
 }
 
 function buildCurrentEditorConfig() {
-  if (!state.rorrParameters.length) return normalizeEditorConfig(state.config);
   const visibleIds = state.visibleParameterIds instanceof Set ? state.visibleParameterIds : null;
+  const expressionEditor = state.rorrParameters.length
+    ? {
+        ...(state.config?.expressionEditor ?? {}),
+        knownShapeKeys: state.rorrParameters.map((parameter) => parameter.id),
+        visibleShapeKeys: state.rorrParameters
+          .map((parameter) => parameter.id)
+          .filter((id) => !visibleIds || visibleIds.has(id)),
+      }
+    : state.config?.expressionEditor;
   return normalizeEditorConfig({
     ...state.config,
-    expressionEditor: {
-      ...(state.config?.expressionEditor ?? {}),
-      knownShapeKeys: state.rorrParameters.map((parameter) => parameter.id),
-      visibleShapeKeys: state.rorrParameters
-        .map((parameter) => parameter.id)
-        .filter((id) => !visibleIds || visibleIds.has(id)),
-    },
+    expressionEditor,
     cameraPresets: state.config?.cameraPresets ?? {},
     viewer: state.config?.viewer ?? {},
     resourceUpload: state.config?.resourceUpload ?? {},
@@ -717,6 +807,11 @@ function serializeTransitionViewerState() {
     transitionPivot: state.transitionViewer.transitionPivot,
     trayMode: state.transitionViewer.trayMode,
     sequence: state.transitionViewer.sequence,
+    lipSyncPreview: {
+      speed: state.lipSyncPreview.speed,
+      returnDuration: state.lipSyncPreview.returnDuration,
+      headMotion: state.lipSyncPreview.headMotion,
+    },
   });
 }
 
@@ -2484,6 +2579,43 @@ function renderViewerLightControl() {
 
 function renderLipSyncPreviewOverlay() {
   if (state.mode !== "transitionViewer") return "";
+  const motion = state.lipSyncPreview.headMotion;
+  const headMotionPanel = state.lipSyncPreview.headMotionCollapsed
+    ? `
+      <button class="lip-sync-head-motion-panel collapsed" id="toggleLipSyncHeadMotion" title="Expand Head Motion">
+        <span>Head Motion</span>
+        ${iconSvg(ChevronDown, 16)}
+      </button>
+    `
+    : `
+      <aside class="lip-sync-head-motion-panel">
+        <div class="lip-sync-head-motion-title">
+          <strong>Head Motion</strong>
+          <div class="lip-sync-head-motion-actions">
+            <button class="mini-icon-button" id="toggleLipSyncHeadMotion" title="Collapse Head Motion" aria-label="Collapse Head Motion">
+              ${iconSvg(ChevronUp, 15)}
+            </button>
+            <button class="mini-icon-button" id="saveLipSyncHeadMotionSettings" title="Save speech settings" aria-label="Save speech settings">
+              ${iconSvg(Save, 15)}
+            </button>
+            <button class="mini-icon-button" id="regenerateLipSyncHeadMotion" ${currentVrm ? "" : "disabled"} title="Regenerate and replay">
+              ${iconSvg(RotateCw, 15)}
+            </button>
+          </div>
+        </div>
+        ${renderLipSyncMotionRangeRow("x", "X Pitch", motion.x, "deg", 0.1)}
+        ${renderLipSyncMotionRangeRow("y", "Y Yaw", motion.y, "deg", 0.1)}
+        ${renderLipSyncMotionRangeRow("z", "Z Roll", motion.z, "deg", 0.1)}
+        ${renderLipSyncMotionRangeRow("hold", "Hold", motion.hold, "s", 0.05, false)}
+        ${renderLipSyncMotionRangeRow("transition", "Transition", motion.transition, "s", 0.05, false)}
+        <label class="lip-sync-motion-single-row">
+          <span>Neck Follow</span>
+          <input type="number" min="0" max="100" step="5" value="${roundForInput(motion.neckFollow * 100)}" data-lip-sync-neck-follow />
+          <em>%</em>
+        </label>
+        ${renderLipSyncShapeParameters(motion.shapeParameters)}
+      </aside>
+    `;
   return `
     <section class="lip-sync-preview">
       <input
@@ -2495,7 +2627,90 @@ function renderLipSyncPreviewOverlay() {
       <button class="lip-sync-play-button ${state.lipSyncPreview.playing ? "active" : ""}" id="playLipSyncPreview" ${currentVrm ? "" : "disabled"} title="Lip sync preview">
         ${iconSvg(Play, 17)}
       </button>
+      <label class="lip-sync-speed-control" title="Speech speed">
+        ${iconSvg(Gauge, 15)}
+        <input
+          type="number"
+          min="0.5"
+          max="4"
+          step="0.05"
+          value="${roundForInput(state.lipSyncPreview.speed)}"
+          data-lip-sync-speed
+          aria-label="Speech speed"
+        />
+        <span>x</span>
+      </label>
+      <label class="lip-sync-return-control" title="Head/neck return transition (seconds)">
+        ${iconSvg(RotateCcw, 15)}
+        <input
+          type="number"
+          min="0"
+          max="2"
+          step="0.1"
+          value="${roundForInput(state.lipSyncPreview.returnDuration)}"
+          data-lip-sync-return
+          aria-label="Head/neck return transition seconds"
+        />
+        <span>s</span>
+      </label>
     </section>
+    <div class="lip-sync-typed-text" aria-live="polite">${escapeHtml(state.lipSyncPreview.typedText)}</div>
+    ${headMotionPanel}
+  `;
+}
+
+function renderLipSyncMotionRangeRow(key, label, range, unit, step, toggle = true) {
+  return `
+    <div class="lip-sync-motion-range-row">
+      <label class="lip-sync-motion-range-label">
+        ${toggle ? `<input type="checkbox" data-lip-sync-motion-axis="${key}" ${range.enabled !== false ? "checked" : ""} />` : ""}
+        <span>${label}</span>
+      </label>
+      <div class="lip-sync-motion-range-inputs">
+        <input type="number" step="${step}" value="${roundForInput(range.min)}" data-lip-sync-motion-range="${key}" data-range-side="min" />
+        <span>~</span>
+        <input type="number" step="${step}" value="${roundForInput(range.max)}" data-lip-sync-motion-range="${key}" data-range-side="max" />
+        <em>${unit}</em>
+      </div>
+    </div>
+  `;
+}
+
+function renderLipSyncShapeParameters(parameters) {
+  const rows = normalizeLipSyncShapeParameters(parameters);
+  const mouthNames = new Set(collectMouthShapeKeyNames().all);
+  const options = state.rorrParameters.filter((parameter) => !mouthNames.has(parameter.id));
+  return `
+    <div class="lip-sync-shape-section">
+      <div class="lip-sync-shape-header">
+        <span>Shape Parameters</span>
+        <button class="mini-icon-button" id="addLipSyncShapeParameter" ${rows.length >= 3 || !options.length ? "disabled" : ""} title="Add shape parameter" aria-label="Add shape parameter">
+          ${iconSvg(Plus, 15)}
+        </button>
+      </div>
+      ${rows
+        .map((row, index) => {
+          const usedByOthers = new Set(rows.filter((_, rowIndex) => rowIndex !== index).map((item) => item.id).filter(Boolean));
+          const selectedExists = options.some((parameter) => parameter.id === row.id);
+          return `
+            <div class="lip-sync-shape-row">
+              <select data-lip-sync-shape-id data-shape-index="${index}" title="Shape key">
+                <option value="">Shape key</option>
+                ${!selectedExists && row.id ? `<option value="${escapeHtml(row.id)}" selected>${escapeHtml(row.id)}</option>` : ""}
+                ${options
+                  .filter((parameter) => parameter.id === row.id || !usedByOthers.has(parameter.id))
+                  .map((parameter) => `<option value="${escapeHtml(parameter.id)}" ${parameter.id === row.id ? "selected" : ""}>${escapeHtml(parameter.id)}</option>`)
+                  .join("")}
+              </select>
+              <input type="number" min="0" max="1" step="0.01" value="${roundForInput(row.min)}" data-lip-sync-shape-range="min" data-shape-index="${index}" aria-label="Minimum shape value" />
+              <span>~</span>
+              <input type="number" min="0" max="1" step="0.01" value="${roundForInput(row.max)}" data-lip-sync-shape-range="max" data-shape-index="${index}" aria-label="Maximum shape value" />
+              <button class="mini-icon-button" data-lip-sync-shape-delete="${index}" title="Delete shape parameter" aria-label="Delete shape parameter">${iconSvg(X, 14)}</button>
+            </div>
+          `;
+        })
+        .join("")}
+    </div>
   `;
 }
 
@@ -3729,6 +3944,7 @@ function renderEmotionLinkerPanel() {
 function renderEmotionLinker2Panel() {
   const slots = normalizeMotionSlots(state.emotionLinker2.motionSlots);
   state.emotionLinker2.motionSlots = slots;
+  const transitionEnabled = isEmotionLinker2TransitionEnabled();
   return `
     <div class="panel-header">
       <div class="title-block">
@@ -3741,13 +3957,22 @@ function renderEmotionLinker2Panel() {
       <div class="emotion-linker-panel motion-linker-panel">
       <div class="motion-linker-toolbar">
         <strong>Motion Slots</strong>
-        <button
-          class="icon-button compact"
-          id="sortMotionSlotsByName"
-          title="슬롯 이름순 정렬"
-          aria-label="슬롯 이름순 정렬"
-          ${slots.length < 2 ? "disabled" : ""}
-        >${iconSvg(ArrowDownAZ)}</button>
+        <div class="motion-linker-toolbar-actions">
+          <button
+            class="icon-button compact motion-linker-transition-toggle ${transitionEnabled ? "active" : ""}"
+            id="toggleMotionSlotTransition"
+            title="트랜지션 ${transitionEnabled ? "끄기" : "켜기"}"
+            aria-label="트랜지션 ${transitionEnabled ? "끄기" : "켜기"}"
+            aria-pressed="${transitionEnabled}"
+          >${iconSvg(GitCompare)}</button>
+          <button
+            class="icon-button compact"
+            id="sortMotionSlotsByName"
+            title="슬롯 이름순 정렬"
+            aria-label="슬롯 이름순 정렬"
+            ${slots.length < 2 ? "disabled" : ""}
+          >${iconSvg(ArrowDownAZ)}</button>
+        </div>
       </div>
       ${
         slots.length
@@ -4499,6 +4724,7 @@ function renderMotionSlotCard(slot, index = 0, total = 1) {
   const linkedPreset = state.expressionPresets.find((preset) => preset.id === slot.expressionPresetId);
   const duration = getAnimationDuration(slot.animationFile, 2);
   const selected = state.selectedMotionSlotId === slot.id;
+  const transitionEnabled = isEmotionLinker2TransitionEnabled();
   const titleValue =
     state.editingMotionSlotTitleId === slot.id ? state.editingMotionSlotTitleValue : slot.title;
   return `
@@ -4531,11 +4757,11 @@ function renderMotionSlotCard(slot, index = 0, total = 1) {
           <input type="checkbox" data-motion-slot-loop="${escapeHtml(slot.id)}" ${slot.loop ? "checked" : ""} />
           Loop
         </label>
-        <div class="motion-slot-transition-control" title="Start transition">
+        <div class="motion-slot-transition-control ${transitionEnabled ? "" : "disabled"}" title="Start transition">
           <span>${clampTimelineTransitionSeconds(slot.transitionSeconds).toFixed(1)}</span>
           <div>
-            <button type="button" data-motion-slot-transition="${escapeHtml(slot.id)}" data-direction="1">▲</button>
-            <button type="button" data-motion-slot-transition="${escapeHtml(slot.id)}" data-direction="-1">▼</button>
+            <button type="button" data-motion-slot-transition="${escapeHtml(slot.id)}" data-direction="1" ${transitionEnabled ? "" : "disabled"}>▲</button>
+            <button type="button" data-motion-slot-transition="${escapeHtml(slot.id)}" data-direction="-1" ${transitionEnabled ? "" : "disabled"}>▼</button>
           </div>
         </div>
         <button class="icon-button emotion-link-play" data-motion-slot-play="${escapeHtml(slot.id)}" ${currentVrm && slot.animationFile ? "" : "disabled"} title="Play">${iconSvg(Play, 24)}</button>
@@ -5746,6 +5972,7 @@ function bindUi() {
 
   document.querySelector("#addMotionSlot")?.addEventListener("click", addMotionSlot);
   document.querySelector("#sortMotionSlotsByName")?.addEventListener("click", sortMotionSlotsByName);
+  document.querySelector("#toggleMotionSlotTransition")?.addEventListener("click", toggleEmotionLinker2Transition);
   for (const input of document.querySelectorAll("[data-motion-slot-title]")) {
     input.addEventListener("pointerdown", (event) => event.stopPropagation());
     input.addEventListener("click", (event) => event.stopPropagation());
@@ -6025,6 +6252,62 @@ function bindUi() {
   });
   lipSyncInput?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") startLipSyncPreview();
+  });
+  document.querySelector("[data-lip-sync-speed]")?.addEventListener("change", (event) => {
+    const value = clampNumber(Number(event.target.value), 0.5, 4, 1.15);
+    state.lipSyncPreview.speed = value;
+    event.target.value = roundForInput(value);
+  });
+  document.querySelector("[data-lip-sync-return]")?.addEventListener("change", (event) => {
+    const value = clampNumber(Number(event.target.value), 0, 2, 0.6);
+    state.lipSyncPreview.returnDuration = value;
+    event.target.value = roundForInput(value);
+  });
+  for (const input of document.querySelectorAll("[data-lip-sync-motion-axis]")) {
+    input.addEventListener("change", () => {
+      const axis = input.dataset.lipSyncMotionAxis;
+      if (state.lipSyncPreview.headMotion[axis]) state.lipSyncPreview.headMotion[axis].enabled = input.checked;
+    });
+  }
+  for (const input of document.querySelectorAll("[data-lip-sync-motion-range]")) {
+    input.addEventListener("change", () => commitLipSyncMotionRangeInput(input));
+  }
+  document.querySelector("[data-lip-sync-neck-follow]")?.addEventListener("change", (event) => {
+    const value = clampNumber(Number(event.target.value), 0, 100, 35);
+    state.lipSyncPreview.headMotion.neckFollow = value / 100;
+    event.target.value = roundForInput(value);
+  });
+  document.querySelector("#addLipSyncShapeParameter")?.addEventListener("click", () => {
+    const parameters = state.lipSyncPreview.headMotion.shapeParameters;
+    if (parameters.length >= 3) return;
+    parameters.push({ id: "", min: 0, max: 0 });
+    renderPreservingScrollableUi();
+  });
+  for (const select of document.querySelectorAll("[data-lip-sync-shape-id]")) {
+    select.addEventListener("change", () => {
+      const parameter = state.lipSyncPreview.headMotion.shapeParameters[Number(select.dataset.shapeIndex)];
+      if (!parameter) return;
+      parameter.id = select.value;
+      state.lipSyncPreview.headMotion.shapeParameters = normalizeLipSyncShapeParameters(
+        state.lipSyncPreview.headMotion.shapeParameters,
+      );
+      renderPreservingScrollableUi();
+    });
+  }
+  for (const input of document.querySelectorAll("[data-lip-sync-shape-range]")) {
+    input.addEventListener("change", () => commitLipSyncShapeRangeInput(input));
+  }
+  for (const button of document.querySelectorAll("[data-lip-sync-shape-delete]")) {
+    button.addEventListener("click", () => {
+      state.lipSyncPreview.headMotion.shapeParameters.splice(Number(button.dataset.lipSyncShapeDelete), 1);
+      renderPreservingScrollableUi();
+    });
+  }
+  document.querySelector("#regenerateLipSyncHeadMotion")?.addEventListener("click", startLipSyncPreview);
+  document.querySelector("#saveLipSyncHeadMotionSettings")?.addEventListener("click", saveLipSyncHeadMotionSettings);
+  document.querySelector("#toggleLipSyncHeadMotion")?.addEventListener("click", () => {
+    state.lipSyncPreview.headMotionCollapsed = !state.lipSyncPreview.headMotionCollapsed;
+    renderPreservingScrollableUi();
   });
   document.querySelector("#playLipSyncPreview")?.addEventListener("click", startLipSyncPreview);
 
@@ -6466,6 +6749,8 @@ function bindUi() {
         ? ".correction-panel"
         : state.mode === "linker"
           ? ".emotion-linker-panel"
+          : state.mode === "linker2"
+            ? ".emotion-linker-panel"
           : state.mode === "emotionMap"
             ? ".emotion-map-preset-list"
           : state.mode === "extraBone"
@@ -7578,13 +7863,7 @@ function renderPreservingExpressionEditorScrolls() {
 }
 
 function renderPreservingEmotionLinkerScroll() {
-  const scroller = document.querySelector(".emotion-linker-panel");
-  const scrollTop = scroller?.scrollTop ?? 0;
-  const editableFocus = captureEditableFocus();
-  render();
-  const nextScroller = document.querySelector(".emotion-linker-panel");
-  if (nextScroller) nextScroller.scrollTop = scrollTop;
-  restoreEditableFocus(editableFocus);
+  renderPreservingScrollableUi();
 }
 
 let scrollRestoreRevision = 0;
@@ -7617,6 +7896,7 @@ function renderPreservingScrollableUi() {
     ".material-outline-list",
     ".props-list",
     ".props-settings-area",
+    ".mode-empty-tray",
     ".extra-bone-panel",
     ".transition-viewer-panel",
     ".transition-preview-tray",
@@ -9734,6 +10014,20 @@ function updateMotionSlotExpression(slotId, presetId) {
   });
 }
 
+function isEmotionLinker2TransitionEnabled() {
+  return state.emotionLinker2?.transitionEnabled !== false;
+}
+
+function toggleEmotionLinker2Transition() {
+  state.emotionLinker2 = {
+    ...state.emotionLinker2,
+    transitionEnabled: !isEmotionLinker2TransitionEnabled(),
+  };
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+  renderPreservingEmotionLinkerScroll();
+}
+
 function nudgeMotionSlotTransition(slotId, direction) {
   const slot = getMotionSlot(slotId);
   if (!slot) return;
@@ -9955,11 +10249,11 @@ function jumpMotionSlotTimeline(slotId, pointId) {
 }
 
 async function playMotionSlot(slotId) {
-  const scroller = document.querySelector(".emotion-linker-panel");
-  const scrollTop = scroller?.scrollTop ?? 0;
   const slot = getMotionSlot(slotId);
   if (!slot?.animationFile) return;
-  const transitionSeconds = clampTimelineTransitionSeconds(slot.transitionSeconds);
+  const transitionSeconds = isEmotionLinker2TransitionEnabled()
+    ? clampTimelineTransitionSeconds(slot.transitionSeconds)
+    : 0;
   const correctionFrom = getCurrentMotionCorrectionQuaternions();
   holdMotionCorrectionTransition(correctionFrom);
   state.selectedMotionSlotId = slot.id;
@@ -9977,9 +10271,7 @@ async function playMotionSlot(slotId) {
     transitionSeconds: transition?.previousAction ? transitionSeconds : 0,
   });
   startMotionSlotEffectPreview(slot);
-  render();
-  const nextScroller = document.querySelector(".emotion-linker-panel");
-  if (nextScroller) nextScroller.scrollTop = scrollTop;
+  renderPreservingEmotionLinkerScroll();
 }
 
 function startMotionSlotEffectPreview(slot) {
@@ -10052,7 +10344,12 @@ function applyInitialMotionSlotExpression(slot) {
     state.activeLinkTimeline?.appliedIds?.add(first.id);
     return;
   }
-  if (slot.expressionPresetId) applyLinkedExpressionPreset(slot.expressionPresetId, clampTimelineTransitionSeconds(slot.transitionSeconds));
+  if (slot.expressionPresetId) {
+    const transitionSeconds = isEmotionLinker2TransitionEnabled()
+      ? clampTimelineTransitionSeconds(slot.transitionSeconds)
+      : 0;
+    applyLinkedExpressionPreset(slot.expressionPresetId, transitionSeconds);
+  }
 }
 
 function markCorrectionDirtyAndRenderLinker2() {
@@ -10272,7 +10569,10 @@ function updateActiveLinkTimeline() {
   for (const slot of active.timeline) {
     const shouldApply = looped ? slot.time <= currentTime || slot.time > active.previousTime : slot.time > active.previousTime && slot.time <= currentTime;
     if (!shouldApply || active.appliedIds.has(slot.id)) continue;
-    applyTimelineExpressionSlot(slot, slot.transitionSeconds);
+    const transitionSeconds = active.motionSlotId && !isEmotionLinker2TransitionEnabled()
+      ? 0
+      : slot.transitionSeconds;
+    applyTimelineExpressionSlot({ ...slot, transitionSeconds }, transitionSeconds);
     active.appliedIds.add(slot.id);
   }
   active.previousTime = currentTime;
@@ -10380,6 +10680,7 @@ function clearReferenceAnimation() {
   animationMixer?.stopAllAction();
   animationMixer = null;
   animationAction = null;
+  animationBlendTransition = null;
   if (animationUrl) URL.revokeObjectURL(animationUrl);
   animationUrl = null;
   state.animation.time = 0;
@@ -10415,6 +10716,7 @@ function restartAnimation() {
 
 function playAnimationFromStart(loop, options = {}) {
   if (!animationAction) return;
+  finishAnimationBlendTransition();
   clearMotionCorrectionPreview();
   configureAnimationLoop(loop, animationAction);
   state.animation.loop = Boolean(loop);
@@ -10423,17 +10725,47 @@ function playAnimationFromStart(loop, options = {}) {
   animationAction.enabled = true;
   animationAction.paused = false;
   animationAction.reset();
-  animationAction.setEffectiveWeight(1);
   animationAction.play();
-  if (options.previousAction && options.previousAction !== animationAction && options.transitionSeconds > 0) {
-    options.previousAction.enabled = true;
-    options.previousAction.paused = false;
-    options.previousAction.crossFadeTo(animationAction, options.transitionSeconds, false);
-    window.setTimeout(() => {
+  if (options.previousAction && options.previousAction !== animationAction) {
+    if (options.transitionSeconds > 0) {
+      options.previousAction.enabled = true;
+      options.previousAction.paused = false;
+      options.previousAction.setEffectiveWeight(1);
+      animationAction.setEffectiveWeight(0);
+      animationBlendTransition = {
+        from: options.previousAction,
+        to: animationAction,
+        elapsed: 0,
+        duration: options.transitionSeconds,
+      };
+    } else {
       options.previousAction.stop();
-    }, Math.ceil(options.transitionSeconds * 1000) + 80);
+      animationAction.setEffectiveWeight(1);
+    }
+  } else {
+    animationAction.setEffectiveWeight(1);
   }
   updateAnimationControls();
+}
+
+function updateAnimationBlendTransition(delta) {
+  const transition = animationBlendTransition;
+  if (!transition) return;
+  transition.elapsed += delta;
+  const progress = Math.min(1, transition.elapsed / Math.max(transition.duration, 0.001));
+  const eased = progress * progress * (3 - 2 * progress);
+  transition.from.setEffectiveWeight(1 - eased);
+  transition.to.setEffectiveWeight(eased);
+  if (progress >= 1) finishAnimationBlendTransition();
+}
+
+function finishAnimationBlendTransition() {
+  const transition = animationBlendTransition;
+  if (!transition) return;
+  transition.from.stop();
+  transition.to.enabled = true;
+  transition.to.setEffectiveWeight(1);
+  animationBlendTransition = null;
 }
 
 function configureAnimationLoop(loop, action = animationAction) {
@@ -10463,7 +10795,10 @@ function setAnimationTime(time) {
   updateAnimationControls();
 }
 
-function updateAnimationControls() {
+function updateAnimationControls(force = true) {
+  const now = performance.now();
+  if (!force && now - lastAnimationUiUpdateAt < 1000 / 30) return;
+  lastAnimationUiUpdateAt = now;
   const toggle = document.querySelector("#toggleAnimation");
   if (toggle) toggle.textContent = state.animation.playing ? "Pause" : "Play";
   const time = document.querySelector(".animation-time");
@@ -10913,7 +11248,12 @@ function startLipSyncPreview() {
   const timeline = buildLipSyncTimeline(text);
   state.lipSyncPreview.timeline = timeline;
   state.lipSyncPreview.elapsed = 0;
+  state.lipSyncPreview.typedText = "";
   state.lipSyncPreview.duration = timeline.at(-1)?.end ?? 0;
+  const lastSpokenSlot = [...timeline].reverse().find((slot) => slot.type === "viseme");
+  const headMotionDuration = lastSpokenSlot?.end ?? state.lipSyncPreview.duration;
+  state.lipSyncPreview.headMotionTimeline = buildLipSyncHeadMotionTimeline(headMotionDuration);
+  state.lipSyncPreview.punctuationHeadEvents = buildLipSyncPunctuationHeadEvents();
   state.lipSyncPreview.playing = timeline.length > 0;
   state.lipSyncPreview.activeShape = "";
   state.lipSyncPreview.restoreValues = readMouthInfluenceValues();
@@ -10923,24 +11263,332 @@ function startLipSyncPreview() {
   renderPreservingScrollableUi();
 }
 
+function commitLipSyncMotionRangeInput(input) {
+  const key = input.dataset.lipSyncMotionRange;
+  const side = input.dataset.rangeSide;
+  const range = state.lipSyncPreview.headMotion[key];
+  if (!range || (side !== "min" && side !== "max")) return;
+  const limits = key === "hold" || key === "transition" ? [0, 3] : [-30, 30];
+  const fallback = side === "min" ? range.min : range.max;
+  range[side] = clampNumber(Number(input.value), limits[0], limits[1], fallback);
+  if (side === "min" && range.min > range.max) range.max = range.min;
+  if (side === "max" && range.max < range.min) range.min = range.max;
+  for (const paired of document.querySelectorAll(`[data-lip-sync-motion-range="${key}"]`)) {
+    paired.value = roundForInput(range[paired.dataset.rangeSide]);
+  }
+}
+
+function commitLipSyncShapeRangeInput(input) {
+  const index = Number(input.dataset.shapeIndex);
+  const side = input.dataset.lipSyncShapeRange;
+  const parameter = state.lipSyncPreview.headMotion.shapeParameters[index];
+  if (!parameter || (side !== "min" && side !== "max")) return;
+  parameter[side] = clampNumber(Number(input.value), 0, 1, parameter[side]);
+  if (side === "min" && parameter.min > parameter.max) parameter.max = parameter.min;
+  if (side === "max" && parameter.max < parameter.min) parameter.min = parameter.max;
+  for (const paired of document.querySelectorAll(`[data-lip-sync-shape-range][data-shape-index="${index}"]`)) {
+    paired.value = roundForInput(parameter[paired.dataset.lipSyncShapeRange]);
+  }
+}
+
+async function saveLipSyncHeadMotionSettings(event) {
+  const button = event?.currentTarget;
+  await saveEditorConfig();
+  if (!button) return;
+  button.classList.add("saved");
+  button.title = "Saved";
+  window.setTimeout(() => {
+    button.classList.remove("saved");
+    button.title = "Save speech settings";
+  }, 900);
+}
+
+function buildLipSyncHeadMotionTimeline(duration) {
+  if (duration <= 0) return [];
+  const settings = state.lipSyncPreview.headMotion;
+  const timeline = [];
+  let cursor = 0;
+  let previous = {
+    x: 0,
+    y: 0,
+    z: 0,
+    shapes: Object.fromEntries(settings.shapeParameters.filter((parameter) => parameter.id).map((parameter) => [parameter.id, 0])),
+  };
+  while (cursor < duration) {
+    const transitionDuration = randomRange(settings.transition.min, settings.transition.max);
+    const holdDuration = randomRange(settings.hold.min, settings.hold.max);
+    const target = createLipSyncHeadMotionTarget(settings, previous);
+    const transitionEnd = Math.min(duration, cursor + transitionDuration);
+    const holdEnd = Math.min(duration, Math.max(transitionEnd, transitionEnd + holdDuration));
+    timeline.push({
+      transitionStart: cursor,
+      transitionEnd,
+      holdEnd,
+      from: previous,
+      to: target,
+    });
+    previous = target;
+    const nextCursor = Math.max(holdEnd, cursor + 0.01);
+    cursor = nextCursor;
+  }
+  return timeline;
+}
+
+function createLipSyncHeadMotionTarget(settings, previous) {
+  const enabledAxes = ["x", "y", "z"].filter((axis) => settings[axis].enabled !== false);
+  const dominantAxis = enabledAxes[Math.floor(Math.random() * enabledAxes.length)];
+  const target = {};
+  for (const axis of ["x", "y", "z"]) {
+    const range = settings[axis];
+    if (range.enabled === false) {
+      target[axis] = 0;
+      continue;
+    }
+    const centerBiased = (Math.random() + Math.random()) * 0.5;
+    let value = THREE.MathUtils.lerp(range.min, range.max, centerBiased);
+    if (axis !== dominantAxis) value *= randomRange(0.35, 0.72);
+    const extent = Math.max(Math.abs(range.min), Math.abs(range.max));
+    if (extent > 0 && Math.abs(previous[axis]) > extent * 0.55 && Math.sign(value) === Math.sign(previous[axis]) && Math.random() < 0.6) {
+      value *= -1;
+    }
+    target[axis] = clampNumber(value, range.min, range.max, 0);
+  }
+  target.shapes = Object.fromEntries(
+    settings.shapeParameters
+      .filter((parameter) => parameter.id)
+      .map((parameter) => [parameter.id, randomRange(parameter.min, parameter.max)]),
+  );
+  return target;
+}
+
+function randomRange(min, max) {
+  const low = Math.min(Number(min) || 0, Number(max) || 0);
+  const high = Math.max(Number(min) || 0, Number(max) || 0);
+  return low + Math.random() * (high - low);
+}
+
+function smootherStep01(value) {
+  const t = clamp01(value);
+  return t * t * t * (t * (t * 6 - 15) + 10);
+}
+
+function evaluateBaseLipSyncHeadMotion(elapsed) {
+  const timeline = state.lipSyncPreview.headMotionTimeline;
+  if (!timeline.length) return { x: 0, y: 0, z: 0, shapes: {} };
+  const duration = state.lipSyncPreview.duration;
+  if (elapsed >= duration) {
+    const returnDuration = clampNumber(state.lipSyncPreview.returnDuration, 0, 2, 0.6);
+    const finalPose = timeline.at(-1).to;
+    const weight = returnDuration <= 0 ? 0 : 1 - smootherStep01((elapsed - duration) / returnDuration);
+    return {
+      x: finalPose.x * weight,
+      y: finalPose.y * weight,
+      z: finalPose.z * weight,
+      shapes: Object.fromEntries(Object.entries(finalPose.shapes ?? {}).map(([id, value]) => [id, value * weight])),
+    };
+  }
+  const segment = timeline.find((entry) => elapsed <= entry.holdEnd) ?? timeline.at(-1);
+  if (elapsed >= segment.transitionEnd || segment.transitionEnd <= segment.transitionStart) {
+    return { ...segment.to };
+  }
+  const progress = smootherStep01((elapsed - segment.transitionStart) / (segment.transitionEnd - segment.transitionStart));
+  return {
+    x: THREE.MathUtils.lerp(segment.from.x, segment.to.x, progress),
+    y: THREE.MathUtils.lerp(segment.from.y, segment.to.y, progress),
+    z: THREE.MathUtils.lerp(segment.from.z, segment.to.z, progress),
+    shapes: interpolateLipSyncShapeValues(segment.from.shapes, segment.to.shapes, progress),
+  };
+}
+
+function interpolateLipSyncShapeValues(from, to, progress) {
+  const names = new Set([...Object.keys(from ?? {}), ...Object.keys(to ?? {})]);
+  return Object.fromEntries(
+    [...names].map((name) => [name, THREE.MathUtils.lerp(from?.[name] ?? 0, to?.[name] ?? 0, progress)]),
+  );
+}
+
+function evaluateLipSyncHeadMotion(elapsed) {
+  return applyLipSyncPunctuationHeadEvents(
+    evaluateBaseLipSyncHeadMotion(elapsed),
+    elapsed,
+    state.lipSyncPreview.punctuationHeadEvents,
+  );
+}
+
+function buildLipSyncPunctuationHeadEvents() {
+  const punctuationSlots = state.lipSyncPreview.timeline.filter((slot) => slot.type === "punctuation");
+  const settings = state.lipSyncPreview.headMotion;
+  const events = [];
+  for (const slot of punctuationSlots) {
+    const nextViseme = state.lipSyncPreview.timeline.find(
+      (candidate) => candidate.type === "viseme" && candidate.start >= slot.end,
+    );
+    if (!nextViseme) continue;
+    const transitionDuration = Math.max(0.01, randomRange(settings.transition.min, settings.transition.max));
+    const from = applyLipSyncPunctuationHeadEvents(
+      evaluateBaseLipSyncHeadMotion(slot.start),
+      slot.start,
+      events,
+    );
+    const generatedTarget = createLipSyncHeadMotionTarget(settings, from);
+    const strength = slot.event === "comma" ? 0.55 : slot.event === "question" ? 0.82 : 1;
+    const target = {
+      x: THREE.MathUtils.lerp(from.x, generatedTarget.x, strength),
+      y: THREE.MathUtils.lerp(from.y, generatedTarget.y, strength),
+      z: THREE.MathUtils.lerp(from.z, generatedTarget.z, strength),
+    };
+    const transitionEnd = slot.start + transitionDuration;
+    const holdEnd = Math.max(transitionEnd, nextViseme.start);
+    const end = holdEnd + transitionDuration;
+    events.push({
+      start: slot.start,
+      transitionEnd,
+      holdEnd,
+      end,
+      from,
+      target,
+      to: evaluateBaseLipSyncHeadMotion(end),
+    });
+  }
+  return events;
+}
+
+function applyLipSyncPunctuationHeadEvents(pose, elapsed, events) {
+  const active = [...events]
+    .reverse()
+    .find((event) => elapsed >= event.start && elapsed < event.end);
+  if (!active) return pose;
+  if (elapsed < active.transitionEnd) {
+    const progress = smootherStep01(
+      (elapsed - active.start) / Math.max(0.001, active.transitionEnd - active.start),
+    );
+    return {
+      ...pose,
+      x: THREE.MathUtils.lerp(active.from.x, active.target.x, progress),
+      y: THREE.MathUtils.lerp(active.from.y, active.target.y, progress),
+      z: THREE.MathUtils.lerp(active.from.z, active.target.z, progress),
+    };
+  }
+  if (elapsed < active.holdEnd) return { ...pose, x: active.target.x, y: active.target.y, z: active.target.z };
+  const progress = smootherStep01(
+    (elapsed - active.holdEnd) / Math.max(0.001, active.end - active.holdEnd),
+  );
+  return {
+    ...pose,
+    x: THREE.MathUtils.lerp(active.target.x, active.to.x, progress),
+    y: THREE.MathUtils.lerp(active.target.y, active.to.y, progress),
+    z: THREE.MathUtils.lerp(active.target.z, active.to.z, progress),
+  };
+}
+
 function buildLipSyncTimeline(text) {
   const timeline = [];
   let cursor = 0;
+  const speed = clampNumber(state.lipSyncPreview.speed, 0.5, 4, 1.15);
+  const append = (slot, duration) => {
+    const span = Math.max(0.01, duration / speed);
+    const previous = timeline.at(-1);
+    if (slot.type === "viseme" && previous?.type === "viseme" && previous.shape === slot.shape) {
+      if (slot.sourceText) {
+        previous.sourceCues.push({ text: slot.sourceText, offset: previous.duration });
+      }
+      previous.duration += span;
+      previous.end += span;
+      previous.syllableCount = (previous.syllableCount ?? 1) + (slot.syllableCount ?? 1);
+      cursor += span;
+      return;
+    }
+    timeline.push({
+      ...slot,
+      sourceCues: slot.sourceText ? [{ text: slot.sourceText, offset: 0 }] : [],
+      duration: span,
+      start: cursor,
+      end: cursor + span,
+    });
+    cursor += span;
+  };
   for (const char of String(text ?? "")) {
     if (/\s/.test(char)) {
-      cursor += 0.16;
+      append({ type: "pause", event: "word", shape: "closed", sourceText: char }, 0.1);
+      continue;
+    }
+    const punctuation = getLipSyncPunctuationEvent(char);
+    if (punctuation) {
+      append({ type: "punctuation", event: punctuation.kind, shape: "closed", sourceText: char }, punctuation.duration);
       continue;
     }
     const shape = getVisemeForCharacter(char);
-    const duration = shape === "closed" ? 0.08 : 0.16;
-    timeline.push({ start: cursor, end: cursor + duration, shape });
-    cursor += duration;
-    if (shape !== "closed") {
-      timeline.push({ start: cursor, end: cursor + 0.04, shape: "closed" });
-      cursor += 0.04;
-    }
+    append(
+      {
+        type: shape === "closed" ? "closure" : "viseme",
+        shape,
+        intensity: randomRange(0.82, 0.92),
+        sourceText: char,
+        ...(shape === "closed" ? {} : { syllableCount: 1 }),
+      },
+      shape === "closed" ? 0.08 : 0.2,
+    );
+    if (shouldCloseAfterCharacter(char)) append({ type: "closure", event: "final", shape: "closed" }, 0.035);
+  }
+  if (timeline.length && timeline.at(-1).shape !== "closed") append({ type: "closure", event: "end", shape: "closed" }, 0.08);
+  markSingleSyllableLipSyncSlots(timeline, speed);
+  recalculateLipSyncTimelineTiming(timeline);
+  for (let index = 0; index < timeline.length; index += 1) {
+    const slot = timeline[index];
+    const previous = timeline[index - 1];
+    const next = timeline[index + 1];
+    slot.fromShape = previous?.type === "viseme" ? previous.shape : "closed";
+    slot.enterFromClosed = previous?.type !== "viseme";
+    slot.nextShape = next?.type === "viseme" ? next.shape : "closed";
+    slot.nextIntensity = next?.type === "viseme" ? next.intensity : slot.intensity;
   }
   return timeline;
+}
+
+function markSingleSyllableLipSyncSlots(timeline, speed) {
+  let segment = [];
+  const commitSegment = () => {
+    const visemes = segment.filter((slot) => slot.type === "viseme");
+    const syllableCount = visemes.reduce((sum, slot) => sum + (slot.syllableCount ?? 1), 0);
+    if (visemes.length === 1 && syllableCount === 1) {
+      visemes[0].singleSyllable = true;
+      visemes[0].duration = Math.max(visemes[0].duration, 0.46 / speed);
+    }
+    segment = [];
+  };
+  for (const slot of timeline) {
+    if (slot.type === "punctuation") {
+      commitSegment();
+      continue;
+    }
+    segment.push(slot);
+  }
+  commitSegment();
+}
+
+function recalculateLipSyncTimelineTiming(timeline) {
+  let cursor = 0;
+  for (const slot of timeline) {
+    slot.start = cursor;
+    slot.end = cursor + Math.max(0.01, slot.duration ?? slot.end - slot.start);
+    cursor = slot.end;
+  }
+}
+
+function getLipSyncPunctuationEvent(char) {
+  if (/[,，、;；:：]/.test(char)) return { kind: "comma", duration: 0.48 };
+  if (/[?？]/.test(char)) return { kind: "question", duration: 0.78 };
+  if (/[!！]/.test(char)) return { kind: "exclamation", duration: 0.72 };
+  if (/[.。]/.test(char)) return { kind: "sentence", duration: 0.86 };
+  if (char === "…") return { kind: "ellipsis", duration: 1.05 };
+  return null;
+}
+
+function shouldCloseAfterCharacter(char) {
+  const code = char.codePointAt(0);
+  if (code < 0xac00 || code > 0xd7a3) return false;
+  const finalIndex = (code - 0xac00) % 28;
+  return finalIndex >= 16 && finalIndex <= 18;
 }
 
 function getVisemeForCharacter(char) {
@@ -10948,7 +11596,6 @@ function getVisemeForCharacter(char) {
   if (code >= 0xac00 && code <= 0xd7a3) {
     const offset = code - 0xac00;
     const vowelIndex = Math.floor((offset % 588) / 28);
-    const finalIndex = offset % 28;
     const vowelToViseme = {
       0: "A",
       1: "A",
@@ -10972,7 +11619,7 @@ function getVisemeForCharacter(char) {
       19: "I",
       20: "I",
     };
-    return finalIndex ? vowelToViseme[vowelIndex] ?? "closed" : vowelToViseme[vowelIndex] ?? "A";
+    return vowelToViseme[vowelIndex] ?? "A";
   }
   const lower = String(char).toLowerCase();
   if ("a".includes(lower)) return "A";
@@ -10980,7 +11627,7 @@ function getVisemeForCharacter(char) {
   if ("u".includes(lower)) return "U";
   if ("e".includes(lower)) return "E";
   if ("o".includes(lower)) return "O";
-  if (/[.,!?;:]/.test(lower)) return "closed";
+  if (/[a-z]/.test(lower)) return "closed";
   return "A";
 }
 
@@ -10992,9 +11639,11 @@ function updateLipSyncPreview(delta) {
   if (!currentVrm || !state.lipSyncPreview.playing) return;
   state.lipSyncPreview.elapsed += delta;
   const elapsed = state.lipSyncPreview.elapsed;
+  updateLipSyncTypedText(elapsed);
   const active = state.lipSyncPreview.timeline.find((slot) => elapsed >= slot.start && elapsed < slot.end);
   if (!active) {
-    if (elapsed >= state.lipSyncPreview.duration) {
+    const returnDuration = clampNumber(state.lipSyncPreview.returnDuration, 0, 2, 0.6);
+    if (elapsed >= state.lipSyncPreview.duration + returnDuration) {
       stopLipSyncPreview();
       return;
     }
@@ -11003,8 +11652,124 @@ function updateLipSyncPreview(delta) {
   }
   const span = Math.max(0.001, active.end - active.start);
   const local = (elapsed - active.start) / span;
-  const envelope = Math.sin(Math.PI * clamp01(local));
-  applyLipSyncMouthShape(active.shape, envelope);
+  if (active.type !== "viseme") {
+    applyLipSyncMouthShape("closed", 1);
+    return;
+  }
+  const intensity = clampEmotionValue(active.intensity ?? 0.88);
+  const nextShape = active.nextShape ?? "closed";
+  if (active.singleSyllable) {
+    if (local < 0.32) {
+      applyLipSyncMouthBlend("closed", active.shape, smootherStep01(local / 0.32), intensity);
+      return;
+    }
+    if (local < 0.7) {
+      applyLipSyncMouthShape(active.shape, intensity);
+      return;
+    }
+    const progress = smootherStep01((local - 0.7) / 0.3);
+    applyLipSyncMouthBlend(active.shape, nextShape, progress, intensity, active.nextIntensity);
+    return;
+  }
+  if (active.enterFromClosed) {
+    if (local < 0.46) {
+      applyLipSyncMouthBlend("closed", active.shape, smootherStep01(local / 0.46), intensity);
+      return;
+    }
+    const progress = smootherStep01((local - 0.46) / 0.54);
+    applyLipSyncMouthBlend(active.shape, nextShape, progress, intensity, active.nextIntensity);
+    return;
+  }
+  const blendStart = nextShape === "closed" ? 0.38 : 0;
+  const progress = smootherStep01((local - blendStart) / Math.max(0.01, 1 - blendStart));
+  applyLipSyncMouthBlend(active.shape, nextShape, progress, intensity, active.nextIntensity);
+}
+
+function updateLipSyncTypedText(elapsed) {
+  const typedText = state.lipSyncPreview.timeline
+    .flatMap((slot) =>
+      slot.sourceCues
+        .filter((cue) => elapsed >= slot.start + cue.offset)
+        .map((cue) => cue.text),
+    )
+    .join("");
+  if (typedText === state.lipSyncPreview.typedText) return;
+  state.lipSyncPreview.typedText = typedText;
+  const output = document.querySelector(".lip-sync-typed-text");
+  if (output) output.textContent = typedText;
+}
+
+function restoreLipSyncHeadMotion() {
+  if (!lipSyncHeadMotionOffsets.size) return;
+  for (const [bone, offset] of lipSyncHeadMotionOffsets) {
+    bone?.quaternion.multiply(offset.clone().invert());
+  }
+  lipSyncHeadMotionOffsets = new Map();
+}
+
+function applyLipSyncHeadMotion(elapsed = state.lipSyncPreview.elapsed) {
+  if (!currentVrm || !state.lipSyncPreview.playing) return;
+  const pose = evaluateLipSyncHeadMotion(elapsed);
+  const pitch = THREE.MathUtils.degToRad(pose.x);
+  const yaw = THREE.MathUtils.degToRad(pose.y);
+  const roll = THREE.MathUtils.degToRad(pose.z);
+  const neckFollow = clampNumber(state.lipSyncPreview.headMotion.neckFollow, 0, 1, 0.35);
+  const rotations = [
+    [getRawBoneNode("neck"), neckFollow],
+    [getRawBoneNode("head"), 1],
+  ];
+  for (const [bone, strength] of rotations) {
+    if (!bone) continue;
+    const offset = new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch * strength, yaw * strength, roll * strength, "XYZ"));
+    bone.quaternion.multiply(offset);
+    lipSyncHeadMotionOffsets.set(bone, offset);
+  }
+  currentVrm.scene.updateMatrixWorld(true);
+}
+
+function applyLipSyncShapeMotion(elapsed = state.lipSyncPreview.elapsed) {
+  if (!currentVrm || !state.lipSyncPreview.playing) return;
+  const values = evaluateLipSyncHeadMotion(elapsed).shapes ?? {};
+  const names = Object.keys(values);
+  if (!names.length) return;
+  currentVrm.scene.traverse((object) => {
+    if (!object.isMesh || !object.morphTargetDictionary || !Array.isArray(object.morphTargetInfluences)) return;
+    for (const name of names) {
+      const index = object.morphTargetDictionary[name];
+      if (index == null) continue;
+      const base = object.morphTargetInfluences[index] ?? 0;
+      const next = Math.min(1, Math.max(0, base + values[name]));
+      object.morphTargetInfluences[index] = next;
+      lipSyncShapeMotionOffsets.push({ object, index, offset: next - base });
+    }
+  });
+}
+
+function restoreLipSyncShapeMotion() {
+  for (const entry of lipSyncShapeMotionOffsets) {
+    if (!Array.isArray(entry.object?.morphTargetInfluences)) continue;
+    entry.object.morphTargetInfluences[entry.index] = Math.min(
+      1,
+      Math.max(0, (entry.object.morphTargetInfluences[entry.index] ?? 0) - entry.offset),
+    );
+  }
+  lipSyncShapeMotionOffsets = [];
+}
+
+function updateCurrentVrm(delta) {
+  if (!currentVrm) return;
+  if (!state.lipSyncPreview.playing) {
+    currentVrm.update?.(delta);
+    return;
+  }
+
+  currentVrm.humanoid?.update?.();
+  currentVrm.lookAt?.update?.(delta);
+  currentVrm.expressionManager?.update?.();
+  currentVrm.nodeConstraintManager?.update?.();
+  applyLipSyncHeadMotion(state.lipSyncPreview.elapsed + delta);
+  currentVrm.springBoneManager?.update?.(delta);
+  currentVrm.materials?.forEach((material) => material.update?.(delta));
 }
 
 function stopLipSyncPreview() {
@@ -11015,11 +11780,20 @@ function stopLipSyncPreview() {
 }
 
 function applyLipSyncMouthShape(shape, value) {
+  applyLipSyncMouthBlend("closed", shape, 1, value);
+}
+
+function applyLipSyncMouthBlend(fromShape, toShape, progress, value = 1, toValue = value) {
   const targets = collectMouthShapeKeyNames();
   const next = {};
   for (const name of targets.all) next[name] = 0;
-  const targetName = targets.byShape[shape];
-  if (targetName) next[targetName] = clampEmotionValue(value);
+  const blend = clamp01(progress);
+  const fromIntensity = clampEmotionValue(value);
+  const toIntensity = clampEmotionValue(toValue);
+  const fromName = targets.byShape[fromShape];
+  const toName = targets.byShape[toShape];
+  if (fromName) next[fromName] = fromIntensity * (1 - blend);
+  if (toName) next[toName] = (next[toName] ?? 0) + toIntensity * blend;
   applyMouthInfluenceValues(next);
 }
 
@@ -11398,6 +12172,7 @@ function createEmptyEmotionLinker2Meta() {
   return {
     schemaVersion: 1,
     type: "vrm-emotion-linker2-meta",
+    transitionEnabled: true,
     motionSlots: [],
   };
 }
@@ -15958,6 +16733,7 @@ function normalizeEmotionLinkerMeta(json, presets = state.expressionPresets) {
 function normalizeEmotionLinker2Meta(json, presets = state.expressionPresets) {
   const next = createEmptyEmotionLinker2Meta();
   next.schemaVersion = Number(json?.schemaVersion) || 1;
+  next.transitionEnabled = json?.transitionEnabled !== false;
   next.motionSlots = normalizeMotionSlots(json?.motionSlots, presets);
   return next;
 }
@@ -16732,6 +17508,7 @@ function captureBoneRestTransforms() {
   lastExtraBoneFollowBases = new Map();
   lastExpressionPoseBases = new Map();
   expressionPoseBoneRestQuaternions = new WeakMap();
+  boneNameCache = new Map();
   for (const boneName of HUMAN_BONES) {
     const bone = getRawBoneNode(boneName);
     if (!bone) continue;
@@ -16742,17 +17519,15 @@ function captureBoneRestTransforms() {
     });
   }
   currentVrm?.scene?.traverse((object) => {
-    if (object?.isBone) expressionPoseBoneRestQuaternions.set(object, object.quaternion.clone());
+    if (!object?.isBone) return;
+    expressionPoseBoneRestQuaternions.set(object, object.quaternion.clone());
+    if (object.name && !boneNameCache.has(object.name)) boneNameCache.set(object.name, object);
   });
 }
 
 function findBoneByName(name) {
   if (!currentVrm?.scene || !name) return null;
-  let found = null;
-  currentVrm.scene.traverse((object) => {
-    if (!found && object?.isBone && object.name === name) found = object;
-  });
-  return found;
+  return boneNameCache.get(name) ?? null;
 }
 
 function applyExtraBoneFollowPreview() {
@@ -16913,27 +17688,23 @@ function clearExpressionPosePreview() {
     base.bone?.quaternion.copy(base.quaternion);
   }
   lastExpressionPoseBases = new Map();
-  currentVrm.scene.updateMatrixWorld(true);
 }
 
 function applyMotionCorrectionPreview() {
   if (!currentVrm || !state.boneRestTransforms.size) return;
   lastCorrectionBases = new Map();
   const correctionQuaternions = getCurrentMotionCorrectionQuaternions();
-  for (const boneName of HUMAN_BONES) {
+  if (!correctionQuaternions.size) return;
+  for (const [boneName, correctionQuaternion] of correctionQuaternions) {
     const bone = getRawBoneNode(boneName);
     if (!bone) continue;
     lastCorrectionBases.set(boneName, {
-      position: bone.position.clone(),
+      bone,
       quaternion: bone.quaternion.clone(),
-      scale: bone.scale.clone(),
     });
-
-    const correctionQuaternion = correctionQuaternions.get(boneName);
-    if (!correctionQuaternion) continue;
     bone.quaternion.multiply(correctionQuaternion);
   }
-  currentVrm.scene.updateMatrixWorld(true);
+  if (lastCorrectionBases.size) currentVrm.scene.updateMatrixWorld(true);
 }
 
 function getMotionCorrectionQuaternions(animationName = state.selectedAnimationName) {
@@ -17012,15 +17783,10 @@ function updateMotionCorrectionTransition(delta) {
 
 function clearMotionCorrectionPreview() {
   if (!currentVrm || !lastCorrectionBases.size) return;
-  for (const [boneName, base] of lastCorrectionBases) {
-    const bone = getRawBoneNode(boneName);
-    if (!bone) continue;
-    bone.position.copy(base.position);
-    bone.quaternion.copy(base.quaternion);
-    bone.scale.copy(base.scale);
+  for (const base of lastCorrectionBases.values()) {
+    base.bone?.quaternion.copy(base.quaternion);
   }
   lastCorrectionBases = new Map();
-  currentVrm.scene.updateMatrixWorld(true);
 }
 
 function getRawBoneNode(boneName) {
@@ -17875,6 +18641,8 @@ renderer.domElement.addEventListener("pointerdown", handleEmotionImagePivotPoint
 function tick() {
   requestAnimationFrame(tick);
   const delta = clock.getDelta();
+  restoreLipSyncShapeMotion();
+  restoreLipSyncHeadMotion();
   restoreEmotionImageHeadRotationOffset();
   clearExpressionPosePreview();
   controls.update();
@@ -17882,6 +18650,8 @@ function tick() {
   updateTransitionTimelineProgress();
   clearMotionCorrectionPreview();
   if (animationMixer && state.animation.playing) {
+    let finished = false;
+    updateAnimationBlendTransition(delta);
     animationMixer.update(delta);
     state.animation.time = animationAction?.time ?? state.animation.time;
     if (state.animation.duration && state.animation.time >= state.animation.duration) {
@@ -17891,18 +18661,20 @@ function tick() {
         state.animation.time = state.animation.duration;
         state.animation.playing = false;
         if (animationAction) animationAction.paused = true;
+        finished = true;
       }
     }
     updateActiveLinkTimeline();
-    updateAnimationControls();
+    updateAnimationControls(finished);
   }
   applyLookAtCameraOverride();
-  currentVrm?.update?.(delta);
+  updateCurrentVrm(delta);
   updateExpressionDecay(delta);
   updateExpressionTransition(delta);
   reapplyActiveRorrInfluences();
   updateRandomBlink(delta);
   updateLipSyncPreview(delta);
+  applyLipSyncShapeMotion();
   updatePropOverlayRuntime();
   updateMotionSlotEffectTrigger();
   updateEmotionImageEffectPlayback(delta);

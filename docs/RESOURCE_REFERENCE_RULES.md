@@ -718,6 +718,7 @@ Emotion Linker 2의 motion slot을 저장한다.
 {
   "schemaVersion": 1,
   "type": "vrm-emotion-linker2-meta",
+  "transitionEnabled": true,
   "motionSlots": [
     {
       "id": "motion-slot-...",
@@ -737,6 +738,7 @@ Emotion Linker 2의 motion slot을 저장한다.
 
 참조 규칙:
 
+- `transitionEnabled`는 Emotion Linker 2 전체의 전환 토글이다. 필드가 없으면 `true`이며, `false`이면 애니메이션·표정·관절 보정 전환 시간을 모두 `0`으로 처리한다.
 - `animationFile`은 `animations/` 기준 VRMA 파일명이다.
 - `animationFile`은 `animations.meta.animations[animationFile]`의 `lookAtCamera` 조회에도 사용한다.
 - `expressionPresetId`는 같은 캐릭터 메타의 `expressionPresets[].id`를 참조한다.

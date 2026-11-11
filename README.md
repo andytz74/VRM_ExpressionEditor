@@ -46,6 +46,7 @@ VRM을 연 뒤 상단의 **업로드** 버튼을 누르면 현재 캐릭터 리�
 - [VRM Expression Editor Frontend Runtime Guide](docs/VRM_ExpressionEditor_Frontend_Runtime_Guide.pdf)
 - [Resource Reference Rules](docs/RESOURCE_REFERENCE_RULES.md)
 - [Resource Uploader Integration](docs/RESOURCE_UPLOADER_INTEGRATION.md)
+- [Development Handoff 2026-11-11](docs/DEVELOPMENT_HANDOFF_2026-11-11.md)
 - [Emotion Linker 2 Frontend Runtime Spec](docs/EMOTION_LINKER2_RUNTIME_SPEC.md)
 - [Effect Runtime Spec](docs/EFFECT_RUNTIME_SPEC.md)
 - [Look At Camera Runtime Spec](docs/LOOK_AT_CAMERA_RUNTIME_SPEC.md)
@@ -102,6 +103,8 @@ VRM 휴머노이드 본이 아닌 추가 본을 특정 휴머노이드 본의 �
 
 슬롯 제목, 애니메이션 파일, 표정 프리셋과 시간축 전환, 파티클 이펙트, loop, transition 값을 관리합니다. 이 정보는 `emotionLinker/emotion-linker2.meta`에 저장됩니다. 프런트에서는 슬롯 제목을 호출해 설정된 애니메이션, 표정, 이펙트 시퀀스를 함께 재생합니다.
 
+상단 전환 아이콘으로 슬롯 전환 효과를 전체 ON/OFF할 수 있습니다. 저장되는 `transitionEnabled`가 `false`이면 애니메이션, 표정, 관절 보정 전환 시간을 모두 0으로 처리하며, 필드가 없는 기존 메타는 `true`로 해석합니다. 슬롯 또는 세부 설정을 바꿀 때 오른쪽 패널의 스크롤 위치는 유지됩니다.
+
 ### Space Editor
 
 > **개발 중 / 현재 비활성화**
@@ -115,7 +118,9 @@ VRM 휴머노이드 본이 아닌 추가 본을 특정 휴머노이드 본의 �
 
 애니메이션 전환 상태를 검수하는 view only 모드입니다.
 
-start, transition, end 또는 sequence 형태로 애니메이션 전환을 확인합니다. 현재는 런타임 필수 메타라기보다 제작/검수용 작업환경에 가깝습니다.
+start, transition, end 또는 sequence 형태로 애니메이션 전환을 확인합니다. 텍스트 기반 립싱크 미리보기, 발화 속도, 머리·목 미세 모션, 타이핑 표시와 발화 중 랜덤 쉐이프키 보조 모션을 함께 검수할 수 있습니다.
+
+발화 속도는 `0.5x~4x` 범위이며, Head Motion 패널에서는 Pitch/Yaw/Roll, 유지·전환 시간, Neck Follow를 조절합니다. 쉐이프키 보조 모션은 최대 3개까지 등록하고 각각 `0~1` 범위의 최솟값·최댓값을 지정할 수 있습니다. 설정은 `ExpressionEditorConfig.ini`의 Transition Viewer 상태에 저장되며 현재는 런타임 필수 메타가 아닌 에디터 미리보기 설정입니다.
 
 ### Shape Key Transfer
 
