@@ -1,6 +1,6 @@
 # Development Handoff - 2026-11-11
 
-이 문서는 `9223344` 이후 VRM Expression Editor에 추가·수정된 개발 내용을 정리한 전달 문서다. 캐릭터 모델, 애니메이션 원본, 작업용 메타와 공간 리소스는 이 커밋에 포함하지 않는다.
+이 문서는 `9223344` 이후 VRM Expression Editor에 추가·수정된 개발 내용을 정리한 전달 문서다. 현재 사용하는 애니메이션 원본, `animations.meta`와 Emotion Linker 메타를 함께 전달하며 캐릭터 모델, 개인 설정과 공간 리소스는 제외한다.
 
 ## 1. 변경 요약
 
@@ -40,6 +40,13 @@ Motion Slots 제목 오른쪽에 전환 아이콘 버튼을 추가했다. 버튼
 ### UI 상태 유지
 
 Emotion Linker 2에서 슬롯을 선택하거나 슬롯 내부 세부 설정을 변경해도 오른쪽 편집 패널의 스크롤 위치가 초기화되지 않도록 렌더링 전후 위치를 복원한다.
+
+### 삭제된 애니메이션 참조 표시
+
+- Emotion Linker의 메타에만 남은 애니메이션 연결은 목록에서 숨기지 않고 빨간 경고 카드로 표시한다.
+- 경고 카드에서 정상 애니메이션으로 연결 설정을 옮기거나 누락 연결을 삭제할 수 있다.
+- Emotion Linker 2 슬롯의 `animationFile`이 없으면 슬롯 테두리와 드롭다운을 빨간색으로 표시한다.
+- 누락 파일명을 드롭다운 선택값으로 유지하고 재생 버튼을 비활성화한다.
 
 ## 3. Transition Viewer 발화 미리보기
 
@@ -121,6 +128,10 @@ scripts/start-app.cjs
 src/main.cjs
 src/renderer.js
 src/styles.css
+animations/*.vrma
+animations/animations.meta
+emotionLinker/emotion-linker.meta
+emotionLinker/emotion-linker2.meta
 ```
 
 ## 7. 제외한 로컬 작업물
@@ -129,8 +140,6 @@ src/styles.css
 
 - `ExpressionEditorConfig.ini`
 - `models/`
-- 작업 중인 VRM/VRMA 및 `animations/animations.meta`
-- `emotionLinker/*.meta`
 - `spaces/` 및 `vrSpace/`
 - 테스트용 `img/` 리소스
 - 백업 ZIP과 생성 출력물

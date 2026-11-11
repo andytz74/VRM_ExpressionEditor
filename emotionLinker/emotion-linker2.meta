@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "type": "vrm-emotion-linker2-meta",
+  "transitionEnabled": true,
   "motionSlots": [
     {
       "id": "motion-slot-1787566035066-25",
@@ -11,7 +12,7 @@
       "effectId": "",
       "effectStartTime": 0,
       "loop": false,
-      "transitionSeconds": 0.2,
+      "transitionSeconds": 0.4,
       "expressionTimeline": []
     },
     {
@@ -23,7 +24,7 @@
       "effectId": "",
       "effectStartTime": 0,
       "loop": true,
-      "transitionSeconds": 0.3,
+      "transitionSeconds": 0.4,
       "expressionTimeline": [
         {
           "id": "motion-point-1787533481445-0",
@@ -45,7 +46,7 @@
       "effectId": "",
       "effectStartTime": 0,
       "loop": false,
-      "transitionSeconds": 0.1,
+      "transitionSeconds": 0.3,
       "expressionTimeline": [
         {
           "id": "motion-point-1788901907645-0",
@@ -195,7 +196,7 @@
       "effectId": "",
       "effectStartTime": 0,
       "loop": true,
-      "transitionSeconds": 0.2,
+      "transitionSeconds": 0.3,
       "expressionTimeline": []
     },
     {
@@ -207,7 +208,7 @@
       "effectId": "",
       "effectStartTime": 0,
       "loop": false,
-      "transitionSeconds": 0.2,
+      "transitionSeconds": 0.3,
       "expressionTimeline": [
         {
           "id": "motion-point-1788234249012-0",
@@ -238,7 +239,7 @@
       "effectId": "",
       "effectStartTime": 0,
       "loop": false,
-      "transitionSeconds": 0.1,
+      "transitionSeconds": 0.3,
       "expressionTimeline": [
         {
           "id": "motion-point-1788902026359-0",

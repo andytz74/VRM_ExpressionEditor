@@ -147,13 +147,21 @@
         {
           "id": "link-point-1786411048503-2",
           "time": 3.3,
-          "expressionPresetId": "emotion-1785723926871-14",
-          "expressionPresetName": "mapJoy",
+          "expressionPresetId": "emotion-1787732375709-46",
+          "expressionPresetName": "Neutral+1",
           "expressionRangeId": "",
           "expressionValue": 1,
           "transitionSeconds": 0.3
         }
       ]
+    },
+    "SA3.vrma": {
+      "expressionPresetId": "emotion-2",
+      "expressionPresetName": "Tension"
+    },
+    "SA5.vrma": {
+      "expressionPresetId": "emotion-1785207956456-10",
+      "expressionPresetName": "mapNeutral+1"
     }
   }
 }

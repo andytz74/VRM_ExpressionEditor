@@ -3918,7 +3918,11 @@ function renderAnimationFileItem(animationName) {
 }
 
 function renderEmotionLinkerPanel() {
-  const animationNames = getAnimationNames();
+  const storedAnimationNames = getAnimationNames();
+  const missingAnimationNames = Object.keys(state.emotionLinker.animations ?? {})
+    .filter((name) => !state.animationCatalog?.[name])
+    .sort((left, right) => left.localeCompare(right));
+  const animationNames = [...missingAnimationNames, ...storedAnimationNames];
   return `
     <div class="panel-header">
       <div class="title-block">
@@ -4721,6 +4725,7 @@ function renderEffectCurveButtons(selectedPoint, canEdit = false, graphKind = "e
 
 function renderMotionSlotCard(slot, index = 0, total = 1) {
   const animationNames = getAnimationNames();
+  const missingAnimation = Boolean(slot.animationFile && !state.animationCatalog?.[slot.animationFile]);
   const linkedPreset = state.expressionPresets.find((preset) => preset.id === slot.expressionPresetId);
   const duration = getAnimationDuration(slot.animationFile, 2);
   const selected = state.selectedMotionSlotId === slot.id;
@@ -4728,7 +4733,7 @@ function renderMotionSlotCard(slot, index = 0, total = 1) {
   const titleValue =
     state.editingMotionSlotTitleId === slot.id ? state.editingMotionSlotTitleValue : slot.title;
   return `
-    <div class="emotion-link-card motion-slot-card ${selected ? "selected" : ""}">
+    <div class="emotion-link-card motion-slot-card ${selected ? "selected" : ""} ${missingAnimation ? "missing-animation" : ""}">
       <div class="motion-slot-top">
         <input class="motion-slot-title" type="text" value="${escapeHtml(titleValue)}" placeholder="input title" data-motion-slot-title="${escapeHtml(slot.id)}" />
         <div class="motion-slot-order-buttons">
@@ -4737,8 +4742,9 @@ function renderMotionSlotCard(slot, index = 0, total = 1) {
         </div>
         <button class="delete-emotion-button compact-delete" data-motion-slot-delete="${escapeHtml(slot.id)}" title="Delete">${iconSvg(X, 16)}</button>
       </div>
-      <select class="emotion-link-select" data-motion-slot-animation="${escapeHtml(slot.id)}">
+      <select class="emotion-link-select ${missingAnimation ? "missing-animation-select" : ""}" data-motion-slot-animation="${escapeHtml(slot.id)}">
         <option value="">애니메이션 선택</option>
+        ${missingAnimation ? `<option value="${escapeHtml(slot.animationFile)}" selected>[삭제됨] ${escapeHtml(slot.animationFile)}</option>` : ""}
         ${animationNames
           .map((name) => `<option value="${escapeHtml(name)}" ${name === slot.animationFile ? "selected" : ""}>${escapeHtml(formatAnimationOptionLabel(name))}</option>`)
           .join("")}
@@ -4764,7 +4770,7 @@ function renderMotionSlotCard(slot, index = 0, total = 1) {
             <button type="button" data-motion-slot-transition="${escapeHtml(slot.id)}" data-direction="-1" ${transitionEnabled ? "" : "disabled"}>▼</button>
           </div>
         </div>
-        <button class="icon-button emotion-link-play" data-motion-slot-play="${escapeHtml(slot.id)}" ${currentVrm && slot.animationFile ? "" : "disabled"} title="Play">${iconSvg(Play, 24)}</button>
+        <button class="icon-button emotion-link-play" data-motion-slot-play="${escapeHtml(slot.id)}" ${currentVrm && slot.animationFile && !missingAnimation ? "" : "disabled"} title="${missingAnimation ? "애니메이션 파일 없음" : "Play"}">${iconSvg(Play, 24)}</button>
       </div>
       ${renderMotionSlotTimeline(slot, duration, linkedPreset)}
     </div>
@@ -4853,15 +4859,26 @@ function renderMotionSlotTimelineSlot(slotId, slot, index, duration) {
 
 function renderEmotionLinkerCard(animationName) {
   const catalogEntry = state.animationCatalog?.[animationName] ?? {};
+  const missingAnimation = !state.animationCatalog?.[animationName];
   const metaEntry = getEmotionLinkerEntry(animationName);
   const presetId = metaEntry.expressionPresetId ?? "";
   const linkedPreset = state.expressionPresets.find((preset) => preset.id === presetId);
   const hasDecayControls = normalizeExpressionRangeSlots(linkedPreset?.rangeSlots).length > 0;
   const decaySeconds = getAnimationPreviewDecaySeconds(animationName);
   return `
-    <div class="emotion-link-card">
-      <div class="emotion-link-readonly">${escapeHtml(animationName)}</div>
-      <div class="emotion-link-readonly">${escapeHtml(catalogEntry.description ?? "")}</div>
+    <div class="emotion-link-card ${missingAnimation ? "missing-animation" : ""}">
+      ${
+        missingAnimation
+          ? `<div class="missing-animation-tools">
+              <select class="emotion-link-select missing-animation-select" data-link-missing-animation="${escapeHtml(animationName)}">
+                <option value="" selected>[삭제됨] ${escapeHtml(animationName)}</option>
+                ${getAnimationNames().map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(formatAnimationOptionLabel(name))}</option>`).join("")}
+              </select>
+              <button class="delete-emotion-button compact-delete" data-link-missing-delete="${escapeHtml(animationName)}" title="누락된 연결 삭제">${iconSvg(X, 16)}</button>
+            </div>`
+          : `<div class="emotion-link-readonly">${escapeHtml(animationName)}</div>`
+      }
+      <div class="emotion-link-readonly ${missingAnimation ? "missing-animation-message" : ""}">${escapeHtml(missingAnimation ? "애니메이션 파일이 없습니다. 교체하거나 삭제하세요." : catalogEntry.description ?? "")}</div>
       <select class="emotion-link-select" data-link-expression="${escapeHtml(animationName)}">
         <option value="">표정 프리셋 이름</option>
         ${state.expressionPresets
@@ -4891,7 +4908,7 @@ function renderEmotionLinkerCard(animationName) {
               `
               : ""
           }
-          <button class="icon-button emotion-link-play" data-link-play="${escapeHtml(animationName)}" ${currentVrm ? "" : "disabled"} title="Play">${iconSvg(Play, 24)}</button>
+          <button class="icon-button emotion-link-play" data-link-play="${escapeHtml(animationName)}" ${currentVrm && !missingAnimation ? "" : "disabled"} title="${missingAnimation ? "애니메이션 파일 없음" : "Play"}">${iconSvg(Play, 24)}</button>
         </div>
       </div>
       ${renderEmotionLinkTimeline(animationName, metaEntry)}
@@ -5943,6 +5960,14 @@ function bindUi() {
   document.querySelector("#addEmotionPreset")?.addEventListener("click", addEmotionPreset);
   for (const select of document.querySelectorAll("[data-link-expression]")) {
     select.addEventListener("change", () => updateAnimationExpressionLink(select.dataset.linkExpression, select.value));
+  }
+
+  for (const select of document.querySelectorAll("[data-link-missing-animation]")) {
+    select.addEventListener("change", () => replaceMissingEmotionLinkAnimation(select.dataset.linkMissingAnimation, select.value));
+  }
+
+  for (const button of document.querySelectorAll("[data-link-missing-delete]")) {
+    button.addEventListener("click", () => deleteMissingEmotionLinkAnimation(button.dataset.linkMissingDelete));
   }
 
   for (const input of document.querySelectorAll("[data-link-loop]")) {
@@ -9970,6 +9995,30 @@ function addMotionSlot() {
   });
   state.selectedMotionSlotId = id;
   markCorrectionDirtyAndRenderLinker2();
+}
+
+function replaceMissingEmotionLinkAnimation(previousName, nextName) {
+  if (!previousName || !nextName || previousName === nextName) return;
+  const previous = state.emotionLinker.animations?.[previousName];
+  if (!previous) return;
+  if (state.emotionLinker.animations?.[nextName] && !window.confirm(`${nextName}의 기존 연결 설정을 교체할까요?`)) {
+    renderPreservingEmotionLinkerScroll();
+    return;
+  }
+  state.emotionLinker.animations[nextName] = previous;
+  delete state.emotionLinker.animations[previousName];
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+  renderPreservingEmotionLinkerScroll();
+}
+
+function deleteMissingEmotionLinkAnimation(animationName) {
+  if (!animationName || !state.emotionLinker.animations?.[animationName]) return;
+  if (!window.confirm(`${animationName}의 연결 정보를 삭제할까요?`)) return;
+  delete state.emotionLinker.animations[animationName];
+  state.correctionDirty = true;
+  syncSaveMetaButton();
+  renderPreservingEmotionLinkerScroll();
 }
 
 function updateMotionSlot(slotId, patch) {

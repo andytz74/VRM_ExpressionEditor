@@ -2,16 +2,6 @@
   "schemaVersion": 1,
   "type": "vrm-animation-catalog",
   "animations": {
-    "a0.vrma": {
-      "fileName": "a0.vrma",
-      "description": "대기 - 테스트",
-      "mustWatchFull": true,
-      "duration": 9.958,
-      "isFirst": false,
-      "loop": true,
-      "lookAtCamera": false,
-      "code": "noCode"
-    },
     "a0_2.vrma": {
       "fileName": "a0_2.vrma",
       "code": "A0",
@@ -40,7 +30,7 @@
       "duration": 4.958,
       "isFirst": true,
       "loop": true,
-      "lookAtCamera": false
+      "lookAtCamera": true
     },
     "a1.vrma": {
       "fileName": "a1.vrma",
@@ -382,28 +372,8 @@
       "loop": false,
       "lookAtCamera": false
     },
-    "a0_armCrossed_loop.vrma": {
-      "fileName": "a0_armCrossed_loop.vrma",
-      "code": "noCode",
-      "description": "",
-      "mustWatchFull": false,
-      "duration": 4.958,
-      "isFirst": false,
-      "loop": false,
-      "lookAtCamera": false
-    },
     "a0_1.vrma": {
       "fileName": "a0_1.vrma",
-      "code": "noCode",
-      "description": "",
-      "mustWatchFull": false,
-      "duration": 10.375,
-      "isFirst": false,
-      "loop": false,
-      "lookAtCamera": false
-    },
-    "a0_standSlantedR.vrma": {
-      "fileName": "a0_standSlantedR.vrma",
       "code": "noCode",
       "description": "",
       "mustWatchFull": false,
@@ -418,6 +388,36 @@
       "description": "",
       "mustWatchFull": false,
       "duration": 2.5,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "helloTest.vrma": {
+      "fileName": "helloTest.vrma",
+      "code": "noCode",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 4.125,
+      "isFirst": false,
+      "loop": false,
+      "lookAtCamera": false
+    },
+    "test_A0_1.vrma": {
+      "fileName": "test_A0_1.vrma",
+      "code": "noCode",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 4.958,
+      "isFirst": false,
+      "loop": true,
+      "lookAtCamera": false
+    },
+    "test_HelloWave.vrma": {
+      "fileName": "test_HelloWave.vrma",
+      "code": "noCode",
+      "description": "",
+      "mustWatchFull": false,
+      "duration": 4.167,
       "isFirst": false,
       "loop": false,
       "lookAtCamera": false
