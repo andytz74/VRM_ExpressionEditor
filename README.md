@@ -37,6 +37,8 @@ VRM을 연 뒤 상단의 **업로드** 버튼을 누르면 현재 캐릭터 리�
 - `ExpressionEditorConfig.ini`의 `[ResourceUpload]` 섹션에 캐릭터 ID, AWS 프로필 이름, 업로더 이름을 저장합니다. AWS 키 자체는 저장하지 않습니다.
 - `ExpressionEditorConfig.ini`, `spaces/`, `vrSpace/`, `work/`, `output/`은 업로드 대상이 아닙니다.
 
+`ExpressionEditorConfig.ini`는 Git에서 작업공간 기본 설정으로 공유합니다. 모드별 카메라, 뷰어 조명, 표시 쉐이프키, Transition Viewer와 립싱크 설정이 포함되며, `[ResourceUpload]`의 AWS 프로필명과 업로더 이름은 각 PC에서 달라질 수 있습니다. 이 파일은 Git 공유 대상이지만 S3 리소스 업로드 대상은 아니며 access key, secret key 같은 자격 증명은 절대 기록하지 않습니다.
+
 실제 비교와 업로드는 Electron main 프로세스에서 `@piecomp/rorr-resource-uploader`의 `plan()`과 `run()`을 호출합니다. 업로더 패키지와 dev 전용 AWS 자격 증명이 준비되지 않은 PC에서는 안내 메시지만 표시하며, 렌더러에는 자격 증명을 노출하지 않습니다.
 
 개발 연동 계약과 실제 dev 검증 항목은 [Resource Uploader Integration](docs/RESOURCE_UPLOADER_INTEGRATION.md)에 정리되어 있습니다.

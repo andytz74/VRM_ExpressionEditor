@@ -1,6 +1,6 @@
 # Development Handoff - 2026-11-11
 
-이 문서는 `9223344` 이후 VRM Expression Editor에 추가·수정된 개발 내용을 정리한 전달 문서다. 현재 사용하는 애니메이션 원본, `animations.meta`와 Emotion Linker 메타를 함께 전달하며 캐릭터 모델, 개인 설정과 공간 리소스는 제외한다.
+이 문서는 `9223344` 이후 VRM Expression Editor에 추가·수정된 개발 내용을 정리한 전달 문서다. 현재 사용하는 애니메이션 원본, `animations.meta`, Emotion Linker 메타와 `ExpressionEditorConfig.ini` 작업공간 설정을 함께 전달하며 캐릭터 모델과 공간 리소스는 제외한다.
 
 ## 1. 변경 요약
 
@@ -129,17 +129,19 @@ scripts/start-app.cjs
 src/main.cjs
 src/renderer.js
 src/styles.css
+ExpressionEditorConfig.ini
 animations/*.vrma
 animations/animations.meta
 emotionLinker/emotion-linker.meta
 emotionLinker/emotion-linker2.meta
 ```
 
-## 7. 제외한 로컬 작업물
+## 7. 공유 설정과 제외한 로컬 작업물
+
+`ExpressionEditorConfig.ini`는 Git에서 공유하는 작업공간 기본 설정이다. 모드별 카메라, 뷰어 조명, 표시 쉐이프키, Transition Viewer와 립싱크 설정, AWS 프로필명과 업로더 이름을 포함한다. S3 리소스 업로드에서는 제외되며 AWS access key와 secret key를 기록하면 안 된다.
 
 아래 항목은 코드 전달 커밋에 포함하지 않는다.
 
-- `ExpressionEditorConfig.ini`
 - `models/`
 - `spaces/` 및 `vrSpace/`
 - 테스트용 `img/` 리소스
