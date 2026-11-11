@@ -5121,11 +5121,13 @@ function renderTransitionCategory(kind, title) {
 function renderTransitionSlot(kind, slot) {
   const animationNames = getTransitionLinkerAnimationNames(kind);
   const selectedName = slot.fileName ?? "";
+  const missingAnimation = isMissingAnimationFile(selectedName);
   const selectedRecommended = !selectedName || isAnimationRecommendedForTransitionKind(kind, selectedName);
   return `
-    <div class="transition-slot-row">
-      <select class="transition-slot-select ${selectedRecommended ? "" : "not-recommended"}" data-transition-select="${slot.id}" title="${escapeHtml(formatTransitionLinkerOptionLabel(selectedName) || "link name")}">
+    <div class="transition-slot-row ${missingAnimation ? "missing-animation" : ""}">
+      <select class="transition-slot-select ${missingAnimation ? "missing-animation-select" : selectedRecommended ? "" : "not-recommended"}" data-transition-select="${slot.id}" title="${escapeHtml(formatTransitionLinkerOptionLabel(selectedName) || "link name")}">
         <option value="">link name</option>
+        ${missingAnimation ? `<option value="${escapeHtml(selectedName)}" selected>[삭제됨] ${escapeHtml(selectedName)}</option>` : ""}
         ${animationNames
           .map((name) => {
             const recommended = isAnimationRecommendedForTransitionKind(kind, name);
@@ -5192,6 +5194,7 @@ function renderTransitionTrayModeTabs() {
 
 function renderTransitionSequenceTray() {
   const sequence = normalizeTransitionSequence(state.transitionViewer.sequence);
+  const hasMissingAnimation = sequence.some((slot) => isMissingAnimationFile(slot.fileName));
   return `
     <aside class="transition-preview-tray transition-sequence-tray">
       ${renderTransitionTrayModeTabs()}
@@ -5208,7 +5211,7 @@ function renderTransitionSequenceTray() {
           }
         </div>
       </section>
-      <button class="transition-sequence-play" id="playTransitionSequence" ${sequence.length && currentVrm ? "" : "disabled"}>
+      <button class="transition-sequence-play" id="playTransitionSequence" ${sequence.length && currentVrm && !hasMissingAnimation ? "" : "disabled"} title="${hasMissingAnimation ? "삭제된 애니메이션을 먼저 수정하세요" : "Play sequence"}">
         ${state.transitionViewer.sequencePlaying ? "playing" : "play sequence"}
       </button>
     </aside>
@@ -5217,12 +5220,13 @@ function renderTransitionSequenceTray() {
 
 function renderTransitionSequenceSlot(slot, index) {
   const isLoop = isAnimationLoop(slot.fileName);
+  const missingAnimation = isMissingAnimationFile(slot.fileName);
   const active = state.transitionViewer.sequencePlaying && state.transitionViewer.sequenceActiveIndex === index;
   return `
-    <section class="transition-sequence-slot ${active ? "playing" : ""}">
+    <section class="transition-sequence-slot ${active ? "playing" : ""} ${missingAnimation ? "missing-animation" : ""}">
       <div class="transition-sequence-slot-head">
         <strong>${index + 1}</strong>
-        <span title="${escapeHtml(formatTransitionLinkerOptionLabel(slot.fileName))}">${escapeHtml(formatTransitionLinkerOptionLabel(slot.fileName))}</span>
+        <span title="${escapeHtml(formatTransitionLinkerOptionLabel(slot.fileName))}">${escapeHtml(missingAnimation ? `[삭제됨] ${slot.fileName}` : formatTransitionLinkerOptionLabel(slot.fileName))}</span>
         <div class="transition-sequence-move">
           <button data-sequence-move="${escapeHtml(slot.id)}" data-direction="-1" ${index <= 0 ? "disabled" : ""} title="Move up">▲</button>
           <button data-sequence-move="${escapeHtml(slot.id)}" data-direction="1" ${index >= normalizeTransitionSequence(state.transitionViewer.sequence).length - 1 ? "disabled" : ""} title="Move down">▼</button>
@@ -5244,8 +5248,9 @@ function renderTransitionSequenceSlot(slot, index) {
 }
 
 function renderTransitionPreviewCard(title, fileName, tone, canClear = false) {
+  const missingAnimation = isMissingAnimationFile(fileName);
   return `
-    <section class="transition-preview-card transition-preview-${tone}">
+    <section class="transition-preview-card transition-preview-${tone} ${missingAnimation ? "missing-animation" : ""}">
       <div class="transition-preview-card-head">
         <h2>${escapeHtml(title)}</h2>
         <div class="transition-card-actions">
@@ -5254,14 +5259,18 @@ function renderTransitionPreviewCard(title, fileName, tone, canClear = false) {
               ? `<button class="icon-button transition-card-clear" data-clear-transition-pick title="Clear transition">x</button>`
               : ""
           }
-          <button class="icon-button transition-card-play" data-transition-preview-play="${escapeHtml(fileName || "")}" ${fileName && currentVrm ? "" : "disabled"} title="Play">
+          <button class="icon-button transition-card-play" data-transition-preview-play="${escapeHtml(fileName || "")}" ${fileName && currentVrm && !missingAnimation ? "" : "disabled"} title="${missingAnimation ? "애니메이션 파일 없음" : "Play"}">
             ${iconSvg(Play, 24)}
           </button>
         </div>
       </div>
-      <p>${escapeHtml(formatTransitionLinkerOptionLabel(fileName) || "link name")}</p>
+      <p>${escapeHtml(missingAnimation ? `[삭제됨] ${fileName}` : formatTransitionLinkerOptionLabel(fileName) || "link name")}</p>
     </section>
   `;
+}
+
+function isMissingAnimationFile(fileName) {
+  return Boolean(fileName && !state.animationCatalog?.[fileName]);
 }
 
 function renderTransitionBlendPanel(key, title, leftLabel, rightLabel, leftTone, rightTone) {

@@ -47,6 +47,7 @@ Emotion Linker 2에서 슬롯을 선택하거나 슬롯 내부 세부 설정을 
 - 경고 카드에서 정상 애니메이션으로 연결 설정을 옮기거나 누락 연결을 삭제할 수 있다.
 - Emotion Linker 2 슬롯의 `animationFile`이 없으면 슬롯 테두리와 드롭다운을 빨간색으로 표시한다.
 - 누락 파일명을 드롭다운 선택값으로 유지하고 재생 버튼을 비활성화한다.
+- Transition Viewer의 등록 슬롯, Start/Transition/End 카드와 Sequence에서도 누락 참조를 빨간색으로 표시하고 해당 재생을 비활성화한다.
 
 ## 3. Transition Viewer 발화 미리보기
 

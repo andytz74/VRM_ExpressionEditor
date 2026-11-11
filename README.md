@@ -126,6 +126,8 @@ start, transition, end 또는 sequence 형태로 애니메이션 전환을 확�
 
 발화 속도는 `0.5x~4x` 범위이며, Head Motion 패널에서는 Pitch/Yaw/Roll, 유지·전환 시간, Neck Follow를 조절합니다. 쉐이프키 보조 모션은 최대 3개까지 등록하고 각각 `0~1` 범위의 최솟값·최댓값을 지정할 수 있습니다. 설정은 `ExpressionEditorConfig.ini`의 Transition Viewer 상태에 저장되며 현재는 런타임 필수 메타가 아닌 에디터 미리보기 설정입니다.
 
+등록 슬롯, Start/Transition/End 선택 또는 Sequence가 삭제된 애니메이션을 참조하면 해당 UI를 빨간색으로 표시하고 재생을 비활성화합니다.
+
 ### Shape Key Transfer
 
 현재 제작 파이프라인에서는 당분간 사용하지 않습니다.

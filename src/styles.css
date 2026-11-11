@@ -6050,6 +6050,11 @@ canvas {
   gap: 8px;
 }
 
+.transition-slot-row.missing-animation .transition-remove-button,
+.transition-sequence-slot.missing-animation {
+  border-color: #e35b64;
+}
+
 .transition-slot-select {
   min-width: 0;
   height: 42px;
@@ -6063,6 +6068,12 @@ canvas {
 .transition-slot-select.not-recommended {
   color: #858d96;
   background: #1b1f25;
+}
+
+.transition-slot-select.missing-animation-select {
+  border-color: #e35b64;
+  color: #ff8b92;
+  background: #2c1d21;
 }
 
 .transition-slot-select option.recommended {
@@ -6373,6 +6384,23 @@ canvas {
   border-color: #37d78a;
   background: #20342d;
   box-shadow: 0 0 0 1px rgba(55, 215, 138, 0.32), 0 0 18px rgba(55, 215, 138, 0.18);
+}
+
+.transition-sequence-slot.missing-animation {
+  box-shadow: inset 0 0 0 1px rgba(227, 91, 100, 0.22);
+}
+
+.transition-sequence-slot.missing-animation .transition-sequence-slot-head > span {
+  color: #ff8b92;
+}
+
+.transition-preview-card.missing-animation {
+  border-color: #e35b64;
+  box-shadow: inset 0 0 0 1px rgba(227, 91, 100, 0.22);
+}
+
+.transition-preview-card.missing-animation p {
+  color: #ff8b92;
 }
 
 .transition-sequence-slot-head {
